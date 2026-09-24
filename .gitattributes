@@ -1,0 +1,8 @@
+# 统一按 LF 存取。
+#
+# 两个原因：
+#   1. dist/tieba-eztb-toolbox.user.js 是要被直接安装 / 上传到脚本站的产物，
+#      换行必须稳定（Windows 上默认的 autocrlf 会让它一 checkout 就变成 CRLF，
+#      于是每次构建都显示成"已修改"）；
+#   2. 脚本与文档里的中文说明按 LF 也更好 diff。
+* text=auto eol=lf

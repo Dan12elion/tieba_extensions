@@ -1,0 +1,11 @@
+node_modules/
+
+# 构建/测试过程中产生的临时产物：
+#   dist/.verify/  各种测试与“反向验证”用的中间产物
+#   dist/.samples/ 调试时拷进来的页面快照
+dist/.verify/
+dist/.samples/
+
+# 本机配置（BDUSS 只存在油猴存储里，永远不会写进仓库；这里只是兜底）
+.env
+.env.*
