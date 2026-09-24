@@ -6,108 +6,22 @@
 数据全部由脚本直连 `tiebac.baidu.com`，**不经过 eztb.org 或任何其他第三方服务**。
 
 > 本仓库：<https://github.com/Dan12elion/tieba_extensions>
-> 元数据里的 `@namespace` / `@author` / `@supportURL` 都指向它（见 `build.mjs`）；
-> 如果你是 fork 这个工程，记得用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 换成自己的标识。
-
-## 与旧脚本的关系
-
-基线脚本（早期那个点击按钮后在 iframe 里内嵌 `https://www.eztb.org/follow` 的版本，
-每点一次都会让别人的服务器交付一整套前端资源）不在本仓库里。
-本工程保留它已经验证过的部分（新旧版 DOM 适配、UID 解析、按钮注入、缓存），
-但把数据来源换成了脚本内置的 SDK。
-
-## 目录结构
-
-```
-eztb-userscript/
-├─ build.mjs              # esbuild 打包 + 拼接油猴元数据
-├─ scripts/
-│  ├─ shims-plugin.mjs    # Node → 浏览器 的解析替换规则（打包与校验共用）
-│  └─ verify.mjs          # 自动校验：MD5 签名、产物检查
-├─ src/
-│  ├─ main.ts             # 入口：注入样式、挂按钮、注册菜单
-│  ├─ core/               # 设置、限速队列、缓存、身份解析、关注的吧、发帖、成分规则
-│  ├─ shims/              # 4 个 Node 依赖的浏览器替身
-│  ├─ page/               # 新旧版贴吧 DOM 适配、扫描、成分徽章
-│  ├─ ui/                 # 样式与通用弹窗
-│  └─ features/           # 用户面板、设置面板、成分检测调度
-└─ dist/
-   └─ tieba-eztb-toolbox.user.js
-```
-
-## 构建
-
-本工程**刻意不重复安装依赖**，直接使用上游 eztb 仓库里已装好的 `effect`、
-`@bufbuild/protobuf` 和 esbuild。默认从**与本项目同级的 `../eztb`** 取，
-可以用 `EZTB_ROOT` 指向别处：
-
-```powershell
-$env:EZTB_ROOT = "<上游 eztb 仓库的路径>"   # 可选，默认 ../eztb
-node build.mjs            # 可读版（默认）
-node build.mjs --minify   # 压缩版，写到 dist/tieba-eztb-toolbox.min.user.js
-node scripts/verify.mjs
-```
-
-产物：`dist/tieba-eztb-toolbox.user.js`（**未压缩**，约 1.0 MB / 2.9 万行）。
-
-默认不压缩是有意为之：Greasy Fork 的发布规则里写着「提交到 Greasy Fork 的代码不得
-混淆或压缩……必须以非压缩的形式输出，保留空白和变量名」，而油猴的编辑器里也只有
-未压缩的版本才能正常换行阅读。`--minify` 那条路径写的是另一个文件名，不会覆盖可读版，
-而且**压缩版不能传到 Greasy Fork**（会被删除）。
-
-元数据里凡是跟"你是谁"有关的部分都可以用环境变量覆盖，不用改代码：
-
-| 环境变量 | 作用 | 默认 |
-| --- | --- | --- |
-| `EZTB_NAME` | `@name`（同时生成 `@name:zh-CN`） | 贴吧 eztb 工具箱（本地直连版） |
-| `EZTB_NAMESPACE` | `@namespace`，与 `@name` 一起构成脚本唯一标识 | `eztb-userscript` |
-| `EZTB_AUTHOR` | `@author`，留空则不输出该行 | 空 |
-| `EZTB_SUPPORT_URL` | `@supportURL`，留空则不输出该行 | 空 |
-
-> `@namespace` 一旦发布就不要改，否则所有已安装的用户会被当成装了另一个脚本。
 
 ## 安装
 
-1. 在 Edge / Chrome 安装 Tampermonkey（或 Edge 版 Tampermonkey）。
-2. 打开 Tampermonkey 面板 → 添加新脚本 → 用 `dist/tieba-eztb-toolbox.user.js`
-   的内容替换掉模板 → 保存。
+1. 在 Edge / Chrome 里装 Tampermonkey（Edge 用户也可以装 Edge 版 Tampermonkey）。
+2. **下载本仓库 `dist` 文件夹里的
+   [`tieba-eztb-toolbox.user.js`](dist/tieba-eztb-toolbox.user.js)**——
+   点开这个文件，然后按页面右上角的下载按钮（或右键「链接另存为」）。
+   接着在 Tampermonkey 面板里点「添加新脚本」，用下载到的内容替换掉模板 → 保存。
+
+   嫌麻烦的话，也可以直接打开它的 raw 链接，油猴会识别 `.user.js` 并弹出安装框：
+
+   <https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-eztb-toolbox.user.js>
 3. 首次使用点脚本菜单「eztb：设置 BDUSS / 运行参数」，按提示粘贴 BDUSS。
 
-装好之后的地址栏直接打开 `dist/tieba-eztb-toolbox.user.js` 的 raw 链接也能安装
-（油猴会识别 `.user.js` 并弹出安装框）：
-
-```
-https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-eztb-toolbox.user.js
-```
-
-## 发布到 Greasy Fork
-
-已按它的发布规则逐条核对过（[code-rules](https://greasyfork.org/zh-CN/help/code-rules)、
-[meta-keys](https://greasyfork.org/zh-CN/help/meta-keys)），并且把这些要求写成了
-自动校验（`verify.mjs` 的 **V7 · Greasy Fork 发布要求** 一组断言）：
-
-| 要求 | 本工程的做法 |
-| --- | --- |
-| 代码不得混淆或压缩，要保留空白与变量名 | 默认构建就是未压缩的可读版（约 2.9 万行，最长行不到 2000 字符） |
-| 脚本大小 ≤ 2.0 MB | 约 1.0 MB |
-| `@name`、`@description` 必填 | 都有，且各带一份 `:zh-CN` 语言标记 |
-| 至少一个 `@match`/`@include`，且只匹配自己提供功能的站点 | 两个 `*://…tieba.baidu.com/*` |
-| `@license` 用 SPDX 标识符 | `MIT` |
-| 内嵌的库必须写明来源、名称与版本 | 文件末尾的 NOTICE 逐条列出（tieba.js SDK / effect / @bufbuild/protobuf / long，含仓库地址与版本号） |
-| 不要自己写 `@updateURL` / `@downloadURL` | 没有写，交给 Greasy Fork 自动改写 |
-| 主要功能必须在站内代码里实现 | 全部打包进单文件，不使用 `@require` 远程加载 |
-
-上传之前还需要你补两件事：
-
-1. 确认元数据里的标识是你的（本仓库的默认值已经指向 `Dan12elion/tieba_extensions`；
-   fork 的话用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 覆盖后再构建）。
-2. **确认 tieba.js SDK 的授权**：上游 `eztb` 仓库和 `packages/sdk` 都没有 LICENSE 文件，
-   也没声明 `license` 字段。规则里"必须遵守他人的版权"这条要求你确实有权分发这段代码，
-   没确认之前不建议公开上传。
-
-> 为什么不用 `@require` 加载库？SDK 里有 4 个 Node 依赖（`undici`、`node:crypto`、
-> `node-html-parser`、`Buffer`）需要在构建时替换成浏览器实现，直接 `@require` 原版是跑不起来的。
-> 规则允许内嵌，前提是写明来源——也就是上面那条 NOTICE。
+> 需要下载的只有 `dist/tieba-eztb-toolbox.user.js` 这一个文件。仓库里其余的
+> 都是构建脚本、测试与文档，日常使用用不到。
 
 ## 功能
 
@@ -173,6 +87,54 @@ https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-ez
 
 全部为只读，不涉及 `tbs`、不执行任何写操作。
 
+## 合规提醒
+
+- BDUSS 等同于账号登录凭据，请勿分享或粘贴到不可信的网站。
+- 请保持默认的请求间隔，不要用它做批量抓取或任何自动化写操作。
+- 许可见 [LICENSE](LICENSE)（本工程自己的代码，MIT）与
+  [THIRD-PARTY.md](THIRD-PARTY.md)（内嵌的第三方代码及其授权状态）。
+- 上游 eztb 仓库与 `packages/sdk` **没有 LICENSE 文件**，也没声明 `license` 字段；
+  产物里内嵌了这段 SDK 代码（来源与版本见文件末尾 NOTICE），
+  对外分发（含上传到脚本站）前需自行确认授权。
+- 产物里另外内嵌了三个有明确许可的库：effect（MIT）、@bufbuild/protobuf
+  （Apache-2.0 AND BSD-3-Clause）、long（Apache-2.0）。
+
+## 与旧脚本的关系
+
+基线脚本（早期那个点击按钮后在 iframe 里内嵌 `https://www.eztb.org/follow` 的版本，
+每点一次都会让别人的服务器交付一整套前端资源）不在本仓库里。
+本工程保留它已经验证过的部分（新旧版 DOM 适配、UID 解析、按钮注入、缓存），
+但把数据来源换成了脚本内置的 SDK。
+
+## 发布到 Greasy Fork
+
+已按它的发布规则逐条核对过（[code-rules](https://greasyfork.org/zh-CN/help/code-rules)、
+[meta-keys](https://greasyfork.org/zh-CN/help/meta-keys)），并且把这些要求写成了
+自动校验（`verify.mjs` 的 **V7 · Greasy Fork 发布要求** 一组断言）：
+
+| 要求 | 本工程的做法 |
+| --- | --- |
+| 代码不得混淆或压缩，要保留空白与变量名 | 默认构建就是未压缩的可读版（约 2.9 万行，最长行不到 2000 字符） |
+| 脚本大小 ≤ 2.0 MB | 约 1.0 MB |
+| `@name`、`@description` 必填 | 都有，且各带一份 `:zh-CN` 语言标记 |
+| 至少一个 `@match`/`@include`，且只匹配自己提供功能的站点 | 两个 `*://…tieba.baidu.com/*` |
+| `@license` 用 SPDX 标识符 | `MIT` |
+| 内嵌的库必须写明来源、名称与版本 | 文件末尾的 NOTICE 逐条列出（tieba.js SDK / effect / @bufbuild/protobuf / long，含仓库地址与版本号） |
+| 不要自己写 `@updateURL` / `@downloadURL` | 没有写，交给 Greasy Fork 自动改写 |
+| 主要功能必须在站内代码里实现 | 全部打包进单文件，不使用 `@require` 远程加载 |
+
+上传之前还需要你补两件事：
+
+1. 确认元数据里的标识是你的（本仓库的默认值已经指向 `Dan12elion/tieba_extensions`；
+   fork 的话用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 覆盖后再构建）。
+2. **确认 tieba.js SDK 的授权**：上游 `eztb` 仓库和 `packages/sdk` 都没有 LICENSE 文件，
+   也没声明 `license` 字段。规则里"必须遵守他人的版权"这条要求你确实有权分发这段代码，
+   没确认之前不建议公开上传。
+
+> 为什么不用 `@require` 加载库？SDK 里有 4 个 Node 依赖（`undici`、`node:crypto`、
+> `node-html-parser`、`Buffer`）需要在构建时替换成浏览器实现，直接 `@require` 原版是跑不起来的。
+> 规则允许内嵌，前提是写明来源——也就是上面那条 NOTICE。
+
 ## 关键设计
 
 - **不改 SDK 源码**：`packages/sdk` 保持原样，所有 Node 依赖替换都在构建层用
@@ -230,6 +192,57 @@ https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-ez
   `字段 !== 默认值` 判断是否写入，直接传部分对象会让缺失的 int64 字段以
   `undefined` 进入 `BigInt()` 而抛错（踩过：`Cannot convert undefined to a BigInt`）。
 
+## 目录结构
+
+```
+eztb-userscript/
+├─ build.mjs              # esbuild 打包 + 拼接油猴元数据
+├─ scripts/
+│  ├─ shims-plugin.mjs    # Node → 浏览器 的解析替换规则（打包与校验共用）
+│  └─ verify.mjs          # 自动校验：MD5 签名、产物检查
+├─ src/
+│  ├─ main.ts             # 入口：注入样式、挂按钮、注册菜单
+│  ├─ core/               # 设置、限速队列、缓存、身份解析、关注的吧、发帖、成分规则
+│  ├─ shims/              # 4 个 Node 依赖的浏览器替身
+│  ├─ page/               # 新旧版贴吧 DOM 适配、扫描、成分徽章
+│  ├─ ui/                 # 样式与通用弹窗
+│  └─ features/           # 用户面板、设置面板、成分检测调度
+└─ dist/
+   └─ tieba-eztb-toolbox.user.js
+```
+
+## 构建
+
+本工程**刻意不重复安装依赖**，直接使用上游 eztb 仓库里已装好的 `effect`、
+`@bufbuild/protobuf` 和 esbuild。默认从**与本项目同级的 `../eztb`** 取，
+可以用 `EZTB_ROOT` 指向别处：
+
+```powershell
+$env:EZTB_ROOT = "<上游 eztb 仓库的路径>"   # 可选，默认 ../eztb
+node build.mjs            # 可读版（默认）
+node build.mjs --minify   # 压缩版，写到 dist/tieba-eztb-toolbox.min.user.js
+node scripts/verify.mjs
+```
+
+产物：`dist/tieba-eztb-toolbox.user.js`（**未压缩**，约 1.0 MB / 2.9 万行）。
+
+默认不压缩是有意为之：Greasy Fork 的发布规则里写着「提交到 Greasy Fork 的代码不得
+混淆或压缩……必须以非压缩的形式输出，保留空白和变量名」，而油猴的编辑器里也只有
+未压缩的版本才能正常换行阅读。`--minify` 那条路径写的是另一个文件名，不会覆盖可读版，
+而且**压缩版不能传到 Greasy Fork**（会被删除）。
+
+元数据里凡是跟"你是谁"有关的部分都可以用环境变量覆盖，不用改代码：
+
+| 环境变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `EZTB_NAME` | `@name`（同时生成 `@name:zh-CN`） | 贴吧 eztb 工具箱（本地直连版） |
+| `EZTB_NAMESPACE` | `@namespace`，与 `@name` 一起构成脚本唯一标识 | `https://github.com/Dan12elion/tieba_extensions` |
+| `EZTB_AUTHOR` | `@author`，留空则不输出该行 | `Dan12elion` |
+| `EZTB_SUPPORT_URL` | `@supportURL`，留空则不输出该行 | `https://github.com/Dan12elion/tieba_extensions/issues` |
+
+> `@namespace` 一旦发布就不要改，否则所有已安装的用户会被当成装了另一个脚本。
+> **fork 这个工程的人**请务必用上面的变量换成自己的标识，别把新脚本挂在本仓库的 namespace 下。
+
 ## 自动校验
 
 四个脚本，都不需要 BDUSS：
@@ -262,15 +275,3 @@ https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-ez
 
 AI 在这里是协作工具而不是作者：每一步改动都由作者确认后才提交，
 [LICENSE](LICENSE) 里的版权人也只写作者本人；AI 生成的内容不单独主张版权。
-
-## 合规提醒
-
-- BDUSS 等同于账号登录凭据，请勿分享或粘贴到不可信的网站。
-- 请保持默认的请求间隔，不要用它做批量抓取或任何自动化写操作。
-- 许可见 [LICENSE](LICENSE)（本工程自己的代码，MIT）与
-  [THIRD-PARTY.md](THIRD-PARTY.md)（内嵌的第三方代码及其授权状态）。
-- 上游 eztb 仓库与 `packages/sdk` **没有 LICENSE 文件**，也没声明 `license` 字段；
-  产物里内嵌了这段 SDK 代码（来源与版本见文件末尾 NOTICE），
-  对外分发（含上传到脚本站）前需自行确认授权。
-- 产物里另外内嵌了三个有明确许可的库：effect（MIT）、@bufbuild/protobuf
-  （Apache-2.0 AND BSD-3-Clause）、long（Apache-2.0）。
