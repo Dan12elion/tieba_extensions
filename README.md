@@ -235,7 +235,7 @@ node scripts/verify.mjs
 
 | 环境变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `EZTB_NAME` | `@name`（同时生成 `@name:zh-CN`） | 贴吧 eztb 工具箱（本地直连版） |
+| `EZTB_NAME` | `@name`（同时生成 `@name:zh-CN`） | 贴吧 eztb 工具箱 |
 | `EZTB_NAMESPACE` | `@namespace`，与 `@name` 一起构成脚本唯一标识 | `https://github.com/Dan12elion/tieba_extensions` |
 | `EZTB_AUTHOR` | `@author`，留空则不输出该行 | `Dan12elion` |
 | `EZTB_SUPPORT_URL` | `@supportURL`，留空则不输出该行 | `https://github.com/Dan12elion/tieba_extensions/issues` |

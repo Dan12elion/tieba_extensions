@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name                贴吧 eztb 工具箱（本地直连版）
-// @name:zh-CN          贴吧 eztb 工具箱（本地直连版）
+// @name                贴吧 eztb 工具箱
+// @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.3.0
+// @version             1.3.1
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*

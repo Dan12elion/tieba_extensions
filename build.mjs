@@ -44,7 +44,7 @@ const pkg = JSON.parse(
  *   - @license 用 SPDX 标识符
  *   - @updateURL/@downloadURL 不要自己写，Greasy Fork 会改成它自己的地址
  */
-const NAME = process.env.EZTB_NAME ?? "贴吧 eztb 工具箱（本地直连版）";
+const NAME = process.env.EZTB_NAME ?? "贴吧 eztb 工具箱";
 /**
  * 下面三个默认值是**本仓库**（github.com/Dan12elion/tieba_extensions）的身份。
  * fork / 二次分发的人请用环境变量覆盖，别把新脚本挂在这个 namespace 下：
