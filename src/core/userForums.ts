@@ -44,6 +44,21 @@ export interface UserForums {
 export const HIDDEN_FORUMS_NOTE =
 	"该用户的关注贴吧没有完整公开。下面这份列表里混入了从用户资料 / 用户面板恢复出来的部分，可能仍然不完整；标了等级的表示这是他在该吧的吧内等级，没标的是资料里只给了吧名。";
 
+/**
+ * 为什么有些吧拿不到等级——两个原因，界面上要说清楚，否则看着像 bug。
+ *
+ * 原因一：**这个用户没有用户名**。贴吧的等级数据（`/home/get/panel` 的 honor.grade）
+ * 只能按"用户名"查询；页面上显示成「贴吧用户_XXXX」这类系统昵称的用户压根没有用户名，
+ * 于是查不到任何吧内等级（贴吧号、内部 ID、portrait 都试过，同样查不到）。
+ * 原因二：即使有用户名，panel 也只列出**一部分**吧；剩下那些只能从资料接口里拿到吧名，
+ * 而资料接口的 likeForum 字段本身就只给吧名、不给等级。
+ */
+export const NO_USERNAME_NOTE =
+	"注意：该用户没有设置用户名（页面上显示为「贴吧用户_xxxx」这类系统昵称）。贴吧的等级数据只能按用户名查询，所以这个用户的所有吧内等级都查不到——这是贴吧数据源的限制，不是脚本出错。";
+
+export const NO_LEVEL_NOTE =
+	"没有等级的项来自用户资料里的吧名：贴吧只给了吧名，没有给该吧的等级。";
+
 export async function loadUserForums(
 	id: number,
 	/** profile 里的关注贴吧名单（identity.profile.likeForum），用来补齐接口没给全的部分 */

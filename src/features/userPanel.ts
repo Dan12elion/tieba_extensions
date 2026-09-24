@@ -14,6 +14,8 @@ import {
 import { type Identity, callSdkLoose, resolveIdentity } from "../core/identity.ts";
 import {
 	HIDDEN_FORUMS_NOTE,
+	NO_LEVEL_NOTE,
+	NO_USERNAME_NOTE,
 	type ForumRow,
 	loadUserForums,
 } from "../core/userForums.ts";
@@ -268,11 +270,18 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 			}
 
 			const withLevel = items.filter((item) => item.level).length;
+			const missingLevel = items.length - withLevel;
+			// 把"为什么有些吧没等级"直接写在界面上（两个原因分别说明，见 userForums.ts）
+			const notes = [
+				hidden ? HIDDEN_FORUMS_NOTE : "",
+				!hidden && missingLevel ? NO_LEVEL_NOTE : "",
+				hidden && !identity.profile?.un ? NO_USERNAME_NOTE : "",
+			].filter(Boolean);
 			body.innerHTML =
-				(hidden
-					? `<div class="tb-eztb-warn">${escapeHtml(HIDDEN_FORUMS_NOTE)}</div>`
-					: "") +
-				`<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : ""}</div>` +
+				notes
+					.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`)
+					.join("") +
+				`<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div>` +
 				`<div class="tb-eztb-list">` +
 				items
 					.map((item) =>

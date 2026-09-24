@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.3.1
+// @version             1.3.2
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -28606,6 +28606,8 @@ ${endStackCall}`;
 
   // src/core/userForums.ts
   var HIDDEN_FORUMS_NOTE = "该用户的关注贴吧没有完整公开。下面这份列表里混入了从用户资料 / 用户面板恢复出来的部分，可能仍然不完整；标了等级的表示这是他在该吧的吧内等级，没标的是资料里只给了吧名。";
+  var NO_USERNAME_NOTE = "注意：该用户没有设置用户名（页面上显示为「贴吧用户_xxxx」这类系统昵称）。贴吧的等级数据只能按用户名查询，所以这个用户的所有吧内等级都查不到——这是贴吧数据源的限制，不是脚本出错。";
+  var NO_LEVEL_NOTE = "没有等级的项来自用户资料里的吧名：贴吧只给了吧名，没有给该吧的等级。";
   async function loadUserForums(id, profileForums = []) {
     let items = [];
     let primaryFailed = false;
@@ -29600,7 +29602,13 @@ ${endStackCall}`;
           return;
         }
         const withLevel = items.filter((item) => item.level).length;
-        body.innerHTML = (hidden ? `<div class="tb-eztb-warn">${escapeHtml(HIDDEN_FORUMS_NOTE)}</div>` : "") + `<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : ""}</div><div class="tb-eztb-list">` + items.map(
+        const missingLevel = items.length - withLevel;
+        const notes = [
+          hidden ? HIDDEN_FORUMS_NOTE : "",
+          !hidden && missingLevel ? NO_LEVEL_NOTE : "",
+          hidden && !identity4.profile?.un ? NO_USERNAME_NOTE : ""
+        ].filter(Boolean);
+        body.innerHTML = notes.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`).join("") + `<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div><div class="tb-eztb-list">` + items.map(
           (item) => [
             `<a class="tb-eztb-row" href="${escapeHtml(forumUrl(item.name))}" target="_blank" rel="noopener noreferrer">`,
             `<span class="tb-eztb-row-main">`,

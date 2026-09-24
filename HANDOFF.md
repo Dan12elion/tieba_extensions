@@ -67,6 +67,7 @@ eztb-userscript/
 │  ├─ page-test.mjs             # 真实页面快照（MHTML）离线回归
 │  ├─ keyword-test.mjs          # 成分规则解析/匹配的纯离线测试
 │  ├─ fetch-sample-css.mjs      # 把快照引用的外部 CSS 抓到本地缓存（page-test 用）
+│  ├─ probe-user.mjs            # 单用户原始数据探查（回答"为什么这个字段拿不到"）
 │  └─ extract-mhtml.mjs         # MHTML 解码工具
 ├─ src/
 │  ├─ main.ts                   # 入口：注入样式、挂按钮、注册菜单、点击委托
@@ -156,6 +157,19 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 
 **等级在 `grade` 的键上**。只取 `forum_list` 会把等级全丢掉（已修）。
 依据：上游 `likeforum.tsx` 的 `HiddenForums` 就是按 `[level, {forum_list}]` 渲染"吧内等级 N 级"。
+
+**但有些用户根本拿不到等级**（2026-09-24 查证，用 `scripts/probe-user.mjs` 打原始数据）：
+等级只有两个来源——`getLikeForum`（隐藏时为空）和 `panel.honor.grade`，而
+`getPanel(un)` **只能按"用户名"查**。于是：
+
+1. **没有用户名的账号**（页面上显示为「贴吧用户_xxxx」这类系统昵称，`user.name === ""`）
+   一个等级都拿不到。实测把 用户名 / 贴吧号 / 内部 ID / portrait 四种标识符都喂给 panel，
+   `honor.grade` 全是空的。这类账号不少（随手抓的案例里就有）。
+2. 即使有用户名，`panel.honor.grade` 也只列**一部分**吧；剩下的只能从
+   `profile.user.likeForum` 拿到**吧名**（`User_LikeForumInfo` 只有 forumName + forumId，没有等级）。
+
+所以面板里"有的吧有等级、有的没有"是数据源的客观限制。界面现在会分别说明是哪种情况
+（`userForums.ts` 的 `NO_USERNAME_NOTE` / `NO_LEVEL_NOTE`），别当成 bug 去"修"。
 
 ### 4.3 发帖：主题帖与回复是两个独立 feed
 

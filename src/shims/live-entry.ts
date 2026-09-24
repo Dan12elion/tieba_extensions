@@ -23,5 +23,9 @@ export { UserPostResIdl } from "eztb-internal/userpost-res";
 export { loadPostPage, loadReplyRows, loadTopicRows } from "../core/userPost.ts";
 // 关注的吧（含"隐藏关注贴吧"的回退），成分检测与面板共用这一份
 export { loadUserForums } from "../core/userForums.ts";
+// 探查脚本要单独调这两个接口做对照
+export { getHiddenLikeForum, getLikeForum } from "tieba.js";
+// 探查脚本要看清楼层里作者带的字段（比如"吧内等级"）
+export { getPosts } from "tieba.js";
 // 关键词匹配是纯逻辑，这里导出让 live-test 用真实数据跑一遍
 export { matchComposition, parseRules } from "../core/composition.ts";
