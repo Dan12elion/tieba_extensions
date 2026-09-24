@@ -171,6 +171,15 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 所以面板里"有的吧有等级、有的没有"是数据源的客观限制。界面现在会分别说明是哪种情况
 （`userForums.ts` 的 `NO_USERNAME_NOTE` / `NO_LEVEL_NOTE`），别当成 bug 去"修"。
 
+**第三条路（点了才查）**：`/c/f/pb/page`（帖子接口）返回的 `userList` 里，
+每个人的 `levelId` 就是他在**这个吧**的等级——实测：例子里的楼主在汉族吧 levelId=9，
+而 panel 那条路完全查不到他。于是有了 `src/core/forumLevel.ts`：
+
+- 只在用户点「查等级」时触发，每个吧最多 1 次取帖 + 3 次 `pb/page`；
+- 候选帖优先取**他自己的主题帖**（他一定是 1 楼，必在第 1 页），没有才退而取他回复过的帖；
+- 结果写进 `tbEztbToolboxForumLevelV1` 缓存，设置面板里有「清空吧内等级缓存」；
+- 交叉验证（`live-test`）：面板**有**等级的用户，这条路读出来的等级与面板一致（7 = 7）。
+
 ### 4.3 发帖：主题帖与回复是两个独立 feed
 
 `UserPostReqIdl` 里有 `is_thread` 字段，**SDK 从未使用**：
@@ -232,7 +241,7 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 | 8 | 手写 protobuf 请求抛 `Cannot convert undefined to a BigInt` | 生成代码的 `encode` 用 `字段 !== 默认值` 判断写入，传部分对象时缺失的 int64 变成 `undefined` | 必须走 `**fromPartial**` 补全默认值 |
 | 9 | 旧脚本按钮点不动 | 它的 `javascript:` href 被油猴剥掉，anchor 无 href | 卸载旧脚本（已在本脚本里做提示） |
 | 10 | MHTML 快照里找不到脚本样式 | **MHTML 保存会丢掉 `<style>`** | 排查时别把"没有样式"当作脚本没运行的证据 |
-| 11 | 浏览器里报 `Invalid regular expression: missing /`，位置完全指不出来 | 内联脚本写在 Node 的模板字符串里，`/\n/g` 这种写法里的 `\n` 被 Node 提前换成了真换行，正则被切断成两行 | 浏览器看到的那份源码要写成 `\\n`；并且 `click-test` / `page-test` 现在会先把页面里的内联脚本过一遍 `new Function` 做语法自检，失败直接指出是第几个脚本 |
+| 11 | 浏览器里报 `Invalid regular expression: missing /`，位置完全指不出来 | 内联脚本写在 Node 的模板字符串里，`/\n/g` 这种写法里的 `\n` 被 Node 提前换成了真换行，正则被切断成两行 | 浏览器看到的那份源码要写成 `\\n`；并且 `click-test` / `page-test` 现在会先把页面里的内联脚本过一遍 `new Function` 做语法自检，失败直接指出是第几个脚本。同一类坑还有**正则里的转义**：`/Lv\.\d+/` 在模板字符串里会变成 `/Lv.d+/`（`\.`→`.`、`\d`→`d`），断言会静默失效——能不用转义就别用，必须用时写双份 |
 | 12 | 设置面板打包后出现 3000+ 字符的超长行，且踩到"未压缩"检查 | esbuild 重排 AST 时会把一整条 `a + b + c` 拼串压成一行 | 改为 `parts.push(...)` 逐行拼（语句不会被合并），最长行随即回到几百字符 |
 | 13 | 成分标记的命中测试失败，但元素明明在 | 上一步打开的面板遮罩是 `z-index:2147483647` 的全屏 fixed 层，`elementFromPoint` 只能拿到遮罩 | 断言前先关掉面板；写页面级命中测试时先确认没有遮罩 |
 | 14 | 新版页面上成分标记"轻微"压住下面的正文 | 新版头部行高度写死 40px（`.image-text .user-info{height:40px}`，CSS 在 `pb.*.css` 里），而标记容器当时是 `flex-wrap:wrap`：命中 2~3 条规则时折成两行，实测量到溢出 12.5~13px | `.tb-eztb-badges` 改 `flex-wrap:nowrap` + `min-width:0` + `overflow:hidden`，并给携带它的 `.btn-wrapper` 加 `:has()` 收缩规则；JS 侧按 `.head-spacer` 的剩余宽度决定显示几个标记，放不下退成 `+N`、再放不下退成一个圆点 |
@@ -257,8 +266,8 @@ node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
 node scripts/keyword-test.mjs # 成分规则解析/匹配（纯离线，29 项断言）
-node scripts/live-test.mjs    # 真实接口链路（17 项断言）
-node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（85 项断言）
+node scripts/live-test.mjs    # 真实接口链路（19 项断言）
+node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（94 项断言）
 node scripts/fetch-sample-css.mjs  # 首次/换快照后跑一次：抓快照引用的外部 CSS
 node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项断言）
 
@@ -312,6 +321,9 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
   hover 写明原因，点它直接打开面板的「成分」页签。显示几个标记由头部行的剩余空隙决定
   （最多 3 个，放不下收成 `+N`、再放不下退成一个圆点）——**任何情况下都不折行**，
   因为新版头部行是固定 40px 高，折行就会压住正文（见 §5 的 #14）
+- **「关注的吧」里没等级的吧带一个「查等级」小按钮**（`src/core/forumLevel.ts`）：
+  点了才去他在该吧的帖子里读等级，读到就换成 `Lv.N` 并写缓存，读不到就写"查不到"并说明原因；
+  设置面板里有对应的「清空吧内等级缓存」
 - 脚本菜单：**设置 BDUSS / 运行参数**、**清空用户资料缓存**、**诊断当前页面**
 - 脚本菜单另有：**清空成分缓存**、**重新检测本页用户**
 - 页面适配：旧版（`.l_post` / `.p_author_name` / `.lzl_cnt > .at`）、新版（`.head-line`）
@@ -392,6 +404,12 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 3. **脚本改名**：`@name` 从「贴吧 eztb 工具箱（本地直连版）」改成「贴吧 eztb 工具箱」（版本 1.3.1）。
    `@name` + `@namespace` 一起构成油猴认脚本的唯一标识，所以**改名的副作用是本地的旧条目会被当成另一个脚本**，
    需要卸载旧的、再装新的；仓库里 `dist/` 那份产物已经一起重建。
+
+4. **加了「查等级」（点了才查）**，版本 1.4.0：隐藏关注贴吧 + 没有用户名的用户拿不到吧内等级时，
+   可以去他**在这个吧的帖子**里读（`pb/page` 的 `userList[].levelId` 就是该吧等级）。
+   实现在 `src/core/forumLevel.ts`，面板「关注的吧」里有等级缺失的行会带一个小按钮。
+   交叉验证：面板有等级的用户，这条路读出来一致（7 = 7）；`click-test` 里点「百度」那个按钮读到了 Lv.5。
+   反向验证没做（这条路的正确性靠 live-test 的交叉验证保证）。
 
 **可以继续的**：
 

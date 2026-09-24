@@ -27,5 +27,7 @@ export { loadUserForums } from "../core/userForums.ts";
 export { getHiddenLikeForum, getLikeForum } from "tieba.js";
 // 探查脚本要看清楼层里作者带的字段（比如"吧内等级"）
 export { getPosts } from "tieba.js";
+// 「点了才查」的吧内等级（从他在该吧的帖子里读）
+export { fetchUserForumLevel } from "../core/forumLevel.ts";
 // 关键词匹配是纯逻辑，这里导出让 live-test 用真实数据跑一遍
 export { matchComposition, parseRules } from "../core/composition.ts";

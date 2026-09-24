@@ -13,6 +13,10 @@ import {
 } from "../core/userPost.ts";
 import { type Identity, callSdkLoose, resolveIdentity } from "../core/identity.ts";
 import {
+	fetchUserForumLevel,
+	readForumLevelCache,
+} from "../core/forumLevel.ts";
+import {
 	HIDDEN_FORUMS_NOTE,
 	NO_LEVEL_NOTE,
 	NO_USERNAME_NOTE,
@@ -269,6 +273,16 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 				return;
 			}
 
+			// 之前在「关注的吧」页签点过"查等级"的，直接用缓存补上
+			for (const item of items) {
+				if (item.level) continue;
+				const cached = readForumLevelCache(identity.id, item.name);
+				if (cached) {
+					item.level = cached;
+					item.levelFromPost = true;
+				}
+			}
+
 			const withLevel = items.filter((item) => item.level).length;
 			const missingLevel = items.length - withLevel;
 			// 把"为什么有些吧没等级"直接写在界面上（两个原因分别说明，见 userForums.ts）
@@ -294,13 +308,51 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 								: "",
 							`</span>`,
 							item.level
-								? `<span class="tb-eztb-row-meta">Lv.${item.level}</span>`
-								: "",
+								? `<span class="tb-eztb-row-meta"${item.levelFromPost ? ' title="这个等级是从他在这吧的帖子里读到的"' : ""}>Lv.${item.level}</span>`
+								: `<span class="tb-eztb-row-meta"><button type="button" class="tb-eztb-levelbtn" data-forum="${escapeHtml(item.name)}" title="面板与资料接口都拿不到这个吧的等级，点一下去他在该吧的帖子里找">查等级</button></span>`,
 							`</a>`,
 						].join(""),
 					)
 					.join("") +
 				`</div>`;
+
+			// 「查等级」按钮：点了才发请求（每个吧最多 3 次），结果写缓存。
+			// 按按钮逐个绑定，不用事件委托——刷新页签时按钮会重建，委托反而会留下旧闭包。
+			for (const button of Array.from(
+				body.querySelectorAll<HTMLButtonElement>(".tb-eztb-levelbtn"),
+			)) {
+				const forumName = button.dataset.forum ?? "";
+				button.addEventListener("click", (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					if (button.disabled || !forumName) return;
+					button.disabled = true;
+					button.textContent = "查询中…";
+					void (async () => {
+						try {
+							const result = await fetchUserForumLevel(
+								identity.id,
+								forumName,
+							);
+							if (result.level) {
+								const meta = document.createElement("span");
+								meta.className = "tb-eztb-row-meta";
+								meta.textContent = `Lv.${result.level}`;
+								meta.title = `这个等级是从他${result.via === "reply" ? "回复过的帖子" : "在本吧的帖子"}里读到的`;
+								button.replaceWith(meta);
+								return;
+							}
+							button.textContent = "查不到";
+							button.title = result.reason ?? "没查到";
+							button.disabled = false;
+						} catch (error) {
+							button.textContent = "查询失败";
+							button.title = errorMessage(error);
+							button.disabled = false;
+						}
+					})();
+				});
+			}
 		} catch (error) {
 			body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
 		}

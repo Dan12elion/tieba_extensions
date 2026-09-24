@@ -31,6 +31,8 @@ export interface ForumRow {
 	levelName?: string;
 	/** 吧简介 */
 	slogan?: string;
+	/** 这个等级是"点了才查"从他在该吧的帖子里读到的（不是 panel 给的） */
+	levelFromPost?: boolean;
 }
 
 export interface UserForums {

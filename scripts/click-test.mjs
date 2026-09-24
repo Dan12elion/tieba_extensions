@@ -366,7 +366,48 @@ const PAGE = `<!doctype html>
             /没有完整公开/.test(forumsText), forumsText.slice(0, 80));
         add('「关注的吧」页签说明了等级为什么缺失',
             /没有设置用户名|只给了吧名/.test(forumsText), forumsText.slice(0, 140));
-        restOfBadgePhase();
+
+        // 「点了才查」的等级：没等级的吧应当带一个按钮，点它去他在该吧的帖子里找
+        var levelButtons = forumsPane
+          ? forumsPane.querySelectorAll('.tb-eztb-levelbtn')
+          : [];
+        add('没有等级的吧都带「查等级」按钮', levelButtons.length > 0,
+            '按钮 ' + levelButtons.length + ' 个');
+        if (!levelButtons.length) {
+          restOfBadgePhase();
+          return;
+        }
+        var levelButton = levelButtons[0];
+        var levelForum = levelButton.getAttribute('data-forum');
+        levelButton.click();
+        add('点「查等级」后按钮进入查询中状态',
+            /查询中|查不到|查询失败/.test(levelButton.textContent),
+            levelButton.textContent);
+        until(function () {
+          var pane = document.querySelector('.tb-eztb-pane[data-pane="forums"]');
+          var btn = pane && pane.querySelector('.tb-eztb-levelbtn[data-forum="' + levelForum + '"]');
+          // 查到就换成 Lv.N（按钮没了），查不到就写成"查不到/查询失败"
+          if (!btn) return true;
+          return /查不到|查询失败/.test(btn.textContent);
+        }, function (settled) {
+          var pane = document.querySelector('.tb-eztb-pane[data-pane="forums"]');
+          var rest = pane && pane.querySelector('.tb-eztb-levelbtn[data-forum="' + levelForum + '"]');
+          var gotLevel = !rest;
+          add('点「查等级」会给出结果（要么读到 Lv.N，要么明确说查不到）', settled,
+              gotLevel
+                ? ('「' + levelForum + '」读到了等级')
+                : ('「' + levelForum + '」' + rest.textContent + '：' + rest.getAttribute('title')));
+          if (gotLevel) {
+            var lvText = '';
+            Array.prototype.forEach.call(pane.querySelectorAll('.tb-eztb-row'), function (row) {
+              if (row.textContent.indexOf(levelForum) >= 0) lvText = row.textContent;
+            });
+            // 这段代码在 Node 的模板字符串里，能不用正则里的转义就别用（\\d 会被吃掉一层）
+            add('读到等级后该行显示 Lv.N', lvText.indexOf('Lv.') >= 0, lvText.slice(0, 60));
+          }
+          add('查等级期间没有 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+          restOfBadgePhase();
+        }, 150);
       }, 100);
     }, 400);
   }

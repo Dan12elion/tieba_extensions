@@ -311,6 +311,64 @@ try {
 	);
 }
 
+// ── 「点了才查」的吧内等级：从他在该吧的帖子里读 ────────────────────
+// 面板和资料都拿不到等级时的兜底（见 src/core/forumLevel.ts）。
+// 交叉验证：面板**有**等级的用户，用帖子接口读出来的等级应当一样。
+{
+	let sameLevel = null;
+	let readLevel = null;
+	for (const uid of authorIds.slice(0, 4)) {
+		try {
+			const loaded = await sdk.loadUserForums(Number(uid));
+			const topics = await sdk.loadTopicRows(Number(uid), 1);
+			for (const forum of loaded.forums) {
+				const hit = topics.find(
+					(row) => row.forumName === forum.name && row.threadId,
+				);
+				if (!hit) continue;
+				const result = await sdk.fetchUserForumLevel(Number(uid), forum.name);
+				if (!result.level) continue;
+				readLevel = readLevel ?? {
+					uid,
+					forum: forum.name,
+					level: result.level,
+					via: result.via,
+				};
+				if (forum.level && forum.level === result.level) {
+					sameLevel = {
+						uid,
+						forum: forum.name,
+						level: result.level,
+						panel: forum.level,
+					};
+					break;
+				}
+			}
+		} catch (error) {
+			if (process.env.EZTB_PROBE) {
+				console.log(
+					`    等级兜底探查 uid=${uid} 失败：${error?.message ?? error}`,
+				);
+			}
+		}
+		if (sameLevel) break;
+	}
+	report(
+		"「点了才查」读到的吧内等级与面板一致（交叉验证）",
+		Boolean(sameLevel),
+		sameLevel
+			? `uid=${sameLevel.uid} 吧=${sameLevel.forum} 面板=${sameLevel.panel} 帖子=${sameLevel.level}`
+			: "样本里没找到「面板有等级 + 他在该吧发过主题帖」的用户",
+	);
+	report(
+		"「点了才查」至少能读到一个正数等级",
+		Boolean(readLevel),
+		readLevel
+			? `uid=${readLevel.uid} 吧=${readLevel.forum} Lv.${readLevel.level}（来自${readLevel.via === "topic" ? "主题帖" : "回复"}）`
+			: "样本里没找到",
+	);
+}
+
 // ── 关键词匹配：拿真实主题帖数据跑一遍规则（真实数据 + 线上同一份匹配代码）──
 try {
 	const probeUid = Number(firstUidWithPosts);

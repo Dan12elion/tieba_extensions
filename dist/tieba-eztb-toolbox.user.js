@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.3.2
+// @version             1.4.0
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -26202,6 +26202,462 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
+  // ../eztb/packages/sdk/src/generated/PbPageReqIdl.ts
+  function createBasePbPageReqIdl() {
+    return { data: void 0 };
+  }
+  var PbPageReqIdl = {
+    encode(message, writer = new BinaryWriter()) {
+      if (message.data !== void 0) {
+        PbPageReqIdl_DataReq.encode(message.data, writer.uint32(10).fork()).join();
+      }
+      return writer;
+    },
+    decode(input, length2) {
+      const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end3 = length2 === void 0 ? reader.len : reader.pos + length2;
+      const message = createBasePbPageReqIdl();
+      while (reader.pos < end3) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.data = PbPageReqIdl_DataReq.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+    fromJSON(object) {
+      return { data: isSet22(object.data) ? PbPageReqIdl_DataReq.fromJSON(object.data) : void 0 };
+    },
+    toJSON(message) {
+      const obj = {};
+      if (message.data !== void 0) {
+        obj.data = PbPageReqIdl_DataReq.toJSON(message.data);
+      }
+      return obj;
+    },
+    create(base) {
+      return PbPageReqIdl.fromPartial(base ?? {});
+    },
+    fromPartial(object) {
+      const message = createBasePbPageReqIdl();
+      message.data = object.data !== void 0 && object.data !== null ? PbPageReqIdl_DataReq.fromPartial(object.data) : void 0;
+      return message;
+    }
+  };
+  function createBasePbPageReqIdl_DataReq() {
+    return {
+      common: void 0,
+      kz: "0",
+      lz: 0,
+      r: 0,
+      pid: "0",
+      withFloor: 0,
+      floorRn: 0,
+      rn: 0,
+      pn: 0,
+      floorSortType: 0
+    };
+  }
+  var PbPageReqIdl_DataReq = {
+    encode(message, writer = new BinaryWriter()) {
+      if (message.common !== void 0) {
+        CommonReq.encode(message.common, writer.uint32(202).fork()).join();
+      }
+      if (message.kz !== "0") {
+        writer.uint32(32).int64(message.kz);
+      }
+      if (message.lz !== 0) {
+        writer.uint32(40).int32(message.lz);
+      }
+      if (message.r !== 0) {
+        writer.uint32(48).int32(message.r);
+      }
+      if (message.pid !== "0") {
+        writer.uint32(56).int64(message.pid);
+      }
+      if (message.withFloor !== 0) {
+        writer.uint32(64).int32(message.withFloor);
+      }
+      if (message.floorRn !== 0) {
+        writer.uint32(72).int32(message.floorRn);
+      }
+      if (message.rn !== 0) {
+        writer.uint32(104).int32(message.rn);
+      }
+      if (message.pn !== 0) {
+        writer.uint32(144).int32(message.pn);
+      }
+      if (message.floorSortType !== 0) {
+        writer.uint32(592).int32(message.floorSortType);
+      }
+      return writer;
+    },
+    decode(input, length2) {
+      const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end3 = length2 === void 0 ? reader.len : reader.pos + length2;
+      const message = createBasePbPageReqIdl_DataReq();
+      while (reader.pos < end3) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+            message.common = CommonReq.decode(reader, reader.uint32());
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.kz = reader.int64().toString();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.lz = reader.int32();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.r = reader.int32();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+            message.pid = reader.int64().toString();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+            message.withFloor = reader.int32();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+            message.floorRn = reader.int32();
+            continue;
+          }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+            message.rn = reader.int32();
+            continue;
+          }
+          case 18: {
+            if (tag !== 144) {
+              break;
+            }
+            message.pn = reader.int32();
+            continue;
+          }
+          case 74: {
+            if (tag !== 592) {
+              break;
+            }
+            message.floorSortType = reader.int32();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+    fromJSON(object) {
+      return {
+        common: isSet22(object.common) ? CommonReq.fromJSON(object.common) : void 0,
+        kz: isSet22(object.kz) ? globalThis.String(object.kz) : "0",
+        lz: isSet22(object.lz) ? globalThis.Number(object.lz) : 0,
+        r: isSet22(object.r) ? globalThis.Number(object.r) : 0,
+        pid: isSet22(object.pid) ? globalThis.String(object.pid) : "0",
+        withFloor: isSet22(object.withFloor) ? globalThis.Number(object.withFloor) : isSet22(object.with_floor) ? globalThis.Number(object.with_floor) : 0,
+        floorRn: isSet22(object.floorRn) ? globalThis.Number(object.floorRn) : isSet22(object.floor_rn) ? globalThis.Number(object.floor_rn) : 0,
+        rn: isSet22(object.rn) ? globalThis.Number(object.rn) : 0,
+        pn: isSet22(object.pn) ? globalThis.Number(object.pn) : 0,
+        floorSortType: isSet22(object.floorSortType) ? globalThis.Number(object.floorSortType) : isSet22(object.floor_sort_type) ? globalThis.Number(object.floor_sort_type) : 0
+      };
+    },
+    toJSON(message) {
+      const obj = {};
+      if (message.common !== void 0) {
+        obj.common = CommonReq.toJSON(message.common);
+      }
+      if (message.kz !== "0") {
+        obj.kz = message.kz;
+      }
+      if (message.lz !== 0) {
+        obj.lz = Math.round(message.lz);
+      }
+      if (message.r !== 0) {
+        obj.r = Math.round(message.r);
+      }
+      if (message.pid !== "0") {
+        obj.pid = message.pid;
+      }
+      if (message.withFloor !== 0) {
+        obj.withFloor = Math.round(message.withFloor);
+      }
+      if (message.floorRn !== 0) {
+        obj.floorRn = Math.round(message.floorRn);
+      }
+      if (message.rn !== 0) {
+        obj.rn = Math.round(message.rn);
+      }
+      if (message.pn !== 0) {
+        obj.pn = Math.round(message.pn);
+      }
+      if (message.floorSortType !== 0) {
+        obj.floorSortType = Math.round(message.floorSortType);
+      }
+      return obj;
+    },
+    create(base) {
+      return PbPageReqIdl_DataReq.fromPartial(base ?? {});
+    },
+    fromPartial(object) {
+      const message = createBasePbPageReqIdl_DataReq();
+      message.common = object.common !== void 0 && object.common !== null ? CommonReq.fromPartial(object.common) : void 0;
+      message.kz = object.kz ?? "0";
+      message.lz = object.lz ?? 0;
+      message.r = object.r ?? 0;
+      message.pid = object.pid ?? "0";
+      message.withFloor = object.withFloor ?? 0;
+      message.floorRn = object.floorRn ?? 0;
+      message.rn = object.rn ?? 0;
+      message.pn = object.pn ?? 0;
+      message.floorSortType = object.floorSortType ?? 0;
+      return message;
+    }
+  };
+  function isSet22(value) {
+    return value !== null && value !== void 0;
+  }
+
+  // ../eztb/packages/sdk/src/generated/PbPageResIdl.ts
+  function createBasePbPageResIdl() {
+    return { error: void 0, data: void 0 };
+  }
+  var PbPageResIdl = {
+    encode(message, writer = new BinaryWriter()) {
+      if (message.error !== void 0) {
+        Error4.encode(message.error, writer.uint32(10).fork()).join();
+      }
+      if (message.data !== void 0) {
+        PbPageResIdl_DataRes.encode(message.data, writer.uint32(18).fork()).join();
+      }
+      return writer;
+    },
+    decode(input, length2) {
+      const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end3 = length2 === void 0 ? reader.len : reader.pos + length2;
+      const message = createBasePbPageResIdl();
+      while (reader.pos < end3) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.error = Error4.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.data = PbPageResIdl_DataRes.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+    fromJSON(object) {
+      return {
+        error: isSet23(object.error) ? Error4.fromJSON(object.error) : void 0,
+        data: isSet23(object.data) ? PbPageResIdl_DataRes.fromJSON(object.data) : void 0
+      };
+    },
+    toJSON(message) {
+      const obj = {};
+      if (message.error !== void 0) {
+        obj.error = Error4.toJSON(message.error);
+      }
+      if (message.data !== void 0) {
+        obj.data = PbPageResIdl_DataRes.toJSON(message.data);
+      }
+      return obj;
+    },
+    create(base) {
+      return PbPageResIdl.fromPartial(base ?? {});
+    },
+    fromPartial(object) {
+      const message = createBasePbPageResIdl();
+      message.error = object.error !== void 0 && object.error !== null ? Error4.fromPartial(object.error) : void 0;
+      message.data = object.data !== void 0 && object.data !== null ? PbPageResIdl_DataRes.fromPartial(object.data) : void 0;
+      return message;
+    }
+  };
+  function createBasePbPageResIdl_DataRes() {
+    return { forum: void 0, page: void 0, postList: [], thread: void 0, userList: [], threadFreqNum: "0" };
+  }
+  var PbPageResIdl_DataRes = {
+    encode(message, writer = new BinaryWriter()) {
+      if (message.forum !== void 0) {
+        SimpleForum.encode(message.forum, writer.uint32(18).fork()).join();
+      }
+      if (message.page !== void 0) {
+        Page.encode(message.page, writer.uint32(26).fork()).join();
+      }
+      for (const v of message.postList) {
+        Post.encode(v, writer.uint32(50).fork()).join();
+      }
+      if (message.thread !== void 0) {
+        ThreadInfo.encode(message.thread, writer.uint32(66).fork()).join();
+      }
+      for (const v of message.userList) {
+        User.encode(v, writer.uint32(106).fork()).join();
+      }
+      if (message.threadFreqNum !== "0") {
+        writer.uint32(296).int64(message.threadFreqNum);
+      }
+      return writer;
+    },
+    decode(input, length2) {
+      const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+      const end3 = length2 === void 0 ? reader.len : reader.pos + length2;
+      const message = createBasePbPageResIdl_DataRes();
+      while (reader.pos < end3) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.forum = SimpleForum.decode(reader, reader.uint32());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.page = Page.decode(reader, reader.uint32());
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+            message.postList.push(Post.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+            message.thread = ThreadInfo.decode(reader, reader.uint32());
+            continue;
+          }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+            message.userList.push(User.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 37: {
+            if (tag !== 296) {
+              break;
+            }
+            message.threadFreqNum = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    },
+    fromJSON(object) {
+      return {
+        forum: isSet23(object.forum) ? SimpleForum.fromJSON(object.forum) : void 0,
+        page: isSet23(object.page) ? Page.fromJSON(object.page) : void 0,
+        postList: globalThis.Array.isArray(object?.postList) ? object.postList.map((e) => Post.fromJSON(e)) : globalThis.Array.isArray(object?.post_list) ? object.post_list.map((e) => Post.fromJSON(e)) : [],
+        thread: isSet23(object.thread) ? ThreadInfo.fromJSON(object.thread) : void 0,
+        userList: globalThis.Array.isArray(object?.userList) ? object.userList.map((e) => User.fromJSON(e)) : globalThis.Array.isArray(object?.user_list) ? object.user_list.map((e) => User.fromJSON(e)) : [],
+        threadFreqNum: isSet23(object.threadFreqNum) ? globalThis.String(object.threadFreqNum) : isSet23(object.thread_freq_num) ? globalThis.String(object.thread_freq_num) : "0"
+      };
+    },
+    toJSON(message) {
+      const obj = {};
+      if (message.forum !== void 0) {
+        obj.forum = SimpleForum.toJSON(message.forum);
+      }
+      if (message.page !== void 0) {
+        obj.page = Page.toJSON(message.page);
+      }
+      if (message.postList?.length) {
+        obj.postList = message.postList.map((e) => Post.toJSON(e));
+      }
+      if (message.thread !== void 0) {
+        obj.thread = ThreadInfo.toJSON(message.thread);
+      }
+      if (message.userList?.length) {
+        obj.userList = message.userList.map((e) => User.toJSON(e));
+      }
+      if (message.threadFreqNum !== "0") {
+        obj.threadFreqNum = message.threadFreqNum;
+      }
+      return obj;
+    },
+    create(base) {
+      return PbPageResIdl_DataRes.fromPartial(base ?? {});
+    },
+    fromPartial(object) {
+      const message = createBasePbPageResIdl_DataRes();
+      message.forum = object.forum !== void 0 && object.forum !== null ? SimpleForum.fromPartial(object.forum) : void 0;
+      message.page = object.page !== void 0 && object.page !== null ? Page.fromPartial(object.page) : void 0;
+      message.postList = object.postList?.map((e) => Post.fromPartial(e)) || [];
+      message.thread = object.thread !== void 0 && object.thread !== null ? ThreadInfo.fromPartial(object.thread) : void 0;
+      message.userList = object.userList?.map((e) => User.fromPartial(e)) || [];
+      message.threadFreqNum = object.threadFreqNum ?? "0";
+      return message;
+    }
+  };
+  function isSet23(value) {
+    return value !== null && value !== void 0;
+  }
+
   // ../eztb/packages/sdk/src/generated/UserPostReqIdl.ts
   function createBaseUserPostReqIdl() {
     return { data: void 0 };
@@ -26236,7 +26692,7 @@ ${endStackCall}`;
       return message;
     },
     fromJSON(object) {
-      return { data: isSet22(object.data) ? UserPostReqIdl_DataReq.fromJSON(object.data) : void 0 };
+      return { data: isSet24(object.data) ? UserPostReqIdl_DataReq.fromJSON(object.data) : void 0 };
     },
     toJSON(message) {
       const obj = {};
@@ -26348,13 +26804,13 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        userId: isSet22(object.userId) ? globalThis.String(object.userId) : isSet22(object.user_id) ? globalThis.String(object.user_id) : "0",
-        rn: isSet22(object.rn) ? globalThis.Number(object.rn) : 0,
-        isThread: isSet22(object.isThread) ? globalThis.Number(object.isThread) : isSet22(object.is_thread) ? globalThis.Number(object.is_thread) : 0,
-        needContent: isSet22(object.needContent) ? globalThis.Number(object.needContent) : isSet22(object.need_content) ? globalThis.Number(object.need_content) : 0,
-        pn: isSet22(object.pn) ? globalThis.Number(object.pn) : 0,
-        isViewCard: isSet22(object.isViewCard) ? globalThis.Number(object.isViewCard) : isSet22(object.is_view_card) ? globalThis.Number(object.is_view_card) : 0,
-        common: isSet22(object.common) ? CommonReq.fromJSON(object.common) : void 0
+        userId: isSet24(object.userId) ? globalThis.String(object.userId) : isSet24(object.user_id) ? globalThis.String(object.user_id) : "0",
+        rn: isSet24(object.rn) ? globalThis.Number(object.rn) : 0,
+        isThread: isSet24(object.isThread) ? globalThis.Number(object.isThread) : isSet24(object.is_thread) ? globalThis.Number(object.is_thread) : 0,
+        needContent: isSet24(object.needContent) ? globalThis.Number(object.needContent) : isSet24(object.need_content) ? globalThis.Number(object.need_content) : 0,
+        pn: isSet24(object.pn) ? globalThis.Number(object.pn) : 0,
+        isViewCard: isSet24(object.isViewCard) ? globalThis.Number(object.isViewCard) : isSet24(object.is_view_card) ? globalThis.Number(object.is_view_card) : 0,
+        common: isSet24(object.common) ? CommonReq.fromJSON(object.common) : void 0
       };
     },
     toJSON(message) {
@@ -26397,7 +26853,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet22(value) {
+  function isSet24(value) {
     return value !== null && value !== void 0;
   }
 
@@ -26669,27 +27125,27 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        forumId: isSet23(object.forumId) ? globalThis.String(object.forumId) : isSet23(object.forum_id) ? globalThis.String(object.forum_id) : "0",
-        threadId: isSet23(object.threadId) ? globalThis.String(object.threadId) : isSet23(object.thread_id) ? globalThis.String(object.thread_id) : "0",
-        postId: isSet23(object.postId) ? globalThis.String(object.postId) : isSet23(object.post_id) ? globalThis.String(object.post_id) : "0",
-        createTime: isSet23(object.createTime) ? globalThis.Number(object.createTime) : isSet23(object.create_time) ? globalThis.Number(object.create_time) : 0,
-        forumName: isSet23(object.forumName) ? globalThis.String(object.forumName) : isSet23(object.forum_name) ? globalThis.String(object.forum_name) : "",
-        title: isSet23(object.title) ? globalThis.String(object.title) : "",
+        forumId: isSet25(object.forumId) ? globalThis.String(object.forumId) : isSet25(object.forum_id) ? globalThis.String(object.forum_id) : "0",
+        threadId: isSet25(object.threadId) ? globalThis.String(object.threadId) : isSet25(object.thread_id) ? globalThis.String(object.thread_id) : "0",
+        postId: isSet25(object.postId) ? globalThis.String(object.postId) : isSet25(object.post_id) ? globalThis.String(object.post_id) : "0",
+        createTime: isSet25(object.createTime) ? globalThis.Number(object.createTime) : isSet25(object.create_time) ? globalThis.Number(object.create_time) : 0,
+        forumName: isSet25(object.forumName) ? globalThis.String(object.forumName) : isSet25(object.forum_name) ? globalThis.String(object.forum_name) : "",
+        title: isSet25(object.title) ? globalThis.String(object.title) : "",
         content: globalThis.Array.isArray(object?.content) ? object.content.map((e) => PostInfoList_PostInfoContent.fromJSON(e)) : [],
-        userName: isSet23(object.userName) ? globalThis.String(object.userName) : isSet23(object.user_name) ? globalThis.String(object.user_name) : "",
+        userName: isSet25(object.userName) ? globalThis.String(object.userName) : isSet25(object.user_name) ? globalThis.String(object.user_name) : "",
         media: globalThis.Array.isArray(object?.media) ? object.media.map((e) => Media.fromJSON(e)) : [],
-        replyNum: isSet23(object.replyNum) ? globalThis.Number(object.replyNum) : isSet23(object.reply_num) ? globalThis.Number(object.reply_num) : 0,
-        userId: isSet23(object.userId) ? globalThis.String(object.userId) : isSet23(object.user_id) ? globalThis.String(object.user_id) : "0",
-        userPortrait: isSet23(object.userPortrait) ? globalThis.String(object.userPortrait) : isSet23(object.user_portrait) ? globalThis.String(object.user_portrait) : "",
+        replyNum: isSet25(object.replyNum) ? globalThis.Number(object.replyNum) : isSet25(object.reply_num) ? globalThis.Number(object.reply_num) : 0,
+        userId: isSet25(object.userId) ? globalThis.String(object.userId) : isSet25(object.user_id) ? globalThis.String(object.user_id) : "0",
+        userPortrait: isSet25(object.userPortrait) ? globalThis.String(object.userPortrait) : isSet25(object.user_portrait) ? globalThis.String(object.user_portrait) : "",
         voiceInfo: globalThis.Array.isArray(object?.voiceInfo) ? object.voiceInfo.map((e) => Voice.fromJSON(e)) : globalThis.Array.isArray(object?.voice_info) ? object.voice_info.map((e) => Voice.fromJSON(e)) : [],
-        threadType: isSet23(object.threadType) ? globalThis.String(object.threadType) : isSet23(object.thread_type) ? globalThis.String(object.thread_type) : "0",
-        pollInfo: isSet23(object.pollInfo) ? PollInfo.fromJSON(object.pollInfo) : isSet23(object.poll_info) ? PollInfo.fromJSON(object.poll_info) : void 0,
-        videoInfo: isSet23(object.videoInfo) ? VideoInfo.fromJSON(object.videoInfo) : isSet23(object.video_info) ? VideoInfo.fromJSON(object.video_info) : void 0,
-        freqNum: isSet23(object.freqNum) ? globalThis.Number(object.freqNum) : isSet23(object.freq_num) ? globalThis.Number(object.freq_num) : 0,
-        nameShow: isSet23(object.nameShow) ? globalThis.String(object.nameShow) : isSet23(object.name_show) ? globalThis.String(object.name_show) : "",
-        shareNum: isSet23(object.shareNum) ? globalThis.Number(object.shareNum) : isSet23(object.share_num) ? globalThis.Number(object.share_num) : 0,
-        agree: isSet23(object.agree) ? Agree.fromJSON(object.agree) : void 0,
-        isShareThread: isSet23(object.isShareThread) ? globalThis.Number(object.isShareThread) : isSet23(object.is_share_thread) ? globalThis.Number(object.is_share_thread) : 0,
+        threadType: isSet25(object.threadType) ? globalThis.String(object.threadType) : isSet25(object.thread_type) ? globalThis.String(object.thread_type) : "0",
+        pollInfo: isSet25(object.pollInfo) ? PollInfo.fromJSON(object.pollInfo) : isSet25(object.poll_info) ? PollInfo.fromJSON(object.poll_info) : void 0,
+        videoInfo: isSet25(object.videoInfo) ? VideoInfo.fromJSON(object.videoInfo) : isSet25(object.video_info) ? VideoInfo.fromJSON(object.video_info) : void 0,
+        freqNum: isSet25(object.freqNum) ? globalThis.Number(object.freqNum) : isSet25(object.freq_num) ? globalThis.Number(object.freq_num) : 0,
+        nameShow: isSet25(object.nameShow) ? globalThis.String(object.nameShow) : isSet25(object.name_show) ? globalThis.String(object.name_show) : "",
+        shareNum: isSet25(object.shareNum) ? globalThis.Number(object.shareNum) : isSet25(object.share_num) ? globalThis.Number(object.share_num) : 0,
+        agree: isSet25(object.agree) ? Agree.fromJSON(object.agree) : void 0,
+        isShareThread: isSet25(object.isShareThread) ? globalThis.Number(object.isShareThread) : isSet25(object.is_share_thread) ? globalThis.Number(object.is_share_thread) : 0,
         firstPostContent: globalThis.Array.isArray(object?.firstPostContent) ? object.firstPostContent.map((e) => PbContent.fromJSON(e)) : globalThis.Array.isArray(object?.first_post_content) ? object.first_post_content.map((e) => PbContent.fromJSON(e)) : []
       };
     },
@@ -26858,9 +27314,9 @@ ${endStackCall}`;
     fromJSON(object) {
       return {
         postContent: globalThis.Array.isArray(object?.postContent) ? object.postContent.map((e) => PostInfoList_PostInfoContent_Abstract.fromJSON(e)) : globalThis.Array.isArray(object?.post_content) ? object.post_content.map((e) => PostInfoList_PostInfoContent_Abstract.fromJSON(e)) : [],
-        createTime: isSet23(object.createTime) ? globalThis.String(object.createTime) : isSet23(object.create_time) ? globalThis.String(object.create_time) : "0",
-        postType: isSet23(object.postType) ? globalThis.String(object.postType) : isSet23(object.post_type) ? globalThis.String(object.post_type) : "0",
-        postId: isSet23(object.postId) ? globalThis.String(object.postId) : isSet23(object.post_id) ? globalThis.String(object.post_id) : "0"
+        createTime: isSet25(object.createTime) ? globalThis.String(object.createTime) : isSet25(object.create_time) ? globalThis.String(object.create_time) : "0",
+        postType: isSet25(object.postType) ? globalThis.String(object.postType) : isSet25(object.post_type) ? globalThis.String(object.post_type) : "0",
+        postId: isSet25(object.postId) ? globalThis.String(object.postId) : isSet25(object.post_id) ? globalThis.String(object.post_id) : "0"
       };
     },
     toJSON(message) {
@@ -26965,11 +27421,11 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        type: isSet23(object.type) ? globalThis.Number(object.type) : 0,
-        text: isSet23(object.text) ? globalThis.String(object.text) : "",
-        link: isSet23(object.link) ? globalThis.String(object.link) : "",
-        duringTime: isSet23(object.duringTime) ? globalThis.String(object.duringTime) : isSet23(object.during_time) ? globalThis.String(object.during_time) : "",
-        voiceMd5: isSet23(object.voiceMd5) ? globalThis.String(object.voiceMd5) : isSet23(object.voice_md5) ? globalThis.String(object.voice_md5) : ""
+        type: isSet25(object.type) ? globalThis.Number(object.type) : 0,
+        text: isSet25(object.text) ? globalThis.String(object.text) : "",
+        link: isSet25(object.link) ? globalThis.String(object.link) : "",
+        duringTime: isSet25(object.duringTime) ? globalThis.String(object.duringTime) : isSet25(object.during_time) ? globalThis.String(object.during_time) : "",
+        voiceMd5: isSet25(object.voiceMd5) ? globalThis.String(object.voiceMd5) : isSet25(object.voice_md5) ? globalThis.String(object.voice_md5) : ""
       };
     },
     toJSON(message) {
@@ -27004,7 +27460,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet23(value) {
+  function isSet25(value) {
     return value !== null && value !== void 0;
   }
 
@@ -27053,8 +27509,8 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        error: isSet24(object.error) ? Error4.fromJSON(object.error) : void 0,
-        data: isSet24(object.data) ? UserPostResIdl_DataRes.fromJSON(object.data) : void 0
+        error: isSet26(object.error) ? Error4.fromJSON(object.error) : void 0,
+        data: isSet26(object.data) ? UserPostResIdl_DataRes.fromJSON(object.data) : void 0
       };
     },
     toJSON(message) {
@@ -27191,13 +27647,13 @@ ${endStackCall}`;
     fromJSON(object) {
       return {
         postList: globalThis.Array.isArray(object?.postList) ? object.postList.map((e) => PostInfoList.fromJSON(e)) : globalThis.Array.isArray(object?.post_list) ? object.post_list.map((e) => PostInfoList.fromJSON(e)) : [],
-        hidePost: isSet24(object.hidePost) ? globalThis.Number(object.hidePost) : isSet24(object.hide_post) ? globalThis.Number(object.hide_post) : 0,
-        time: isSet24(object.time) ? globalThis.String(object.time) : "0",
-        ctime: isSet24(object.ctime) ? globalThis.String(object.ctime) : "0",
-        logid: isSet24(object.logid) ? globalThis.String(object.logid) : "0",
-        maskType: isSet24(object.maskType) ? globalThis.Number(object.maskType) : isSet24(object.mask_type) ? globalThis.Number(object.mask_type) : 0,
-        viewCardNum: isSet24(object.viewCardNum) ? globalThis.Number(object.viewCardNum) : isSet24(object.view_card_num) ? globalThis.Number(object.view_card_num) : 0,
-        reddotDeletedThread: isSet24(object.reddotDeletedThread) ? globalThis.Number(object.reddotDeletedThread) : isSet24(object.reddot_deleted_thread) ? globalThis.Number(object.reddot_deleted_thread) : 0
+        hidePost: isSet26(object.hidePost) ? globalThis.Number(object.hidePost) : isSet26(object.hide_post) ? globalThis.Number(object.hide_post) : 0,
+        time: isSet26(object.time) ? globalThis.String(object.time) : "0",
+        ctime: isSet26(object.ctime) ? globalThis.String(object.ctime) : "0",
+        logid: isSet26(object.logid) ? globalThis.String(object.logid) : "0",
+        maskType: isSet26(object.maskType) ? globalThis.Number(object.maskType) : isSet26(object.mask_type) ? globalThis.Number(object.mask_type) : 0,
+        viewCardNum: isSet26(object.viewCardNum) ? globalThis.Number(object.viewCardNum) : isSet26(object.view_card_num) ? globalThis.Number(object.view_card_num) : 0,
+        reddotDeletedThread: isSet26(object.reddotDeletedThread) ? globalThis.Number(object.reddotDeletedThread) : isSet26(object.reddot_deleted_thread) ? globalThis.Number(object.reddot_deleted_thread) : 0
       };
     },
     toJSON(message) {
@@ -27244,7 +27700,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet24(value) {
+  function isSet26(value) {
     return value !== null && value !== void 0;
   }
 
@@ -27299,6 +27755,110 @@ ${endStackCall}`;
   }
 
   // ../eztb/packages/sdk/src/api/post.ts
+  var MAX_PAGE = 600;
+  function packPostsProto(params) {
+    const rn = Math.min(Math.max(params.rn || 30, 1), 30);
+    const data = {
+      kz: params.tid.toString(),
+      pn: params.page || 1,
+      // 单页最大 30
+      rn,
+      // 1 时间倒序，2 热门排序，3 及以上时间正序
+      r: params.sort || 3,
+      lz: params.onlyThreadAuthor ? 1 : 0,
+      common: {
+        ClientType: CLIENT_TYPE,
+        ClientVersion: CLIENT_VERSION
+      }
+    };
+    if (params.withComment) {
+      data.common.BDUSS = getClient().bduss;
+      data.withFloor = 1;
+      data.floorSortType = params.commentsSortByTime ? 0 : 1;
+      data.floorRn = params.commentRn || 4;
+    }
+    const req = PbPageReqIdl.fromPartial({ data });
+    return PbPageReqIdl.encode(req).finish();
+  }
+  function parsePostsBody(buffer) {
+    const res = PbPageResIdl.decode(buffer);
+    if (res.error?.errorno) {
+      throw new TiebaServerError(res.error.errorno, res.error.errmsg ?? "");
+    }
+    return res.data;
+  }
+  function getSinglePage(params) {
+    const effect = pipe(
+      Effect_exports.succeed(packPostsProto(params)),
+      Effect_exports.andThen(
+        (buf) => getClient().postProtobuf("/c/f/pb/page?cmd=303002", buf)
+      ),
+      Effect_exports.map(parsePostsBody)
+    );
+    if (params.withComment) {
+      return effect.pipe(
+        Effect_exports.retry({
+          schedule: Schedule_exports.exponential(1e3),
+          times: 3
+        })
+      );
+    }
+    return effect;
+  }
+  function fetchPages(pages, makeParams) {
+    const effects = pages.map((pg) => getSinglePage(makeParams(pg)));
+    return Effect_exports.all(effects, { concurrency: 5, mode: "either" }).pipe(
+      Effect_exports.map((results) => {
+        const postsArr = [];
+        const usersArr = [];
+        for (const r of results) {
+          if (Either_exports.isRight(r)) {
+            if (r.right?.postList) postsArr.push(r.right.postList);
+            if (r.right?.userList) usersArr.push(r.right.userList);
+          }
+        }
+        return { posts: postsArr.flat(1), users: usersArr.flat(1) };
+      })
+    );
+  }
+  function getPosts(tid, page, options) {
+    const makeParams = (pg) => ({
+      tid,
+      page: pg,
+      ...options
+    });
+    if (typeof page === "number") {
+      return getSinglePage(makeParams(page));
+    }
+    return Effect_exports.gen(function* () {
+      const from = page === "ALL" ? 1 : Math.max(1, page[0]);
+      const requestedLastPage = page === "ALL" ? MAX_PAGE : Math.max(from, page[1]);
+      const firstResult = yield* getSinglePage(makeParams(from));
+      const totalPage = Math.max(
+        1,
+        Math.min(firstResult?.page?.totalPage || 1, MAX_PAGE)
+      );
+      const lastPage = page === "ALL" ? totalPage : Math.min(requestedLastPage, totalPage);
+      if (page !== "ALL" && from > totalPage) {
+        if (firstResult?.postList) firstResult.postList = [];
+        if (firstResult?.userList) firstResult.userList = [];
+        return firstResult;
+      }
+      if (from >= lastPage) return firstResult;
+      const remaining = Array.from(
+        { length: lastPage - from },
+        (_, i) => from + 1 + i
+      );
+      const { posts, users } = yield* fetchPages(remaining, makeParams);
+      if (firstResult?.postList) {
+        firstResult.postList.push(...posts);
+      }
+      if (firstResult?.userList) {
+        firstResult.userList.push(...users);
+      }
+      return firstResult;
+    });
+  }
   var getUserPostSingle = createProtoApi({
     endpoint: "/c/u/feed/userpost?cmd=303002",
     reqCodec: UserPostReqIdl,
@@ -27380,7 +27940,7 @@ ${endStackCall}`;
       return message;
     },
     fromJSON(object) {
-      return { data: isSet25(object.data) ? GetUserByUidReqIdl_DataReq.fromJSON(object.data) : void 0 };
+      return { data: isSet27(object.data) ? GetUserByUidReqIdl_DataReq.fromJSON(object.data) : void 0 };
     },
     toJSON(message) {
       const obj = {};
@@ -27442,8 +28002,8 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        common: isSet25(object.common) ? CommonReq.fromJSON(object.common) : void 0,
-        tiebaUid: isSet25(object.tiebaUid) ? globalThis.String(object.tiebaUid) : isSet25(object.tieba_uid) ? globalThis.String(object.tieba_uid) : ""
+        common: isSet27(object.common) ? CommonReq.fromJSON(object.common) : void 0,
+        tiebaUid: isSet27(object.tiebaUid) ? globalThis.String(object.tiebaUid) : isSet27(object.tieba_uid) ? globalThis.String(object.tieba_uid) : ""
       };
     },
     toJSON(message) {
@@ -27466,7 +28026,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet25(value) {
+  function isSet27(value) {
     return value !== null && value !== void 0;
   }
 
@@ -27515,8 +28075,8 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        error: isSet26(object.error) ? Error4.fromJSON(object.error) : void 0,
-        data: isSet26(object.data) ? GetUserByUidResIdl_DataRes.fromJSON(object.data) : void 0
+        error: isSet28(object.error) ? Error4.fromJSON(object.error) : void 0,
+        data: isSet28(object.data) ? GetUserByUidResIdl_DataRes.fromJSON(object.data) : void 0
       };
     },
     toJSON(message) {
@@ -27572,7 +28132,7 @@ ${endStackCall}`;
       return message;
     },
     fromJSON(object) {
-      return { user: isSet26(object.user) ? User.fromJSON(object.user) : void 0 };
+      return { user: isSet28(object.user) ? User.fromJSON(object.user) : void 0 };
     },
     toJSON(message) {
       const obj = {};
@@ -27590,7 +28150,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet26(value) {
+  function isSet28(value) {
     return value !== null && value !== void 0;
   }
 
@@ -27628,7 +28188,7 @@ ${endStackCall}`;
       return message;
     },
     fromJSON(object) {
-      return { data: isSet27(object.data) ? ProfileReqIdl_DataReq.fromJSON(object.data) : void 0 };
+      return { data: isSet29(object.data) ? ProfileReqIdl_DataReq.fromJSON(object.data) : void 0 };
     },
     toJSON(message) {
       const obj = {};
@@ -27730,12 +28290,12 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        uid: isSet27(object.uid) ? globalThis.String(object.uid) : "0",
-        needPostCount: isSet27(object.needPostCount) ? globalThis.Number(object.needPostCount) : isSet27(object.need_post_count) ? globalThis.Number(object.need_post_count) : 0,
-        pn: isSet27(object.pn) ? globalThis.Number(object.pn) : 0,
-        common: isSet27(object.common) ? CommonReq.fromJSON(object.common) : void 0,
-        page: isSet27(object.page) ? globalThis.Number(object.page) : 0,
-        friendUidPortrait: isSet27(object.friendUidPortrait) ? globalThis.String(object.friendUidPortrait) : isSet27(object.friend_uid_portrait) ? globalThis.String(object.friend_uid_portrait) : ""
+        uid: isSet29(object.uid) ? globalThis.String(object.uid) : "0",
+        needPostCount: isSet29(object.needPostCount) ? globalThis.Number(object.needPostCount) : isSet29(object.need_post_count) ? globalThis.Number(object.need_post_count) : 0,
+        pn: isSet29(object.pn) ? globalThis.Number(object.pn) : 0,
+        common: isSet29(object.common) ? CommonReq.fromJSON(object.common) : void 0,
+        page: isSet29(object.page) ? globalThis.Number(object.page) : 0,
+        friendUidPortrait: isSet29(object.friendUidPortrait) ? globalThis.String(object.friendUidPortrait) : isSet29(object.friend_uid_portrait) ? globalThis.String(object.friend_uid_portrait) : ""
       };
     },
     toJSON(message) {
@@ -27774,7 +28334,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet27(value) {
+  function isSet29(value) {
     return value !== null && value !== void 0;
   }
 
@@ -27823,8 +28383,8 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        error: isSet28(object.error) ? Error4.fromJSON(object.error) : void 0,
-        data: isSet28(object.data) ? ProfileResIdl_DataRes.fromJSON(object.data) : void 0
+        error: isSet30(object.error) ? Error4.fromJSON(object.error) : void 0,
+        data: isSet30(object.data) ? ProfileResIdl_DataRes.fromJSON(object.data) : void 0
       };
     },
     toJSON(message) {
@@ -27911,10 +28471,10 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        user: isSet28(object.user) ? User.fromJSON(object.user) : void 0,
-        antiStat: isSet28(object.antiStat) ? ProfileResIdl_DataRes_Anti.fromJSON(object.antiStat) : isSet28(object.anti_stat) ? ProfileResIdl_DataRes_Anti.fromJSON(object.anti_stat) : void 0,
+        user: isSet30(object.user) ? User.fromJSON(object.user) : void 0,
+        antiStat: isSet30(object.antiStat) ? ProfileResIdl_DataRes_Anti.fromJSON(object.antiStat) : isSet30(object.anti_stat) ? ProfileResIdl_DataRes_Anti.fromJSON(object.anti_stat) : void 0,
         postList: globalThis.Array.isArray(object?.postList) ? object.postList.map((e) => PostInfoList.fromJSON(e)) : globalThis.Array.isArray(object?.post_list) ? object.post_list.map((e) => PostInfoList.fromJSON(e)) : [],
-        userAgreeInfo: isSet28(object.userAgreeInfo) ? ProfileResIdl_DataRes_UserAgreeInfo.fromJSON(object.userAgreeInfo) : isSet28(object.user_agree_info) ? ProfileResIdl_DataRes_UserAgreeInfo.fromJSON(object.user_agree_info) : void 0
+        userAgreeInfo: isSet30(object.userAgreeInfo) ? ProfileResIdl_DataRes_UserAgreeInfo.fromJSON(object.userAgreeInfo) : isSet30(object.user_agree_info) ? ProfileResIdl_DataRes_UserAgreeInfo.fromJSON(object.user_agree_info) : void 0
       };
     },
     toJSON(message) {
@@ -27999,9 +28559,9 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        blockStat: isSet28(object.blockStat) ? globalThis.Number(object.blockStat) : isSet28(object.block_stat) ? globalThis.Number(object.block_stat) : 0,
-        hideStat: isSet28(object.hideStat) ? globalThis.Number(object.hideStat) : isSet28(object.hide_stat) ? globalThis.Number(object.hide_stat) : 0,
-        daysTofree: isSet28(object.daysTofree) ? globalThis.Number(object.daysTofree) : isSet28(object.days_tofree) ? globalThis.Number(object.days_tofree) : 0
+        blockStat: isSet30(object.blockStat) ? globalThis.Number(object.blockStat) : isSet30(object.block_stat) ? globalThis.Number(object.block_stat) : 0,
+        hideStat: isSet30(object.hideStat) ? globalThis.Number(object.hideStat) : isSet30(object.hide_stat) ? globalThis.Number(object.hide_stat) : 0,
+        daysTofree: isSet30(object.daysTofree) ? globalThis.Number(object.daysTofree) : isSet30(object.days_tofree) ? globalThis.Number(object.days_tofree) : 0
       };
     },
     toJSON(message) {
@@ -28062,7 +28622,7 @@ ${endStackCall}`;
     },
     fromJSON(object) {
       return {
-        totalAgreeNum: isSet28(object.totalAgreeNum) ? globalThis.String(object.totalAgreeNum) : isSet28(object.total_agree_num) ? globalThis.String(object.total_agree_num) : "0"
+        totalAgreeNum: isSet30(object.totalAgreeNum) ? globalThis.String(object.totalAgreeNum) : isSet30(object.total_agree_num) ? globalThis.String(object.total_agree_num) : "0"
       };
     },
     toJSON(message) {
@@ -28081,7 +28641,7 @@ ${endStackCall}`;
       return message;
     }
   };
-  function isSet28(value) {
+  function isSet30(value) {
     return value !== null && value !== void 0;
   }
 
@@ -28999,6 +29559,105 @@ ${endStackCall}`;
     }
   }
 
+  // src/core/forumLevel.ts
+  var CACHE_KEY3 = "tbEztbToolboxForumLevelV1";
+  var CACHE_MAX3 = 500;
+  var MAX_THREADS = 3;
+  var memory3 = /* @__PURE__ */ new Map();
+  var disk3 = loadDisk3();
+  function loadDisk3() {
+    try {
+      const stored = GM_getValue(
+        CACHE_KEY3,
+        {}
+      );
+      return stored && typeof stored === "object" ? stored : {};
+    } catch {
+      return {};
+    }
+  }
+  var cacheKey = (targetId, forumName) => `${targetId}:${forumName}`;
+  function readForumLevelCache(targetId, forumName) {
+    const key = cacheKey(targetId, forumName);
+    const hit = memory3.get(key) ?? disk3[key]?.level;
+    return hit && hit > 0 ? hit : null;
+  }
+  function writeForumLevelCache(targetId, forumName, level) {
+    const key = cacheKey(targetId, forumName);
+    memory3.set(key, level);
+    disk3[key] = { level, ts: Date.now() };
+    const keys5 = Object.keys(disk3);
+    if (keys5.length > CACHE_MAX3) {
+      keys5.sort((a, b) => (disk3[a].ts ?? 0) - (disk3[b].ts ?? 0));
+      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX3)) {
+        delete disk3[stale];
+      }
+    }
+    try {
+      GM_setValue(CACHE_KEY3, disk3);
+    } catch {
+    }
+  }
+  function clearForumLevelCache() {
+    memory3.clear();
+    disk3 = {};
+    try {
+      GM_setValue(CACHE_KEY3, {});
+    } catch {
+    }
+  }
+  async function findThreads(targetId, forumName) {
+    const candidates = [];
+    const collect = (rows, via) => {
+      for (const row of rows) {
+        if (row.forumName !== forumName || !row.threadId) continue;
+        if (candidates.some((item) => item.tid === row.threadId)) continue;
+        candidates.push({ tid: row.threadId, via });
+      }
+    };
+    try {
+      collect(await loadTopicRows(targetId, 1), "topic");
+    } catch {
+    }
+    if (!candidates.length) {
+      try {
+        collect(await loadReplyRows(targetId, 1), "reply");
+      } catch {
+      }
+    }
+    return candidates;
+  }
+  async function fetchUserForumLevel(targetId, forumName) {
+    const cached4 = readForumLevelCache(targetId, forumName);
+    if (cached4) return { level: cached4, via: "cache" };
+    const candidates = await findThreads(targetId, forumName);
+    if (!candidates.length) {
+      return {
+        reason: `最近一页帖子里没有他在「${forumName}」的帖子，读不到他在这个吧的等级`
+      };
+    }
+    let lastError = "";
+    for (const candidate of candidates.slice(0, MAX_THREADS)) {
+      try {
+        const page = await callSdkLoose(
+          () => getPosts(Number(candidate.tid), 1, { rn: 30 })
+        );
+        const users = page?.userList ?? [];
+        const me = users.find((user) => String(user?.id) === String(targetId));
+        const level = toNumber(me?.levelId);
+        if (level > 0) {
+          writeForumLevelCache(targetId, forumName, level);
+          return { level, via: candidate.via };
+        }
+      } catch (error) {
+        lastError = errorMessage(error);
+      }
+    }
+    return {
+      reason: lastError || `在他这几个帖子的第 1 页里没找到他的楼层（回复可能在后几页），读不到等级`
+    };
+  }
+
   // src/ui/modal.ts
   function openDialog(options) {
     closeOpenDialog();
@@ -29170,6 +29829,7 @@ ${endStackCall}`;
     parts2.push(`<button data-act="help">打开辅助获取网址</button>`);
     parts2.push(`<button data-act="clear">清空资料缓存</button>`);
     parts2.push(`<button data-act="clear-composition">清空成分缓存</button>`);
+    parts2.push(`<button data-act="clear-forum-level">清空吧内等级缓存</button>`);
     parts2.push(`<button data-act="save" class="primary">保存</button>`);
     parts2.push(`</div>`);
     parts2.push(`</div>`);
@@ -29215,6 +29875,13 @@ ${endStackCall}`;
       clearCompositionCache();
       const button = dialog.body.querySelector(
         '[data-act="clear-composition"]'
+      );
+      if (button) button.textContent = "已清空";
+    });
+    dialog.body.querySelector('[data-act="clear-forum-level"]')?.addEventListener("click", () => {
+      clearForumLevelCache();
+      const button = dialog.body.querySelector(
+        '[data-act="clear-forum-level"]'
       );
       if (button) button.textContent = "已清空";
     });
@@ -29601,6 +30268,14 @@ ${endStackCall}`;
           body.innerHTML = `<div class="tb-eztb-empty">该用户没有公开的关注贴吧</div>`;
           return;
         }
+        for (const item of items) {
+          if (item.level) continue;
+          const cached4 = readForumLevelCache(identity4.id, item.name);
+          if (cached4) {
+            item.level = cached4;
+            item.levelFromPost = true;
+          }
+        }
         const withLevel = items.filter((item) => item.level).length;
         const missingLevel = items.length - withLevel;
         const notes = [
@@ -29615,10 +30290,45 @@ ${endStackCall}`;
             `<span class="tb-eztb-row-title">${escapeHtml(item.display)}</span>`,
             item.slogan || item.levelName ? `<span class="tb-eztb-row-sub">${escapeHtml(item.slogan || item.levelName)}</span>` : "",
             `</span>`,
-            item.level ? `<span class="tb-eztb-row-meta">Lv.${item.level}</span>` : "",
+            item.level ? `<span class="tb-eztb-row-meta"${item.levelFromPost ? ' title="这个等级是从他在这吧的帖子里读到的"' : ""}>Lv.${item.level}</span>` : `<span class="tb-eztb-row-meta"><button type="button" class="tb-eztb-levelbtn" data-forum="${escapeHtml(item.name)}" title="面板与资料接口都拿不到这个吧的等级，点一下去他在该吧的帖子里找">查等级</button></span>`,
             `</a>`
           ].join("")
         ).join("") + `</div>`;
+        for (const button of Array.from(
+          body.querySelectorAll(".tb-eztb-levelbtn")
+        )) {
+          const forumName = button.dataset.forum ?? "";
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (button.disabled || !forumName) return;
+            button.disabled = true;
+            button.textContent = "查询中…";
+            void (async () => {
+              try {
+                const result = await fetchUserForumLevel(
+                  identity4.id,
+                  forumName
+                );
+                if (result.level) {
+                  const meta = document.createElement("span");
+                  meta.className = "tb-eztb-row-meta";
+                  meta.textContent = `Lv.${result.level}`;
+                  meta.title = `这个等级是从他${result.via === "reply" ? "回复过的帖子" : "在本吧的帖子"}里读到的`;
+                  button.replaceWith(meta);
+                  return;
+                }
+                button.textContent = "查不到";
+                button.title = result.reason ?? "没查到";
+                button.disabled = false;
+              } catch (error) {
+                button.textContent = "查询失败";
+                button.title = errorMessage(error);
+                button.disabled = false;
+              }
+            })();
+          });
+        }
       } catch (error) {
         body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
       }
@@ -29996,6 +30706,13 @@ ${endStackCall}`;
   flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.4;
   color:#8a8f99 !important;text-align:right;white-space:nowrap;
 }
+/* 「关注的吧」里"点了才查等级"的小按钮 */
+.tb-eztb-levelbtn{
+  padding:1px 8px;border:1px solid #bcd8ff;border-radius:6px;cursor:pointer;
+  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+}
+.tb-eztb-levelbtn:hover{background:#e8f3ff !important;}
+.tb-eztb-levelbtn[disabled]{opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;}
 /* 发帖页签的类型标签：主题 / 回复 / 楼中楼 */
 .tb-eztb-tag{
   display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;

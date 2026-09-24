@@ -5,6 +5,7 @@ import { invalidateClient } from "../core/sdk.ts";
 import { clearProfileCache } from "../core/cached.ts";
 import { requestQueue } from "../core/queue.ts";
 import { EXAMPLE_RULES, RULE_FORMAT_HINT } from "../core/composition.ts";
+import { clearForumLevelCache } from "../core/forumLevel.ts";
 import { escapeHtml } from "../core/util.ts";
 import { openDialog } from "../ui/modal.ts";
 import { clearCompositionCache, rescanPage } from "./compositionScan.ts";
@@ -127,6 +128,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	parts.push(`<button data-act="help">打开辅助获取网址</button>`);
 	parts.push(`<button data-act="clear">清空资料缓存</button>`);
 	parts.push(`<button data-act="clear-composition">清空成分缓存</button>`);
+	parts.push(`<button data-act="clear-forum-level">清空吧内等级缓存</button>`);
 	parts.push(`<button data-act="save" class="primary">保存</button>`);
 	parts.push(`</div>`);
 	parts.push(`</div>`);
@@ -194,6 +196,16 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 			clearCompositionCache();
 			const button = dialog.body.querySelector<HTMLButtonElement>(
 				'[data-act="clear-composition"]',
+			);
+			if (button) button.textContent = "已清空";
+		});
+
+	dialog.body
+		.querySelector('[data-act="clear-forum-level"]')
+		?.addEventListener("click", () => {
+			clearForumLevelCache();
+			const button = dialog.body.querySelector<HTMLButtonElement>(
+				'[data-act="clear-forum-level"]',
 			);
 			if (button) button.textContent = "已清空";
 		});

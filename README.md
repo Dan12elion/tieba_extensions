@@ -44,6 +44,11 @@
 > 脚本只能从资料接口恢复出**吧名**（没有等级）。如果对方连用户名都没设置
 > （页面上显示为「贴吧用户_xxxx」这类系统昵称），那他的吧内等级**一个都拿不到**——
 > 面板里会直接写明是哪种情况，这不是脚本算错了。
+>
+> **补救办法：点「查等级」。** 没有等级的吧，右边会有一个小按钮；点它才发请求，
+> 去他**在这个吧的帖子**里读等级（帖子接口的 `userList` 里带着每个人在**该吧的**等级）。
+> 读到的结果会缓存，下次打开面板直接显示；读不到会写明原因（比如他最近一页帖子里没有那个吧的帖子）。
+> 这是"点了才查"，不会在后台替你刷接口。
 
 ## 成分检测（关键词标注）
 
@@ -257,8 +262,8 @@ node scripts/verify.mjs
 | --- | --- |
 | `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；以及 Greasy Fork 的发布要求（39 项） |
 | `node scripts/keyword-test.mjs` | 「成分」规则解析、匹配、排除词、证据强弱、高亮转义（29 项，纯离线） |
-| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配与"隐藏关注贴吧"的恢复（17 项） |
-| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记（含隐藏关注贴吧参与判定）与菜单命令（85 项） |
+| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配、"隐藏关注贴吧"的恢复，以及"点了才查"的等级（与面板交叉验证）（19 项） |
+| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、关注吧的「查等级」按钮与菜单命令（94 项） |
 | `node scripts/page-test.mjs` | 用真实页面快照（mhtml + 抓下来的 CSS）离线回归：按钮注入、新版头部行的排版约束（66 项） |
 
 > 快照本身不带外部 CSS（MHTML 只存内联样式）。先跑一次

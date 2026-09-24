@@ -123,6 +123,13 @@ export const STYLE_TEXT = `
   flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.4;
   color:#8a8f99 !important;text-align:right;white-space:nowrap;
 }
+/* 「关注的吧」里"点了才查等级"的小按钮 */
+.tb-eztb-levelbtn{
+  padding:1px 8px;border:1px solid #bcd8ff;border-radius:6px;cursor:pointer;
+  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+}
+.tb-eztb-levelbtn:hover{background:#e8f3ff !important;}
+.tb-eztb-levelbtn[disabled]{opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;}
 /* 发帖页签的类型标签：主题 / 回复 / 楼中楼 */
 .tb-eztb-tag{
   display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;
