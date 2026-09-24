@@ -251,6 +251,18 @@ https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-ez
 - 带 BDUSS 的鉴权接口（关注吧 / 粉丝 / 收藏吧 / 发帖）
 - 真实贴吧页面上的按钮注入与自愈
 
+## 开发说明与致谢
+
+本仓库的代码、测试与文档由作者 **Dan12elion** 与 AI 助手协作完成：
+
+| | |
+| --- | --- |
+| 模型 | DeepSeek |
+| 工具 | Codex 桌面版（在本机执行构建与测试） |
+
+AI 在这里是协作工具而不是作者：每一步改动都由作者确认后才提交，
+[LICENSE](LICENSE) 里的版权人也只写作者本人；AI 生成的内容不单独主张版权。
+
 ## 合规提醒
 
 - BDUSS 等同于账号登录凭据，请勿分享或粘贴到不可信的网站。
