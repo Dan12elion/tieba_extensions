@@ -28,7 +28,7 @@ function createButton(ref: UserRef): HTMLButtonElement {
 	const button = document.createElement("button");
 	button.type = "button";
 	button.className = BUTTON_CLASS;
-	button.textContent = "eztb";
+	button.textContent = "查询";
 	button.title = "查看该用户的资料 / 关注吧 / 粉丝 / 收藏吧 / 发帖";
 	buttonRefs.set(button, ref);
 	button.addEventListener("mousedown", (event) => {

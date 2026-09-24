@@ -283,7 +283,7 @@ const PAGE = `<!doctype html>
       finish();
       return;
     }
-    add('标记紧跟在 eztb 按钮之后', (function () {
+    add('标记紧跟在「查询」按钮之后', (function () {
       var prev = badge.closest('.tb-eztb-badges').previousElementSibling;
       return !!prev && prev.classList.contains('tb-eztb-btn');
     })(), '');

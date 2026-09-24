@@ -208,7 +208,7 @@ function report() {
       var rowRect = headRow.getBoundingClientRect();
       var btnRect = rowBtn.getBoundingClientRect();
       var clRect = cluster.getBoundingClientRect();
-      add('新版：eztb 按钮待在头部行的高度内', 
+      add('新版：「查询」按钮待在头部行的高度内', 
           btnRect.top >= rowRect.top - 1 && btnRect.bottom <= rowRect.bottom + 1,
           '行=[' + rowRect.top.toFixed(1) + ',' + rowRect.bottom.toFixed(1) + '] 按钮=[' + btnRect.top.toFixed(1) + ',' + btnRect.bottom.toFixed(1) + ']');
       add('新版：成分标记待在头部行的高度内（不会压住下面的正文）',
