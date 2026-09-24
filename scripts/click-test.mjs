@@ -308,6 +308,8 @@ const PAGE = `<!doctype html>
       add('成分页签里列出了命中的规则名', /测试名单/.test(text), text.slice(0, 60));
       add('成分页签里说明了原因', /在名单里/.test(text), text.slice(0, 120));
       add('成分页签里没有"可能是误判"的弱证据提示', !/误判/.test(text), '');
+      // 这一段的断言要么直接跑，要么等「关注的吧」页签查完后跑（顺序不影响结论）
+      var restOfBadgePhase = function () {
       add('隐藏了的关注贴吧也能参与判定（规则写的是关注吧关键词）',
           /关注了「${HIDDEN_FORUM_KEYWORD}」/.test(text), text.slice(0, 120));
       add('成分页签说明了有多少吧来自隐藏关注贴吧的恢复',
@@ -342,6 +344,30 @@ const PAGE = `<!doctype html>
         add('运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
         finish();
       }, 60);
+      };
+
+      // 「关注的吧」页签：测试用户隐藏了关注贴吧，正好覆盖"恢复出来的列表 + 为什么没等级"
+      var forumsTab = document.querySelector('.tb-eztb-tab[data-tab="forums"]');
+      add('存在「关注的吧」页签', !!forumsTab, '');
+      if (!forumsTab) {
+        restOfBadgePhase();
+        return;
+      }
+      forumsTab.click();
+      until(function () {
+        var pane = document.querySelector('.tb-eztb-pane[data-pane="forums"]');
+        return !!pane && pane.querySelectorAll('.tb-eztb-row').length > 0;
+      }, function (ok) {
+        var forumsPane = document.querySelector('.tb-eztb-pane[data-pane="forums"]');
+        var forumsText = String(forumsPane && forumsPane.textContent);
+        add('「关注的吧」页签列出了恢复出来的吧', ok,
+            '共 ' + (forumsPane ? forumsPane.querySelectorAll('.tb-eztb-row').length : 0) + ' 个');
+        add('「关注的吧」页签说明了这是恢复出来的列表',
+            /没有完整公开/.test(forumsText), forumsText.slice(0, 80));
+        add('「关注的吧」页签说明了等级为什么缺失',
+            /没有设置用户名|只给了吧名/.test(forumsText), forumsText.slice(0, 140));
+        restOfBadgePhase();
+      }, 100);
     }, 400);
   }
 
