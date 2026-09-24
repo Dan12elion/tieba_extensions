@@ -1,7 +1,9 @@
 # eztb-userscript 项目交接文档
 
 > 用途：在新对话中继续这个项目时，先读这份文档即可恢复全部上下文。
-> 最后更新：2026-09-23
+> 最后更新：2026-09-24
+> 当前版本：**1.4.0**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
+> （装在油猴里的那条对应 `dist/tieba-eztb-toolbox.user.js`）
 
 ---
 
@@ -49,7 +51,8 @@ fork 出去的人要用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 改成自己的。
 | 本仓库 | **本工程**（独立目录，不在上游仓库里） |
 | 上游 eztb 仓库（默认同级 `../eztb`） | monorepo：`apps/web`、`apps/api`、`packages/sdk`，构建与测试从它借依赖 |
 | 快照目录（默认同级 `../test0`） | 含 **真实页面快照（.mhtml）** 与旧脚本；page-test 从这里取样 |
-| 用户另存的那份"旧版页面无按钮"快照 | 曾经放在桌面，现在已不在（测试会跳过这一份；可用 `EZTB_SAMPLE_DESKTOP` 指回去） |
+| 本仓库的 `dist/.samples/` | **另一个快照投放点**（被 .gitignore 忽略）：page-test 会同时在这两处找快照。用户后来把"旧版页面无按钮"那份放到了这里 |
+| 文件位置 | 所有本机路径都改成"同级目录 + 环境变量覆盖"，仓库里不再出现 `E:\Codexpj\…` / 用户名；快照与 CSS 缓存不进仓库 |
 
 ### 本工程结构
 
@@ -59,6 +62,10 @@ eztb-userscript/
 ├─ README.md                    # 用户向文档（功能、构建、踩坑说明）
 ├─ PLAN.md                      # 最初的改造/验证清单
 ├─ HANDOFF.md                   # 本文件
+├─ LICENSE                      # MIT（只覆盖本工程自己的代码）
+├─ THIRD-PARTY.md               # 内嵌的第三方代码与授权状态（含 SDK 无 LICENSE 的提醒）
+├─ .gitattributes               # 统一 LF（产物会被直接安装/上传，换行必须稳定）
+├─ .gitignore                   # 忽略 node_modules、dist/.verify、dist/.samples
 ├─ scripts/
 │  ├─ shims-plugin.mjs          # Node→浏览器 的解析替换规则（打包与测试共用）
 │  ├─ verify.mjs                # 签名逐字符比对 + 产物检查
@@ -80,6 +87,7 @@ eztb-userscript/
 │  │  ├─ composition.ts         # ★ 成分规则解析 / 匹配 / 关键词高亮（纯逻辑）
 │  │  ├─ compositionDetect.ts   # ★ 成分取数编排（按需取关注吧 / 主题帖 / 回复）
 │  │  ├─ compositionCache.ts    # ★ 成分结果缓存（带规则指纹）
+│  │  ├─ forumLevel.ts          # ★ "点了才查"的吧内等级（从他在该吧的帖子里读 + 缓存）
 │  │  ├─ queue.ts               # 串行限速队列
 │  │  ├─ cached.ts              # 用户资料缓存（7 天）
 │  │  ├─ gmhttp.ts              # GM_xmlhttpRequest 的 Promise 封装
@@ -103,7 +111,9 @@ eztb-userscript/
 │     └─ diagnose.ts            # 页面诊断报告
 └─ dist/
    ├─ tieba-eztb-toolbox.user.js      # 产物：未压缩可读版（约 1.0 MB / 2.9 万行）
-   └─ tieba-eztb-toolbox.min.user.js  # 只有 `node build.mjs --minify` 时才生成
+   ├─ tieba-eztb-toolbox.min.user.js  # 只有 `node build.mjs --minify` 时才生成
+   ├─ .verify/                        # 测试中间产物（被 .gitignore 忽略）
+   └─ .samples/                       # 随手放进来的页面快照（被 .gitignore 忽略）
 ```
 
 ---
@@ -246,6 +256,8 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 | 13 | 成分标记的命中测试失败，但元素明明在 | 上一步打开的面板遮罩是 `z-index:2147483647` 的全屏 fixed 层，`elementFromPoint` 只能拿到遮罩 | 断言前先关掉面板；写页面级命中测试时先确认没有遮罩 |
 | 14 | 新版页面上成分标记"轻微"压住下面的正文 | 新版头部行高度写死 40px（`.image-text .user-info{height:40px}`，CSS 在 `pb.*.css` 里），而标记容器当时是 `flex-wrap:wrap`：命中 2~3 条规则时折成两行，实测量到溢出 12.5~13px | `.tb-eztb-badges` 改 `flex-wrap:nowrap` + `min-width:0` + `overflow:hidden`，并给携带它的 `.btn-wrapper` 加 `:has()` 收缩规则；JS 侧按 `.head-spacer` 的剩余宽度决定显示几个标记，放不下退成 `+N`、再放不下退成一个圆点 |
 | 15 | 想复现 #14，但快照里量出来"没有重叠"，差点得出"不存在这个问题"的结论 | MHTML 只保存页面**内联** `<style>`（`cid:css-…@mhtml.blink`），**外部** CSS 只剩链接；而 `.head-line{display:flex}`、`.image-text .user-info{height:40px}` 全在外部 `pb.*.css` 里 | 新增 `scripts/fetch-sample-css.mjs` 把快照引用的 CSS 抓到 `../test0/_css_cache`，page-test 用本地路由 `/css/<name>` 喂回去，快照这才变成"带样式"的页面，也才量出 #14 |
+| 16 | 在 Node 里调 SDK 的 `getPosts` 报 `Cannot read properties of undefined (reading '0')`，且一个请求都没发出去 | 签名是 `getPosts(tid, page, options)`，我按 `getPosts({tid, page, rn})` 调：`page` 变成 undefined，走进了多页分支里的 `page[0]` | 看签名再调；这类"本地就炸、且没发请求"的错优先怀疑参数形状 |
+| 17 | 想从帖子页读"某人在某吧的等级"，一开始以为拿不到 | `pb/page` 的响应里楼层 `author` 是空的，数据在同级的 `userList[]` 里（按 `authorId` 对应） | 读 `userList`，里面的 `levelId` 就是**该吧**等级（见 §4.2 第三条路） |
 
 ### 排查方法论（有效，建议沿用）
 
@@ -258,7 +270,7 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 
 ## 6. 测试设施
 
-四套测试 + 一个工具，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
+**五套测试 + 三个工具**，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
 
 ```powershell
 cd <本项目目录>
@@ -274,6 +286,9 @@ node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项�
 # 工具：把 mhtml 解码成可加载的 html（输出目录可用 EZTB_EXTRACT_OUT 指定）
 node scripts/extract-mhtml.mjs "某个.mhtml"
 
+# 工具：把一个用户在四个接口下的原始返回打出来（回答"为什么这个字段拿不到"）
+node scripts/probe-user.mjs <portrait串|数字ID> [吧名]
+
 # 探查模式：打印原始 feed 结构、is_thread 对比、loadPostPage 分组统计
 $env:EZTB_PROBE=1; node scripts/live-test.mjs
 ```
@@ -284,8 +299,8 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 |---|---|---|
 | `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 和浏览器 shim 跑一遍，逐字符比对；另外把 Greasy Fork 的硬性要求（未压缩、≤2 MB、元数据必填项、内嵌库来源）写成 V7 一组断言 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项 |
 | `keyword-test.mjs` | 打包真实的 `src/core/composition.ts`，对规则解析、匹配、排除词、证据强弱、高亮转义做断言 | 成分规则逻辑改坏（离线就能发现，不用等浏览器） |
-| `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页（`pn` 第 2 页与第 1 页不同）、用真实发帖数据跑一遍关键词匹配 |
-| `click-test.mjs` | 本地起同源服务：托管页面 + 转发请求到贴吧（绕开 CORS）+ 收集结果；用无头 Edge 打开，注入脚本+GM 桩，做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签切换、子页签独立翻页、刷新、成分标记 |
+| `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页（`pn` 第 2 页与第 1 页不同）、真实发帖数据跑关键词匹配、隐藏关注贴吧的恢复、**"点了才查"的等级与面板交叉验证** |
+| `click-test.mjs` | 本地起同源服务：托管页面 + 转发请求到贴吧（绕开 CORS）+ 收集结果；用无头 Edge 打开，注入脚本+GM 桩，做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签切换、子页签独立翻页、刷新、成分标记、关注的吧「查等级」按钮、菜单里的重新检测 |
 | `page-test.mjs` | 把用户保存的 mhtml 解码、再把快照引用的外部 CSS 用本地路由补回去，然后注入脚本在无头浏览器里跑 | 只有真实页面才暴露的问题（如#6 标记撞名）、默认不带规则时不得注入成分标记、新版头部行里按钮/标记的排版约束（#14） |
 
 ### 环境依赖
@@ -309,7 +324,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | 资料 | `getProfile`：贴吧号、用户名、昵称、等级、吧龄、发帖数、粉丝/关注数、IP 属地、会员、吧务、简介 |
 | 成分 | 关键词规则命中的结果：命中的规则、原因（在名单里 / 关注了某个吧 / 哪条帖子命中）、命中的关键词与原文片段（高亮），以及本次扫描统计（含"其中 N 个吧来自隐藏关注贴吧的恢复"） |
 | 关注的人 | `getFollow`，分页加载（每页 20） |
-| 关注的吧 | `getLikeForum`（带 Lv.N 与等级称号），空则回退 `getHiddenLikeForum`（**等级取自 grade 的键**） |
+| 关注的吧 | `getLikeForum`（带 Lv.N 与等级称号），空则回退 `getHiddenLikeForum`（**等级取自 grade 的键**）；拿不到等级的行带「查等级」按钮（点了才查，见 §4.2） |
 | 粉丝 | `getFans` |
 | 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼** |
 
@@ -333,18 +348,58 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 ## 8. 需要用户配合的事项
 
 1. **每次改完必须重新安装 userscript**（油猴里粘贴新内容覆盖）。
+   注意 1.3.1 起脚本**改过名**（去掉「（本地直连版）」）：`@name` 变了之后油猴会把新版当成另一个脚本，
+   要先把旧条目删掉再装（设置存在脚本存储里，换条目会一起清掉，需要重新粘 BDUSS 与关键词规则）。
 2. **必须卸载旧脚本 `tieba-eztb-follow.user.js`**——它的按钮已失效（href 被剥掉），
    而且会与本脚本抢 DOM 标记。本脚本检测到它时会打印一次提示。
 3. 遇到"某类页面不出按钮"，用菜单里的 **「eztb：诊断当前页面」** 复制报告，
-   或把该页面另存为 `.mhtml` 放进快照目录（默认同级的 `../test0`）。
-4. 要传 Greasy Fork 的话，先用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 换成自己的标识再构建，
-   并且**确认 tieba.js SDK 的授权**（上游没有 LICENSE 文件，见下面的§9）。
+   或把该页面另存为 `.mhtml` 放进快照目录（默认同级的 `../test0`，或本仓库的 `dist/.samples/`）。
+4. 要传 Greasy Fork 的话：元数据的标识已经指向本仓库，直接用 `dist/` 那份产物即可；
+   但仍需**确认 tieba.js SDK 的授权**（上游没有 LICENSE 文件，见 §9 与 `THIRD-PARTY.md`）。
 
 ---
 
-## 9. 未完成 / 可继续的方向
+## 9. 已完成 / 未完成
 
-**这一轮做完的**：
+> 按版本倒序。细节都在本文档前面几节，这里只记"做了什么、现在什么状态"。
+> 更完整的逐条记录看 `git log`（仓库已公开）。
+
+### 9.1 已完成
+
+**1.4.0 · 「查等级」（点了才查）** —— 隐藏关注贴吧 + 没有用户名的用户本来拿不到吧内等级，
+现在面板「关注的吧」里没等级的行带一个小按钮，点了才去他在该吧的帖子里读
+（`pb/page` 的 `userList[].levelId`），读到写缓存。交叉验证：面板有等级的用户读出来一致（7=7）；
+`click-test` 实测点「百度」读到 Lv.5。详见 §4.2。
+
+**1.3.2 · 把"为什么没等级"讲清楚** —— 面板分别说明"该用户没有用户名"与"资料里只给了吧名"两种情况；
+新增 `scripts/probe-user.mjs` 探查工具（回答"为什么这个字段拿不到"的标准做法）。
+
+**1.3.1 · 脚本改名** —— `@name` 去掉「（本地直连版）」。副作用：油猴按 `@name + @namespace` 认脚本，
+改名后本地旧条目会被当成另一个脚本，需要卸载重装。
+
+**1.3.0 · 上传 GitHub + 发布准备** —— 仓库公开在
+<https://github.com/Dan12elion/tieba_extensions>；补 `.gitignore`（忽略 `dist/.verify`、`dist/.samples`）、
+`.gitattributes`（统一 LF）、`LICENSE`（MIT，只覆盖本工程代码）、`THIRD-PARTY.md`（内嵌库清单 +
+上游 SDK 没有 LICENSE 的提醒）；README 重排（安装 / 功能 / 成分检测提到最前，构建等后置）并加上
+raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环境变量覆盖"；元数据 `@namespace` / `@author` /
+`@supportURL` 指向本仓库。
+
+**1.2.0 · 「成分」关键词检测**（这一轮的主要功能，对应 B 站成分检测器的思路）：
+  规则一行一条（`名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单`），
+  命中就贴在用户名旁，或者在面板「成分」页签里看细节。
+  关键实现点：`core/composition.ts` 是纯逻辑（离线可测）；
+  `core/identity.ts` 与 `core/userForums.ts` 是从 `userPanel.ts` 抽出来的共用模块
+  （面板和后台检测都走同一份"认人 / 取关注吧"的代码）；
+  `features/compositionScan.ts` 的 `checkUser` 是**唯一**的检测入口——
+  页面标记、面板结论、缓存结果都是它的产物。
+  为了不变成刷接口的工具：规则为空时零请求、每页默认最多 20 人、
+  同一用户走缓存（默认 3 天，规则指纹变了自动失效）、所有请求仍走串行限速队列。
+  反向验证做了三次：忽略排除词 → `keyword-test` 2 项失败；把弱证据当强证据 → 再加 1 项失败；
+  不贴徽章 → `click-test` 2 项失败。
+  过程中真踩到一个 bug 并修掉：`rescanPage()` 原本只清内存缓存，`checkUser` 会从落盘缓存里读回旧结果，
+  「重新检测本页用户」等于空操作——现在排队时带 `force`，并且 `click-test` 会断言"重新检测确实发了新请求"。
+
+**1.1.0 · 「发帖」拆子页签 + 未压缩产物 + Greasy Fork 元数据**（下面三条）：
 
 - 「发帖」页签已按用户之前的意思拆成 **主题帖 / 回复** 两个子页签，各自独立翻页
   （`src/features/userPanel.ts` 的 `renderPostsTab` / `mountPostsSubList`，
@@ -367,51 +422,22 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
   另外产物末尾加了 **NOTICE**：内嵌库的来源、名称、版本（规则要求"内嵌库必须写明来源"）。
   这些要求本身也钉进了 `verify.mjs` 的 V7 组（14 项）。
 
-- **加了「成分」关键词检测**（这一轮的主要功能），对应 B 站成分检测器的思路：
-  规则一行一条（`名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单`），
-  命中就贴在用户名旁，或者在面板「成分」页签里看细节。
-  关键实现点：`core/composition.ts` 是纯逻辑（离线可测）；
-  `core/identity.ts` 与 `core/userForums.ts` 是从 `userPanel.ts` 抽出来的共用模块
-  （面板和后台检测都走同一份"认人 / 取关注吧"的代码）；
-  `features/compositionScan.ts` 的 `checkUser` 是**唯一**的检测入口——
-  页面标记、面板结论、缓存结果都是它的产物。
-  为了不变成刷接口的工具：规则为空时零请求、每页默认最多 20 人、
-  同一用户走缓存（默认 3 天，规则指纹变了自动失效）、所有请求仍走串行限速队列。
-  反向验证做了三次：忽略排除词 → `keyword-test` 2 项失败；把弱证据当强证据 → 再加 1 项失败；
-  不贴徽章 → `click-test` 2 项失败。
-  过程中真踩到一个 bug 并修掉：`rescanPage()` 原本只清内存缓存，`checkUser` 会从落盘缓存里读回旧结果，
-  「重新检测本页用户」等于空操作——现在排队时带 `force`，并且 `click-test` 会断言"重新检测确实发了新请求"。
+**两次用户反馈的排查细节**（技术结论见 §4.2 与 §5 的 #14/#15，这里只留结论）：
 
-**这一轮（用户反馈的两条）**：
+1. **「隐藏关注贴吧没被计入成分判定」**：根因是恢复通道只在主接口**返回空**时才走，
+   接口一旦**抛错**（隐藏列表、接口抽风）就整块跳过，关注的吧证据直接丢失。
+   现在 `loadUserForums(id, profileForums)` 把 profile 自带的「关注贴吧」字段
+   （零额外请求）与主接口结果合并，主接口空或失败时才走 `getHiddenLikeForum`；
+   检测统计多一项 `forumsRecovered`，面板会写明"其中 N 个来自隐藏关注贴吧的恢复"。
+   验证：`live-test` 两条断言 + `click-test` 用「关注吧关键词 = 小红书」跑通端到端。
 
-1. **隐藏关注贴吧没被计入成分判定**。原实现只在 `getLikeForum` 返回**空**时才走恢复通道，
-   而且接口一旦**抛错**（隐藏列表、接口抽风）就整块跳过，关注的吧证据直接丢失。
-   现在 `loadUserForums(id, profileForums)` 三管齐下：profile 自带的「关注贴吧」字段
-   （`identity.profile.likeForum`，**零额外请求**）与主接口结果合并；主接口空或失败时再走
-   `getHiddenLikeForum`（profile + panel 等级分组）。检测统计里多了一项 `forumsRecovered`，
-   面板会写明"其中 N 个来自隐藏关注贴吧的恢复"。
-   验证：`live-test` 断言"隐藏时也能恢复出吧名"、"profile 里的关注吧会并入结果且不重复"；
-   `click-test` 直接用「关注吧关键词 = 小红书」跑通端到端（测试用户恰好隐藏了关注贴吧）。
+2. **「新版页面上成分标记压住回帖正文」**：新版头部行固定 40px 高，而标记容器当时允许折行，
+   命中 2~3 条时折成两三行，实测溢出 12.5~13px。现在强制单行、
+   按行内剩余空隙决定显示几个（`+N` → 圆点兜底），并给 `.btn-wrapper` 加了 `:has()` 收缩规则。
+   反向验证：`nowrap` 改回 `wrap` → `page-test` 两条断言失败。
+   顺带发现 MHTML 不带外部 CSS，"快照里的布局"之前是假象（§5 #15）。
 
-2. **新版页面上成分标记"轻微"压住回帖正文**（用户反馈）。根因是新版头部行固定 40px 高，
-   而标记容器是 `flex-wrap:wrap`：命中 2~3 条时折行，实测溢出 12.5~13px。
-   现在强制单行 + 按行内剩余空隙决定显示几个标记（`+N` / 圆点兜底），
-   并给 `.btn-wrapper` 加了 `:has()` 收缩规则。
-   反向验证：把 `nowrap` 改回 `wrap` → `page-test` 两条断言失败（越界 12.5 / 25px）。
-   顺带发现并修好了测试设施的一个盲区：MHTML 不带外部 CSS，之前"快照里的布局"是假象
-   （详见 §5 的 #15），现在 `fetch-sample-css.mjs` + page-test 的 `/css/` 路由把样式补了回去。
-
-3. **脚本改名**：`@name` 从「贴吧 eztb 工具箱（本地直连版）」改成「贴吧 eztb 工具箱」（版本 1.3.1）。
-   `@name` + `@namespace` 一起构成油猴认脚本的唯一标识，所以**改名的副作用是本地的旧条目会被当成另一个脚本**，
-   需要卸载旧的、再装新的；仓库里 `dist/` 那份产物已经一起重建。
-
-4. **加了「查等级」（点了才查）**，版本 1.4.0：隐藏关注贴吧 + 没有用户名的用户拿不到吧内等级时，
-   可以去他**在这个吧的帖子**里读（`pb/page` 的 `userList[].levelId` 就是该吧等级）。
-   实现在 `src/core/forumLevel.ts`，面板「关注的吧」里有等级缺失的行会带一个小按钮。
-   交叉验证：面板有等级的用户，这条路读出来一致（7 = 7）；`click-test` 里点「百度」那个按钮读到了 Lv.5。
-   反向验证没做（这条路的正确性靠 live-test 的交叉验证保证）。
-
-**可以继续的**：
+### 9.2 还没做的 / 可以继续
 
 - 子页签只能显示"已加载 N 条"——`UserPostResIdl` 不返回总数，拿不到"共 N 条"。
   若想显示总数，只能靠一直翻到底（不值得）。
@@ -421,29 +447,38 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
   但标记不会出现；可以考虑给这种情况一个"证据不足"的独立标记。
 - V4 / V6 那两项人工验证（带真实 BDUSS 的鉴权接口、真实贴吧页面上的日常使用）
   仍然没做，需要用户在自己的浏览器里装一次。
-- **上传 Greasy Fork 前需要用户拍板**：上游 eztb / `packages/sdk` 没有 LICENSE，
-  规则里"必须遵守他人的版权"这条得先确认有权分发；另外约定好的 `@namespace`
-  一旦发布就不能再改（改了等于换了个脚本）。
+- **上传 Greasy Fork（还没做）**：产物已经满足它的硬性要求（未压缩、1.0 MB、元数据齐全），
+  直接传 `dist/` 那份即可。用户已经决定把代码公开在 GitHub（`THIRD-PARTY.md` 里写明了
+  上游 SDK 没有 LICENSE 这件事）；剩下的是他自己愿不愿意往脚本站再发一份。
 
-**明确排除的范围**（不要擅自扩大）：
+### 9.3 明确排除的范围（不要擅自扩大）
 
 - 任何写操作（关注/取关/签到/回帖），不碰 `tbs`
 - 导出、吧内分析、DB 统计（这些在 `apps/api` 层）
 - 修改 `packages/sdk` 源码
 - 保留"用 eztb.org 打开"的降级入口
 
-**已知的工程约束**：
+### 9.4 已知的工程约束
 
 - 上游 `packages/sdk` 锁在 `v3` 分支；协议或结构变动后需要重新打包并复跑 `verify.mjs`
 - 本工程与上游是**两个独立目录**，没有 git submodule 关系（`EZTB_ROOT` 指过去即可）
 - 整个上游仓库（含 SDK、API）**没有 LICENSE 文件**，要对外分发前需先确认授权
+- `dist/tieba-eztb-toolbox.user.js` **是提交进仓库的**：改完代码要 `node build.mjs` 重建并一起提交，
+  否则仓库里的产物会落后于源码（README 里给了 raw 安装链接，别人装的就是这一份）
+- 快照（`../test0/*.mhtml`）与 CSS 缓存不进仓库：含真实用户帖子内容，体积也大
 
 ---
 
 ## 10. 新对话怎么接着干
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
-2. **改完必须跑四套测试**（`verify` / `live-test` / `click-test` / `page-test`）。
+2. **改完必须跑五套测试**（`verify` / `keyword-test` / `live-test` / `click-test` / `page-test`），
+   当前基线：39 / 29 / 19 / 94 / 66 项断言全绿。
 3. 涉及 DOM 或布局的改动，**加反向验证**：把修复改回去，确认断言会失败。
-4. 涉及协议或数据模型的疑问，**先用 `EZTB_PROBE=1` 打真实数据**，不要凭推测改。
-5. 每次交付都要提醒用户：**重装脚本** + **卸载旧脚本**。
+4. 涉及协议或数据模型的疑问，**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs`
+   或 `node scripts/probe-user.mjs <portrait|ID> [吧名]`，不要凭推测改。
+5. **改完代码要重新构建产物并提交**：`node build.mjs` → 跑测试 → 改 `package.json` 版本号 →
+   `git add -A && git commit && git push`（仓库已公开，`main` 直接推）。
+6. 每次交付都要提醒用户：**重装脚本**（油猴里覆盖，或者用 README 里的 raw 链接）。
+7. 交付时按"用户能感知到什么"来描述（面板多了什么按钮、标记长什么样），
+   而不是只报"改了哪个文件"。
