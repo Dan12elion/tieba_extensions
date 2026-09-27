@@ -451,81 +451,99 @@ console.log("发帖所在吧（规则第 6 列）");
 	);
 }
 
-// ── 占比饼图：纯计算，边界比图形更值得钉 ─────────────────────────────
-console.log("发帖 / 回复占比");
+// ── 占比饼图：按"发帖都发在哪些吧"统计（纯计算，边界比图形更值得钉）──
+console.log("按吧统计的占比饼图");
 {
-	const { countPosts, buildPieSlices, buildPieSvg, totalCount, mergeCounts } =
-		postStats;
+	const {
+		countPostsByForum,
+		mergeForumCounts,
+		totalForumCount,
+		buildForumSlices,
+		buildForumPieSvg,
+	} = postStats;
 
-	const counts = countPosts([
-		{ kind: "topic" },
-		{ kind: "topic" },
-		{ kind: "reply" },
-		{ kind: "sub" },
+	const counts = countPostsByForum([
+		{ forumName: "百度" },
+		{ forumName: "百度" },
+		{ forumName: "小红书" },
+		{ forumName: "" },
 	]);
 	check(
-		"按类型计数",
-		counts.topic === 2 && counts.reply === 1 && counts.sub === 1,
+		"按吧计数，空吧名不计入",
+		counts["百度"] === 2 && counts["小红书"] === 1 &&
+			Object.keys(counts).length === 2,
 		JSON.stringify(counts),
 	);
 	check(
-		"两批行可以累加（翻页时用）",
-		totalCount(
-			mergeCounts({ topic: 1, reply: 0, sub: 0 }, {
-				topic: 1,
-				reply: 2,
-				sub: 0,
-			}),
-		) === 4,
+		"两批行可以累加（两路 feed / 翻页时用）",
+		totalForumCount(
+			mergeForumCounts({ 百度: 1 }, { 百度: 1, 小红书: 2 }),
+		) === 4 &&
+			mergeForumCounts({ 百度: 1 }, { 百度: 1 })["百度"] === 2,
 	);
 
-	const slices = buildPieSlices({ topic: 3, reply: 1, sub: 0 });
+	const slices = buildForumSlices({ 百度: 3, 小红书: 1 });
 	check(
-		"占比按总数算，保留一位小数",
-		slices[0].percentText === "75.0%" && slices[1].percentText === "25.0%",
-		slices.map((item) => item.percentText).join(" / "),
+		"扇段按条数从多到少，百分比保留一位小数",
+		slices[0].label === "百度" && slices[0].percentText === "75.0%" &&
+			slices[1].percentText === "25.0%",
+		slices.map((item) => `${item.label}=${item.percentText}`).join(" / "),
 	);
 	check(
 		"占比之和为 1",
 		Math.abs(slices.reduce((sum, item) => sum + item.fraction, 0) - 1) < 1e-9,
 	);
 
-	const empty = buildPieSlices({ topic: 0, reply: 0, sub: 0 });
 	check(
-		"一条数据都没有时占比是 0（不会算出 NaN）",
-		empty.every((item) => item.fraction === 0 && item.percentText === "0.0%"),
-		empty.map((item) => item.percentText).join(" / "),
+		"吧太多时只画前几个，剩下的合成「其它 N 个吧」",
+		(function () {
+			const many = {};
+			for (let i = 1; i <= 9; i += 1) many[`吧${i}`] = 10 - i;
+			const list = buildForumSlices(many, 5);
+			const last = list[list.length - 1];
+			return list.length === 6 && last.forum === null &&
+				last.label === "其它 4 个吧" && last.count === 1 + 2 + 3 + 4;
+		})(),
+		JSON.stringify(buildForumSlices(
+			Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`吧${i + 1}`, 9 - i])),
+			5,
+		).map((item) => item.label)),
 	);
+
 	check(
-		"没有数据时画的是一句说明，而不是空饼",
-		buildPieSvg({ topic: 0, reply: 0, sub: 0 }).includes("还没有加载到发帖记录"),
+		"一个吧都没有时占比是 0（不会算出 NaN）",
+		buildForumSlices({}).length === 0 &&
+			buildForumPieSvg({}).includes("还没有加载到发帖记录"),
 	);
 
 	const circumference = 2 * Math.PI * 46;
-	const onlyTopic = buildPieSvg({ topic: 60, reply: 0, sub: 0 });
-	const onlyTopicArcs = onlyTopic.match(/class="tb-eztb-pie-slice"/g) ?? [];
+	const oneForum = buildForumPieSvg({ 百度: 60 });
 	check(
-		"只有一个分类时只画一段（不会因为起终点重合而崩）",
-		onlyTopicArcs.length === 1 && !onlyTopic.includes("NaN"),
-		`${onlyTopicArcs.length} 段`,
+		"只有一个吧时只画一段（不会因为起终点重合而崩）",
+		(oneForum.match(/class="tb-eztb-pie-slice"/g) ?? []).length === 1 &&
+			!oneForum.includes("NaN"),
 	);
 
-	const threeKinds = buildPieSvg({ topic: 60, reply: 30, sub: 10 });
+	const manyForums = buildForumPieSvg({ 百度: 60, 小红书: 30, 贴吧: 10 });
 	const dash = Array.from(
-		threeKinds.matchAll(/stroke-dasharray="([\d.]+) ([\d.]+)"/g),
+		manyForums.matchAll(/stroke-dasharray="([\d.]+) ([\d.]+)"/g),
 	);
 	const lens = dash.map((item) => Number(item[1]));
 	check(
-		"三段弧长加起来等于整圈（不重不漏）",
+		"各段弧长加起来等于整圈（不重不漏）",
 		dash.length === 3 &&
 			Math.abs(lens.reduce((sum, value) => sum + value, 0) - circumference) < 1,
 		`${dash.length} 段 / 合计 ${lens.reduce((sum, value) => sum + value, 0).toFixed(2)} / 整圈 ${circumference.toFixed(2)}`,
 	);
 	check(
-		"图例写了条数与百分比",
-		threeKinds.includes("楼中楼") &&
-			threeKinds.includes("10.0%") &&
-			!threeKinds.includes("NaN"),
+		"图例写了吧名、条数与百分比",
+		manyForums.includes("小红书") && manyForums.includes("10.0%") &&
+			manyForums.includes("已加载 100 条 · 3 个吧") &&
+			!manyForums.includes("NaN"),
+	);
+	check(
+		"吧名会被转义（吧名里可能带引号/尖括号）",
+		buildForumPieSvg({ '"><img src=x>吧': 1 }).includes("&quot;&gt;&lt;img"),
 	);
 }
 

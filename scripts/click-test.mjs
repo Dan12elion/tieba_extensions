@@ -344,8 +344,20 @@ const PAGE = `<!doctype html>
     }, 200);
   }
 
-  /** 占比饼图：三段的百分比必须合成 100%，图例要有条数 */
+  /** 占比饼图：现在是「发帖都发在哪些吧」，各段百分比必须合成 100%，图例要有吧名与条数 */
   function extrasPie() {
+    // 两路 feed 都算进饼图才叫"统计完整"：只在主题帖那一页（19 条）时会明显偏少。
+    // 串行限速下回复会晚一点到，所以这里等它到齐（超时就按现状断言，让断言红出来）。
+    until(function () {
+      var total = String((inPanel('.tb-eztb-pie-total') || {}).textContent || '');
+      var matched = total.match(/已加载 (\d+) 条/);
+      return !!matched && Number(matched[1]) > 19;
+    }, function () {
+    extrasPieAssert();
+    }, 150);
+  }
+
+  function extrasPieAssert() {
     var pie = inPanel('.tb-eztb-pane[data-pane="posts"] .tb-eztb-piestat .tb-eztb-pie');
     add('「发帖」页签顶部画出了占比饼图', !!pie, pie ? String(pie.textContent).slice(0, 70) : '没找到');
     var panePosts = postsPane();
@@ -356,11 +368,25 @@ const PAGE = `<!doctype html>
     );
     var counts = panePosts ? panePosts.querySelectorAll('.tb-eztb-pie-count') : [];
     var sum = percents.reduce(function (a, b) { return a + b; }, 0);
-    add('饼图图例有 三段占比与条数', percents.length === 3 && counts.length === 3,
+    var labels = Array.prototype.map.call(
+      panePosts ? panePosts.querySelectorAll('.tb-eztb-pie-label') : [],
+      function (el) { return el.textContent; }
+    );
+    add('饼图图例有 吧名 + 占比 + 条数', percents.length > 0 &&
+        percents.length === counts.length && labels.length === percents.length,
         percents.length + ' 段 / ' + counts.length + ' 个条数');
-    add('三段占比合计 100%', Math.abs(sum - 100) < 0.5,
+    add('各段占比合计 100%', Math.abs(sum - 100) < 0.5,
         percents.map(function (v) { return v.toFixed(1); }).join('+') + '=' + sum.toFixed(1));
-    add('画出来的扇段数与有数据的分类数一致', arcs.length > 0, arcs.length + ' 段');
+    add('图例写的是吧名（不再是「主题帖/回复/楼中楼」）',
+        labels.length > 0 && labels.every(function (name) {
+          return name !== '主题帖' && name !== '回复' && name !== '楼中楼';
+        }), labels.join(' / '));
+    add('画出来的扇段数与图例条数一致', arcs.length > 0 &&
+        arcs.length === percents.length, arcs.length + ' 段');
+    // 两路 feed 都算进图里：这位用户主题帖 19 条、回复 6 条，合计应当远大于 19
+    var totalText = String((panePosts ? panePosts.querySelector('.tb-eztb-pie-total') : {}).textContent || '');
+    add('主题帖与回复都算进了饼图（两路 feed 一起加载）', /已加载 (2[0-9]|[3-9][0-9]) 条/.test(totalText),
+        totalText);
     add('饼图没有画出 NaN', String(pie && pie.textContent).indexOf('NaN') < 0, '');
   }
 
@@ -751,9 +777,12 @@ const PAGE = `<!doctype html>
         add('主题帖子页签里只有主题帖',
             Object.keys(topicKinds).length === 1 && (topicKinds['主题'] || 0) > 0,
             JSON.stringify(topicKinds));
-        add('没点过的「回复」子页签不会预先取数',
-            rowsIn(subPane('reply')).length === 0 && !moreIn(subPane('reply')),
-            '回复区行数 ' + rowsIn(subPane('reply')).length);
+          // 2026-09-27 起：进「发帖」页签就把两路 feed 的第一页都取回来（饼图要按吧统计，
+          // 只算主题帖会漏一半）。两路走的是同一条串行限速队列，回复通常会比主题帖晚一点到，
+          // 所以这里只断言"没显示出来"，"两路都统计进饼图"留到阶段 8 等数据到齐再判。
+          add('预先加载的「回复」子页签没有显示出来',
+              !subPane('reply').classList.contains('active') &&
+                subPane('reply').getBoundingClientRect().height === 0, '');
         checkLayout(subPane('topic'), '主题帖');
 
         // ── 阶段 2b：切到「回复」子页签 ──

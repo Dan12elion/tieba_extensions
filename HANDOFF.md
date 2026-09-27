@@ -2,7 +2,7 @@
 
 > 用途：在新对话中继续这个项目时，先读这份文档即可恢复全部上下文。
 > 最后更新：2026-09-27
-> 当前版本：**1.5.1**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
+> 当前版本：**1.6.0**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
 > （装在油猴里的那条对应 `dist/tieba-eztb-toolbox.user.js`）
 
 ---
@@ -311,6 +311,8 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 | 21 | 新加的「检测签到号」按钮复用 `.tb-eztb-levelbtn` 类，导致老断言点错按钮 | 测试按类名找「查等级」按钮（`querySelectorAll('.tb-eztb-levelbtn')[0]`），我的按钮排在列表前面被当成目标 | 每种小按钮用**自己的类名**（`tb-eztb-levelbtn` / `tb-eztb-floorbtn` / `tb-eztb-minibtn`），样式用逗号选择器共享 |
 | 22 | 「查楼层」对同一帖子里的多行回复都显示同一个楼层 | 行上的 pid 取了记录级 `PostInfoList.postId`，而**一条记录可以带多条正文**（同帖连发几楼），记录级 pid 是共用的 | 取正文级 `UserPost.cid`（`postId: String(post.cid \|\| post.postId)`）。实测抽样 187 条记录里 32 条是多正文（17.1%）；live-test 加了"同帖两行必须查到各自楼层"的断言 |
 | 23 | 「检测签到号」实际发了 11 个请求，代码/文档都以为只有 2 个 | 回复 feed **不返回吧名**（只有 forumId），要按吧反查 `getForumName`；而 SDK 自己的 names 缓存是**每次 `Effect.runPromise` 都重建**的（模块级存的是 Effect 而不是解析后的 Cache），所以每取一页回复都要重发一遍 | 在 `core/userPost.ts` 里加跨调用的吧名缓存（`forumNames`，上限 500）。实测第二条同页回复的请求数从 11 降到 2；live-test 有断言"第二次不再重复反查"。**注意**：全新会话里第一次仍是 2 + 该页不同吧数 |
+| 24 | 用户报「查询按钮有时部分遮挡楼层正文」 | 回复行的正文块 `.comment-content` 会**往上顶**到头部行（`.head-line.user-info`，写死 40px）的下半部分：实测行 247\~287、正文从 y=271 开始；而按钮在行里垂直居中、占 255\~279，正好压住正文第一行。判据不能看包围盒相交（那会把同行的空槽也算上），要看"**把按钮藏起来再取同一个点**"命中的是谁——实测 23 行里 20 行压着 `.pb-rich-text` | CSS 里对这类行（`.head-line:has(+ .comment-content)`）把按钮/标记**贴到行顶**（`align-self:flex-start`）。修复后逐行复查 0/23；这条断言进了 page-test 常规断言（不只在探针里）。注意脚本自己的 CSS 写了 `visibility:visible !important`，做这类探针要用 `style.setProperty(..., 'important')` 才藏得掉 |
+| 25 | page-test 加载「网页，完整」快照时**所有外部 CSS 404**，页面又变回无样式 | 我把 HTML 里的 `<标题>_files/` 改写成 `/files/`，`./<标题>_files/x.css` 就变成 `.//files/x.css`——浏览器按"协议相对 URL"解析，全 404。**和 §5 #15 是同一个坑的另一种形态**：布局断言其实测在裸 DOM 上，`页面看起来没问题` 的结论完全不可信 | 不再改写 HTML，按**原目录名**提供文件（`/<标题>_files/…`）。另外剥掉快照里的页面脚本（`xxx.js.下载` 离线取不到，残留内联脚本会抛 `_typeof is not defined`，把"无 JS 错误"断言染红）。修好后 pb.css 1765 条规则真的生效，异常行数立刻从 1 涨到 20——才看见 #24 |
 | 24 | 「复制的吧名缓存第二次不再请求」这条断言一直通过，其实**什么都没测** | 同一个进程里前面已经取过那个用户的回复页，`forumNames` 是热的，量出来「第一次 +0、第二次 +0」——两边相等，断言恒真 | 打断言前先 `clearForumNameCache()`；并且要断言「第一次 > 0 **且** 第二次 == 0」，只写「两次相等」是不够的 |
 
 ### 排查方法论（有效，建议沿用）
@@ -337,11 +339,11 @@ cd <本项目目录>
 node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 要求）
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
-node scripts/keyword-test.mjs # 规则解析/匹配 + 占比统计 + 签到判定 + 发帖行副标题（纯离线，59 项断言）
+node scripts/keyword-test.mjs # 规则解析/匹配 + 按吧占比 + 签到判定 + 发帖行副标题（纯离线，60 项断言）
 node scripts/live-test.mjs    # 真实接口链路（31 项断言）
-node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（128 项断言）
-node scripts/fetch-sample-css.mjs  # 首次/换快照后跑一次：抓快照引用的外部 CSS
-node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项断言）
+node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（122 项断言）
+node scripts/fetch-sample-css.mjs  # 换 MHTML 快照后跑一次：抓快照引用的外部 CSS
+node scripts/page-test.mjs    # 真实页面快照回归（1 份「网页，完整」快照 ×2 次运行，34 项断言）
 
 # 工具：把 mhtml 解码成可加载的 html（输出目录可用 EZTB_EXTRACT_OUT 指定）
 node scripts/extract-mhtml.mjs "某个.mhtml"
@@ -362,7 +364,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | `keyword-test.mjs` | 打包真实的 `src/core/composition.ts`、`postStats.ts`、`activityRule.ts`（三个纯逻辑模块），对规则解析、匹配、排除词、证据强弱、高亮转义、占比/饼图几何、签到号判定做断言 | 成分规则、饼图算法、签到判定改坏（离线就能发现，不用等浏览器） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页（`pn` 第 2 页与第 1 页不同）、真实发帖数据跑关键词匹配、隐藏关注贴吧的恢复、**"点了才查"的等级与面板交叉验证** |
 | `click-test.mjs` | 本地起同源服务：托管页面 + 转发请求到贴吧（绕开 CORS）+ 收集结果；用无头 Edge 打开，注入脚本+GM 桩，做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签切换、子页签独立翻页、刷新、成分标记、关注的吧「查等级」按钮、菜单里的重新检测 |
-| `page-test.mjs` | 把用户保存的 mhtml 解码、再把快照引用的外部 CSS 用本地路由补回去，然后注入脚本在无头浏览器里跑 | 只有真实页面才暴露的问题（如#6 标记撞名）、默认不带规则时不得注入成分标记、新版头部行里按钮/标记的排版约束（#14） |
+| `page-test.mjs` | 支持两种快照：MHTML（解码后把外部 CSS 从 `_css_cache` 补回来）与「网页，完整」（`<标题>.html` + `<标题>_files/`，**自带 CSS**，按原目录名提供资源、页面脚本剥掉）。同一份快照会跑两次：正常宽度 + 窄容器 420px | 只有真实页面才暴露的问题（如#6 标记撞名）、默认不带规则时不得注入成分标记、新版头部行里按钮/标记的排版约束（#14）、**按钮是否压住正文**（#24） |
 
 ### 环境依赖
 
@@ -387,12 +389,13 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | 关注的人 | `getFollow`，分页加载（每页 20） |
 | 关注的吧 | `getLikeForum`（带 Lv.N 与等级称号），空则回退 `getHiddenLikeForum`（**等级取自 grade 的键**）；拿不到等级的行带「查等级」按钮（点了才查，见 §4.2） |
 | 粉丝 | `getFans` |
-| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼**，回复与楼中楼显示**回复正文**、带 **「查楼层」** 按钮（点了才查，见 §4.5）；页签顶部是**占比饼图**（`core/postStats.ts`） |
+| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼**，回复与楼中楼显示**回复正文**、带 **「查楼层」** 按钮（点了才查，见 §4.5）；页签顶部是**「发帖都发在哪些吧」的占比饼图**（`core/postStats.ts`），进页签时两路 feed 各取一页（1.6.0） |
 
 其他：
 
-- **「发帖」页签顶部的占比饼图**：按已加载的记录统计主题帖 / 回复 / 楼中楼的数量与占比，
-  翻页时跟着更新。用 SVG 的 `stroke-dasharray` 画（不用 path 弧线：只有一个分类占 100%
+- **「发帖」页签顶部的占比饼图**：按**吧**统计他的发帖都发在哪些吧（1.6.0 从"按类型"改成按吧，
+  用户要求）。前 5 个吧各自一段，剩下的合成「其它 N 个吧」；进页签时两路 feed 各取一页，
+  所以一开始就统计到回复。用 SVG 的 `stroke-dasharray` 画（不用 path 弧线：只有一个分类占 100%
   时弧线起终点重合会算出 NaN），纯字符串生成，离线可测。
 - **「关注的吧」里的「检测签到号」**：点它才取数（发帖 feed 各一页；回复里的吧名要按吧反查一次，
   见 §5 #23——首次约 11 个请求，之后命中吧名缓存只剩 2 个），按吧统计他最近在哪儿发言，
@@ -435,6 +438,17 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.6.0 · 饼图改按吧统计 + 两路 feed 一起加载 + 「查询」按钮不再压住正文**（用户 2026-09-27 的三条反馈）：
+
+| 需求 | 做法 | 验证 |
+|---|---|---|
+| 饼图从"发帖/回复占比"改成"在各个贴吧的发帖、回复次数占比" | `core/postStats.ts` 换成 `buildForumSlices` / `buildForumPieSvg`：按吧名聚合，前 5 个各一段、其余合成「其它 N 个吧」，配色按排名取（稳定可比较） | keyword-test 8 项（按吧计数、累加、排序与百分比、聚合"其它"、单吧不崩、弧长合计=整圈、图例文案、吧名转义）；click-test：图例是**吧名**而不是"主题帖/回复/楼中楼"、各段合计 100% |
+| 初次点进「发帖」只统计了主题帖，回复没算进去 | 进页签时**两路 feed 各取第一页**（原来点哪个取哪个）。串行限速下回复会晚几百毫秒到，饼图随数据到齐自动补全 | click-test：等饼图总数超过"只有主题帖"的数量再断言（实测 19 → 25 条），并断言预先加载的回复子页签**没有显示出来** |
+| 「查询」按钮有时部分遮挡楼层正文 | 见 §5 #24：这类行把按钮贴到行顶；page-test 里加了逐行"藏起来再取同一点"的常规断言 | page-test：修复前 20/23 行压着正文，修复后 0/23；窄容器（420px）那次运行也全过 |
+
+顺带把 page-test 扩成能读用户另存的「网页，完整」快照（`<标题>.html` + `<标题>_files/`，**自带外部 CSS**），
+踩到的坑记在 §5 #25——一度又变成"在无样式页面上测布局"。
 
 **1.5.1 · 楼中楼标出「回复了谁」+ 回复页吧名反查的请求数修复**（对 1.5.0 那五条需求的复审）：
 
@@ -569,7 +583,7 @@ raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试**（`verify` / `keyword-test` / `live-test` / `click-test` / `page-test`），
-当前基线（1.5.1 实测）：verify 39 / keyword-test 59 / live-test 31 / click-test 128 项全绿；
+当前基线（1.6.0 实测）：verify 39 / keyword-test 60 / live-test 31 / click-test 122 / page-test 34 项全绿；
    page-test 66 项需要快照目录（默认同级 `../test0`），本机没有快照时跳过并注明。
 3. 涉及 DOM 或布局的改动，**加反向验证**：把修复改回去，确认断言会失败。
 4. 涉及协议或数据模型的疑问，**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs`

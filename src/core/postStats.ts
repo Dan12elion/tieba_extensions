@@ -1,5 +1,5 @@
 /**
- * 「发帖 / 回复」占比统计与饼图。
+ * 「发帖都发在哪些吧」占比统计与饼图。
  *
  * 纯逻辑：只吃已经加载出来的行，不碰 DOM、不发请求，
  * 所以离线就能测（scripts/keyword-test.mjs 会把它一起打包进来断言）。
@@ -7,57 +7,34 @@
  * 饼图用 SVG 的 stroke-dasharray 画环（而不是 path 弧线）：
  * 只有一个分类占到 100% 时，弧线路径的起终点会重合、算出 NaN，
  * dasharray 写法没有这个边界问题，也不需要三角函数。
+ *
+ * 分类是**吧名**（原来按"主题帖/回复/楼中楼"分，2026-09-27 用户要求改成按吧）。
+ * 吧可能很多，所以只画前 N 个，剩下的拢成「其它 M 个吧」，否则图例会长得没边。
  */
 
+import { countPostsByForum } from "./activityRule.ts";
 import type { PostKind } from "./userPost.ts";
-import { escapeHtml } from "./util.ts";
 
-export interface PostCounts {
-	topic: number;
-	reply: number;
-	sub: number;
-}
+/** 吧名 → 条数 */
+export type ForumCounts = Record<string, number>;
 
-export const POST_KIND_ORDER: PostKind[] = ["topic", "reply", "sub"];
+export { countPostsByForum };
 
-export const POST_KIND_TEXT: Record<PostKind, string> = {
-	topic: "主题帖",
-	reply: "回复",
-	sub: "楼中楼",
-};
-
-/** 与「发帖」页签里的标签同色系，方便对照 */
-export const POST_KIND_COLOR: Record<PostKind, string> = {
-	topic: "#1677ff",
-	reply: "#8a8f99",
-	sub: "#e8a33d",
-};
-
-export function emptyCounts(): PostCounts {
-	return { topic: 0, reply: 0, sub: 0 };
-}
-
-export function countPosts(rows: Array<{ kind: PostKind }>): PostCounts {
-	const counts = emptyCounts();
-	for (const row of rows) {
-		if (row.kind === "topic") counts.topic += 1;
-		else if (row.kind === "reply") counts.reply += 1;
-		else if (row.kind === "sub") counts.sub += 1;
+export function mergeForumCounts(
+	a: ForumCounts,
+	b: ForumCounts,
+): ForumCounts {
+	const out: ForumCounts = { ...a };
+	for (const [forum, count] of Object.entries(b)) {
+		out[forum] = (out[forum] ?? 0) + count;
 	}
-	return counts;
+	return out;
 }
 
-export function mergeCounts(a: PostCounts, b: PostCounts): PostCounts {
-	return {
-		topic: a.topic + b.topic,
-		reply: a.reply + b.reply,
-		sub: a.sub + b.sub,
-	};
+export function totalForumCount(counts: ForumCounts): number {
+	return Object.values(counts).reduce((sum, value) => sum + value, 0);
 }
-
-export function totalCount(counts: PostCounts): number {
-	return counts.topic + counts.reply + counts.sub;
-}
+import { escapeHtml } from "./util.ts";
 
 /**
  * 一行发帖记录的「副标题」片段：吧名标签 / 楼中楼的回复对象 / 正文。
@@ -92,8 +69,21 @@ export function postRowSubParts(post: {
 	return parts;
 }
 
-export interface PieSlice {
-	key: PostKind;
+/** 扇段配色：按排名取色，同一个排名永远同一个颜色（不随吧名变化，方便一眼比较） */
+export const PIE_COLORS = [
+	"#1677ff",
+	"#e8a33d",
+	"#3fb950",
+	"#a371f7",
+	"#e5534b",
+	"#1f9ea8",
+];
+/** 「其它 N 个吧」用的中性色 */
+export const PIE_OTHER_COLOR = "#b6bcc6";
+
+export interface ForumSlice {
+	/** 吧名；聚合出来的那一段是 `null` */
+	forum: string | null;
 	label: string;
 	count: number;
 	color: string;
@@ -103,20 +93,46 @@ export interface PieSlice {
 	percentText: string;
 }
 
-export function buildPieSlices(counts: PostCounts): PieSlice[] {
-	const total = totalCount(counts);
-	return POST_KIND_ORDER.map((key) => {
-		const count = counts[key];
-		const fraction = total > 0 ? count / total : 0;
-		return {
-			key,
-			label: POST_KIND_TEXT[key],
+/**
+ * 把「吧名 → 条数」变成扇段。
+
+ * 只画前 `maxSlices` 个吧，剩下的合成一段「其它 N 个吧」——否则发帖多的用户
+ * 图例会拖到几十行。并列条数的吧按吧名排序，保证结果稳定（同样数据同样顺序）。
+ */
+export function buildForumSlices(
+	counts: ForumCounts,
+	maxSlices = 5,
+): ForumSlice[] {
+	const total = totalForumCount(counts);
+	if (!total) return [];
+
+	const ranked = Object.entries(counts)
+		.filter(([, count]) => count > 0)
+		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+	const head = ranked.slice(0, maxSlices);
+	const rest = ranked.slice(maxSlices);
+	const slices: ForumSlice[] = head.map(([forum, count], index) => ({
+		forum,
+		label: forum,
+		count,
+		color: PIE_COLORS[index % PIE_COLORS.length],
+		fraction: count / total,
+		percentText: `${((count / total) * 100).toFixed(1)}%`,
+	}));
+
+	if (rest.length) {
+		const count = rest.reduce((sum, [, value]) => sum + value, 0);
+		slices.push({
+			forum: null,
+			label: `其它 ${rest.length} 个吧`,
 			count,
-			color: POST_KIND_COLOR[key],
-			fraction,
-			percentText: `${(fraction * 100).toFixed(1)}%`,
-		};
-	});
+			color: PIE_OTHER_COLOR,
+			fraction: count / total,
+			percentText: `${((count / total) * 100).toFixed(1)}%`,
+		});
+	}
+	return slices;
 }
 
 const RADIUS = 46;
@@ -124,14 +140,17 @@ const STROKE = 18;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 /**
- * 画一个环形饼图 + 图例。
+ * 画一个「发帖都发在哪些吧」的环形饼图 + 图例。
  *
  * 返回的是一段 HTML 字符串（调用方直接塞进面板），所有数值都来自参数，
  * 没有用户输入的文字，所以这里不需要转义。
  */
-export function buildPieSvg(counts: PostCounts): string {
-	const slices = buildPieSlices(counts);
-	const total = totalCount(counts);
+export function buildForumPieSvg(
+	counts: ForumCounts,
+	maxSlices = 5,
+): string {
+	const slices = buildForumSlices(counts, maxSlices);
+	const total = totalForumCount(counts);
 
 	if (!total) {
 		return (
@@ -158,7 +177,7 @@ export function buildPieSvg(counts: PostCounts): string {
 				`stroke="${slice.color}" stroke-width="${STROKE}" ` +
 				`stroke-dasharray="${length.toFixed(3)} ${gap.toFixed(3)}" ` +
 				`stroke-dashoffset="${offset.toFixed(3)}" ` +
-				`data-kind="${slice.key}"><title>${slice.label} ${slice.count} 条（${slice.percentText}）</title></circle>`
+				`data-forum="${escapeHtml(slice.forum ?? "")}"><title>${escapeHtml(slice.label)} ${slice.count} 条（${slice.percentText}）</title></circle>`
 			);
 		})
 		.join("");
@@ -166,9 +185,9 @@ export function buildPieSvg(counts: PostCounts): string {
 	const legend = slices
 		.map(
 			(slice) =>
-				`<span class="tb-eztb-pie-item" data-kind="${slice.key}">` +
+				`<span class="tb-eztb-pie-item" data-forum="${escapeHtml(slice.forum ?? "")}">` +
 				`<i class="tb-eztb-pie-dot" style="background:${slice.color}"></i>` +
-				`<span class="tb-eztb-pie-label">${slice.label}</span>` +
+				`<span class="tb-eztb-pie-label" title="${escapeHtml(slice.label)}">${escapeHtml(slice.label)}</span>` +
 				`<b class="tb-eztb-pie-count">${slice.count}</b>` +
 				`<span class="tb-eztb-pie-percent">${slice.percentText}</span>` +
 				`</span>`,
@@ -178,11 +197,11 @@ export function buildPieSvg(counts: PostCounts): string {
 	return (
 		`<figure class="tb-eztb-pie">` +
 		// -90° 让第一段从 12 点方向开始，看着更像常见的饼图
-		`<svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖与回复占比">` +
+		`<svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖都发在哪些吧">` +
 		`<g transform="rotate(-90 60 60)">${arcs}</g>` +
 		`</svg>` +
 		`<figcaption class="tb-eztb-pie-legend">${legend}` +
-		`<div class="tb-eztb-pie-total">已加载 ${total} 条</div>` +
+		`<div class="tb-eztb-pie-total">已加载 ${total} 条 · ${Object.keys(counts).length} 个吧</div>` +
 		`</figcaption>` +
 		`</figure>`
 	);

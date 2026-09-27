@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.5.1
+// @version             1.6.0
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -30447,38 +30447,15 @@ ${endStackCall}`;
   }
 
   // src/core/postStats.ts
-  var POST_KIND_ORDER = ["topic", "reply", "sub"];
-  var POST_KIND_TEXT2 = {
-    topic: "主题帖",
-    reply: "回复",
-    sub: "楼中楼"
-  };
-  var POST_KIND_COLOR = {
-    topic: "#1677ff",
-    reply: "#8a8f99",
-    sub: "#e8a33d"
-  };
-  function emptyCounts() {
-    return { topic: 0, reply: 0, sub: 0 };
-  }
-  function countPosts(rows) {
-    const counts = emptyCounts();
-    for (const row of rows) {
-      if (row.kind === "topic") counts.topic += 1;
-      else if (row.kind === "reply") counts.reply += 1;
-      else if (row.kind === "sub") counts.sub += 1;
+  function mergeForumCounts(a, b) {
+    const out = { ...a };
+    for (const [forum, count3] of Object.entries(b)) {
+      out[forum] = (out[forum] ?? 0) + count3;
     }
-    return counts;
+    return out;
   }
-  function mergeCounts(a, b) {
-    return {
-      topic: a.topic + b.topic,
-      reply: a.reply + b.reply,
-      sub: a.sub + b.sub
-    };
-  }
-  function totalCount(counts) {
-    return counts.topic + counts.reply + counts.sub;
+  function totalForumCount(counts) {
+    return Object.values(counts).reduce((sum2, value) => sum2 + value, 0);
   }
   function postRowSubParts(post) {
     const parts2 = [];
@@ -30497,27 +30474,48 @@ ${endStackCall}`;
     }
     return parts2;
   }
-  function buildPieSlices(counts) {
-    const total = totalCount(counts);
-    return POST_KIND_ORDER.map((key) => {
-      const count3 = counts[key];
-      const fraction = total > 0 ? count3 / total : 0;
-      return {
-        key,
-        label: POST_KIND_TEXT2[key],
+  var PIE_COLORS = [
+    "#1677ff",
+    "#e8a33d",
+    "#3fb950",
+    "#a371f7",
+    "#e5534b",
+    "#1f9ea8"
+  ];
+  var PIE_OTHER_COLOR = "#b6bcc6";
+  function buildForumSlices(counts, maxSlices = 5) {
+    const total = totalForumCount(counts);
+    if (!total) return [];
+    const ranked = Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const head5 = ranked.slice(0, maxSlices);
+    const rest = ranked.slice(maxSlices);
+    const slices = head5.map(([forum, count3], index) => ({
+      forum,
+      label: forum,
+      count: count3,
+      color: PIE_COLORS[index % PIE_COLORS.length],
+      fraction: count3 / total,
+      percentText: `${(count3 / total * 100).toFixed(1)}%`
+    }));
+    if (rest.length) {
+      const count3 = rest.reduce((sum2, [, value]) => sum2 + value, 0);
+      slices.push({
+        forum: null,
+        label: `其它 ${rest.length} 个吧`,
         count: count3,
-        color: POST_KIND_COLOR[key],
-        fraction,
-        percentText: `${(fraction * 100).toFixed(1)}%`
-      };
-    });
+        color: PIE_OTHER_COLOR,
+        fraction: count3 / total,
+        percentText: `${(count3 / total * 100).toFixed(1)}%`
+      });
+    }
+    return slices;
   }
   var RADIUS = 46;
   var STROKE = 18;
   var CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-  function buildPieSvg(counts) {
-    const slices = buildPieSlices(counts);
-    const total = totalCount(counts);
+  function buildForumPieSvg(counts, maxSlices = 5) {
+    const slices = buildForumSlices(counts, maxSlices);
+    const total = totalForumCount(counts);
     if (!total) {
       return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle cx="60" cy="60" r="${RADIUS}" fill="none" stroke="#eef0f3" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
     }
@@ -30527,12 +30525,12 @@ ${endStackCall}`;
       const gap = CIRCUMFERENCE - length2;
       const offset = -acc;
       acc += length2;
-      return `<circle class="tb-eztb-pie-slice" cx="60" cy="60" r="${RADIUS}" fill="none" stroke="${slice.color}" stroke-width="${STROKE}" stroke-dasharray="${length2.toFixed(3)} ${gap.toFixed(3)}" stroke-dashoffset="${offset.toFixed(3)}" data-kind="${slice.key}"><title>${slice.label} ${slice.count} 条（${slice.percentText}）</title></circle>`;
+      return `<circle class="tb-eztb-pie-slice" cx="60" cy="60" r="${RADIUS}" fill="none" stroke="${slice.color}" stroke-width="${STROKE}" stroke-dasharray="${length2.toFixed(3)} ${gap.toFixed(3)}" stroke-dashoffset="${offset.toFixed(3)}" data-forum="${escapeHtml(slice.forum ?? "")}"><title>${escapeHtml(slice.label)} ${slice.count} 条（${slice.percentText}）</title></circle>`;
     }).join("");
     const legend = slices.map(
-      (slice) => `<span class="tb-eztb-pie-item" data-kind="${slice.key}"><i class="tb-eztb-pie-dot" style="background:${slice.color}"></i><span class="tb-eztb-pie-label">${slice.label}</span><b class="tb-eztb-pie-count">${slice.count}</b><span class="tb-eztb-pie-percent">${slice.percentText}</span></span>`
+      (slice) => `<span class="tb-eztb-pie-item" data-forum="${escapeHtml(slice.forum ?? "")}"><i class="tb-eztb-pie-dot" style="background:${slice.color}"></i><span class="tb-eztb-pie-label" title="${escapeHtml(slice.label)}">${escapeHtml(slice.label)}</span><b class="tb-eztb-pie-count">${slice.count}</b><span class="tb-eztb-pie-percent">${slice.percentText}</span></span>`
     ).join("");
-    return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖与回复占比"><g transform="rotate(-90 60 60)">${arcs}</g></svg><figcaption class="tb-eztb-pie-legend">${legend}<div class="tb-eztb-pie-total">已加载 ${total} 条</div></figcaption></figure>`;
+    return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖都发在哪些吧"><g transform="rotate(-90 60 60)">${arcs}</g></svg><figcaption class="tb-eztb-pie-legend">${legend}<div class="tb-eztb-pie-total">已加载 ${total} 条 · ${Object.keys(counts).length} 个吧</div></figcaption></figure>`;
   }
 
   // src/features/userPanel.ts
@@ -30929,27 +30927,20 @@ ${endStackCall}`;
   }
   function renderPostsTab(body, identity4) {
     const active2 = body.dataset.subtab === "reply" ? "reply" : "topic";
-    body.innerHTML = // 占比饼图：随已加载的行更新（两个子页签各自取数，先点哪个就先统计哪个）
+    body.innerHTML = // 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
     `<div class="tb-eztb-piestat"></div><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-subtab${item.id === active2 ? " active" : ""}" data-subtab="${item.id}">${item.label}</button>`
     ).join("") + `</div>` + POST_SUBTABS.map(
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
     ).join("");
-    let counts = emptyCounts();
+    let counts = {};
     const pieEl = body.querySelector(".tb-eztb-piestat");
     const updatePie = () => {
-      if (pieEl) pieEl.innerHTML = buildPieSvg(counts);
+      if (pieEl) pieEl.innerHTML = buildForumPieSvg(counts);
     };
     updatePie();
     const mounted = /* @__PURE__ */ new Set();
-    const activate = (id) => {
-      body.dataset.subtab = id;
-      for (const button of body.querySelectorAll(".tb-eztb-subtab")) {
-        button.classList.toggle("active", button.dataset.subtab === id);
-      }
-      for (const pane2 of body.querySelectorAll(".tb-eztb-subpane")) {
-        pane2.classList.toggle("active", pane2.dataset.subpane === id);
-      }
+    const mount2 = (id) => {
       if (mounted.has(id)) return;
       mounted.add(id);
       const pane = body.querySelector(
@@ -30957,18 +30948,29 @@ ${endStackCall}`;
       );
       if (pane) {
         mountPostsSubList(pane, identity4, id, (rows) => {
-          counts = mergeCounts(counts, countPosts(rows));
+          counts = mergeForumCounts(counts, countPostsByForum(rows));
           updatePie();
         });
       }
     };
+    const activate = (id) => {
+      body.dataset.subtab = id;
+      for (const button of body.querySelectorAll(".tb-eztb-subtab")) {
+        button.classList.toggle("active", button.dataset.subtab === id);
+      }
+      for (const pane of body.querySelectorAll(".tb-eztb-subpane")) {
+        pane.classList.toggle("active", pane.dataset.subpane === id);
+      }
+      mount2(id);
+    };
+    for (const item of POST_SUBTABS) mount2(item.id);
+    activate(active2);
     for (const button of body.querySelectorAll(".tb-eztb-subtab")) {
       button.addEventListener("click", () => {
         const id = button.dataset.subtab;
         if (id === "topic" || id === "reply") activate(id);
       });
     }
-    activate(active2);
   }
   function renderCompositionTab(body, ref, force = false) {
     body.innerHTML = `<div class="tb-eztb-loading"><div class="tb-eztb-spinner"></div>正在检测成分…</div>`;
@@ -31316,7 +31318,11 @@ ${endStackCall}`;
 .tb-eztb-pie-dot{
   width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block;
 }
-.tb-eztb-pie-label{min-width:44px;}
+/* 吧名可以很长：给个上限并省略，别把图例撑破 */
+.tb-eztb-pie-label{
+  display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;vertical-align:bottom;
+}
 .tb-eztb-pie-count{color:#24292f !important;font-weight:600;}
 .tb-eztb-pie-percent{color:#8a8f99 !important;}
 .tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
@@ -31368,6 +31374,12 @@ ${endStackCall}`;
 /* 行实在挤不下时，先让我们这块被压缩裁剪，而不是把整行顶出去。
    :has 保证只在"这个槽里真的插了我们的标记"时才生效，不干扰页面自己的按钮。 */
 .head-line > .btn-wrapper:has(> .tb-eztb-badges){min-width:0;flex-shrink:1;}
+/* 回复行（头部行后面紧跟正文块 .comment-content）：
+   正文块会**往上顶**到头部行的下半部分（实测：40px 的行，正文从 y=271 开始，
+   而按钮默认在这行里垂直居中、占 255~279，正好压住正文第一行的尾巴）。
+   这类行里把按钮/标记贴到行顶——行顶那 24px 是空的，正文碰不到。
+   用户报的"查询按钮有时部分遮挡发言"就是这个（快照里 20/23 行如此）。 */
+.head-line:has(+ .comment-content) > .btn-wrapper{align-self:flex-start;padding-top:0;}
 .tb-eztb-badge{
   display:inline-block;padding:0 6px;border-radius:999px;font-size:11px;line-height:17px;
   font-weight:600;white-space:nowrap;cursor:pointer;pointer-events:auto !important;flex:0 0 auto;

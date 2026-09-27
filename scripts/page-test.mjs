@@ -37,8 +37,68 @@ const CSS_DIR = process.env.EZTB_CSS_DIR ?? path.join(SAMPLE_DIR, "_css_cache");
  * 快照可能放在两处：
  *   1. 外部快照目录（默认同级 `../test0`，可用 EZTB_SAMPLE_DIR 指定）
  *   2. 本项目里的 dist/.samples（方便随手把一份页面另存进来，该目录被 .gitignore 忽略）
+ *   3. 本项目根目录（用户直接另存到仓库里时就在这儿，同样被 .gitignore 忽略）
  */
-const SAMPLE_DIRS = [SAMPLE_DIR, path.join(projectRoot, "dist/.samples")];
+const SAMPLE_DIRS = [
+	SAMPLE_DIR,
+	path.join(projectRoot, "dist/.samples"),
+	projectRoot,
+];
+
+/**
+ * 「网页，完整」格式的快照：`<标题>.html` + `<标题>_files/` 资源目录。
+ *
+ * 和 MHTML 相比，这种保存方式**带着外部 CSS**（贴吧的 `pb.*.css` 就在里面），
+ * 所以布局类断言在这类快照上是准的——MHTML 那边只能靠 fetch-sample-css.mjs 补齐（见 §5 #15）。
+ */
+function loadSavedPage(htmlPath) {
+	const base = htmlPath.replace(/\.html?$/i, "");
+	const filesDir = `${base}_files`;
+	if (!fs.existsSync(filesDir)) return null;
+	const folder = path.basename(filesDir);
+	/**
+	 * **不要**改写 HTML 里的相对路径。
+
+	 * 之前把 `<标题>_files/` 换成 `/files/`，结果 `./<标题>_files/x.css` 变成 `.//files/x.css`，
+	 * 浏览器按"协议相对 URL"解析 → 每个外部 CSS 都 404 → 页面变成无样式，
+	 * 布局断言又一次测在裸 DOM 上（HANDOFF §5 #15 的坑，换个形式又踩了一遍）。
+	 * 现在原样保留，按原目录名提供文件：页面 URL 是 `/`，相对引用自然落到 `/<标题>_files/…`。
+	 */
+	const html = fs.readFileSync(htmlPath, "utf8");
+	/**
+	 * 剥掉页面自己的脚本。
+
+	 * 「网页，完整」另存时 JS 会被存成 `xxx.js.下载`，离线根本取不到；
+	 * 页面里残留的内联脚本（Vue 运行时的那一段）于是会在 `_typeof is not defined`
+	 * 这类地方抛错，把"运行期无 JS 错误"这条断言染红——那不是我们的问题。
+	 * 这个测试只看「我们的脚本在真实 DOM + 真实 CSS 上的表现」，页面自己的 JS 不需要，
+	 * 而且它一旦真跑起来还会去请求网络、改写 DOM，反而让结果不可复现。
+	 */
+	const withoutPageScripts = html.replace(
+		/<script\b[^>]*>[\s\S]*?<\/script>/gi,
+		"<!-- page script removed by page-test -->",
+	);
+	return {
+		html: withoutPageScripts,
+		filesDir,
+		prefixes: [`/${encodeURIComponent(folder)}/`, `/${folder}/`],
+	};
+}
+
+const MIME_BY_EXT = {
+	".css": "text/css; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif": "image/gif",
+	".svg": "image/svg+xml",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+};
 
 /** 按名字找快照；绝对路径直接用。找不到返回 null。 */
 function resolveSample(file) {
@@ -81,6 +141,25 @@ const SAMPLES = [
 		file: "牢婴儿-百度贴吧.mhtml",
 		expect: { minButtons: 0, selector: ".head-line" },
 	},
+	{
+		// 用户 2026-09-27 直接另存到仓库根目录的那份（「网页，完整」格式，**自带外部 CSS**）
+		name: "新版帖子页（网页完整保存，带 pb.css）",
+		file:
+			process.env.EZTB_SAMPLE_SAVED ??
+			"女频文娱作品里，道德是一种资产-百度贴吧.html",
+		expect: { minButtons: 5, selector: ".head-line" },
+	},
+	{
+		// 同一份快照再跑一次，但把内容容器压窄到 420px：这才是"窗口窄 / 昵称长"的真实情形。
+		// 手工去改 .head-info 宽度是造出来的场景（页面自己的固定宽度元素会先顶出去），
+		// 测出来的不是我们的问题。
+		name: "新版帖子页（窄容器 420px）",
+		file:
+			process.env.EZTB_SAMPLE_SAVED ??
+			"女频文娱作品里，道德是一种资产-百度贴吧.html",
+		narrow: true,
+		expect: { minButtons: 5, selector: ".head-line" },
+	},
 ];
 
 const BROWSERS = [
@@ -119,6 +198,10 @@ window.__tbLogs = [];
 `;
 
 const DRIVER = `
+window.__cssProbe = null;
+fetch('/files/pb.d2d352c2.css')
+  .then(function (r) { return r.text().then(function (t) { window.__cssProbe = { status: r.status, len: t.length, head: t.slice(0, 40) }; }); })
+  .catch(function (e) { window.__cssProbe = { error: String(e) }; });
 function count(sel) { return document.querySelectorAll(sel).length; }
 function report() {
   var lines = [];
@@ -219,40 +302,112 @@ function report() {
           '标记 right=' + clRect.right.toFixed(1) + ' 行 right=' + rowRect.right.toFixed(1));
       cluster.remove();
 
+      /**
+       * 用户报过的问题：**「查询」按钮有时部分遮挡楼层正文**。
+       *
+       * 判据不是"包围盒相交"，而是"把我们的按钮藏起来，再在同一个点上取一次命中"——
+       * 藏起来之后命中的那个元素，就是被我们压住的东西。
+       * 实测（2026-09-27 用户快照）：回复行的正文块会往上顶到头部行的下半部分，
+       * 而按钮默认在这行里垂直居中，于是 20/23 行都压着正文。
+       */
+      var covering = [];
+      Array.prototype.forEach.call(document.querySelectorAll('.head-line'), function (row, rowIndex) {
+        var rowBtns = Array.prototype.slice.call(row.querySelectorAll('.tb-eztb-btn'));
+        if (!rowBtns.length) return;
+        row.scrollIntoView({ block: 'center' });
+        var br0 = rowBtns[0].getBoundingClientRect();
+        var points = [
+          [br0.left + 3, br0.top + 3],
+          [br0.left + br0.width / 2, br0.top + br0.height / 2],
+          [br0.right - 3, br0.bottom - 3]
+        ];
+        // 脚本自己的 CSS 里写了 visibility:visible !important，隐藏时必须带 important
+        var saved = rowBtns.map(function (b) { return b.style.getPropertyValue('visibility'); });
+        rowBtns.forEach(function (b) { b.style.setProperty('visibility', 'hidden', 'important'); });
+        var hits = points.map(function (p) {
+          var el = document.elementFromPoint(p[0], p[1]);
+          return el ? (el.tagName + '.' + String(el.className || '').slice(0, 30)) : 'null';
+        });
+        rowBtns.forEach(function (b, i) {
+          if (saved[i]) b.style.setProperty('visibility', saved[i]);
+          else b.style.removeProperty('visibility');
+        });
+        var covered = hits.filter(function (hit) {
+          return hit !== 'null' &&
+            hit.indexOf('DIV.btn-wrapper') < 0 &&
+            hit.indexOf('DIV.head-line') < 0 &&
+            hit.indexOf('BODY') < 0 &&
+            hit.indexOf('HTML') < 0;
+        });
+        if (covered.length) {
+          covering.push({ 行: rowIndex, 盖住了: covered, 命中: hits });
+        }
+      });
+      add('「查询」按钮没有盖住任何页面内容（逐行验证：藏起来再取同一点）',
+          covering.length === 0,
+          covering.length ? JSON.stringify(covering.slice(0, 3)) :
+            '23 行内都没有压住别的元素');
+
       // 再把头部行压窄（模拟"昵称很长 / 窗口很窄"）：新版头部行高度写死 40px，
       // 标记一折行就会顶到下面的标题与正文上——这两个断言就是钉住这一点。
       // 做法是让"名字/时间"那一块吃掉几乎整行宽度（真实情况：昵称长、还带等级标签与 IP 属地），
       // 而不是硬压行宽——硬压会让页面自己的固定宽度元素先顶出去，测出来的不是我们的问题。
-      var headInfo = headRow.querySelector('.head-info');
-      var saveInfoWidth = headInfo ? headInfo.style.width : null;
-      if (headInfo) {
-        headInfo.style.width = Math.max(120, rowRect.width - 110) + 'px';
+      // 注意：窄容器那一次运行（__NARROW）本身就是挤压场景，不再手工改宽度。
+      if (!window.__NARROW) {
+        var headInfo = headRow.querySelector('.head-info');
+        var saveInfoWidth = headInfo ? headInfo.style.width : null;
+        if (headInfo) {
+          headInfo.style.width = Math.max(120, rowRect.width - 110) + 'px';
+        }
+        var tightRowRect = headRow.getBoundingClientRect();
+        // 先量"没有我们的标记时"这一行会不会被撑宽：强行改 .head-info 宽度本身就可能让
+        // 页面自己的固定宽度元素先顶出去，那种溢出不是我们的锅。我们只该保证"不额外撑宽"。
+        var scrollBefore = headRow.scrollWidth;
+        var tightCluster = document.createElement('span');
+        tightCluster.className = 'tb-eztb-badges';
+        for (var t = 0; t < 3; t++) {
+          var tightChip = document.createElement('span');
+          tightChip.className = 'tb-eztb-badge';
+          tightChip.textContent = '🎮崩坏星穹铁道';
+          tightCluster.appendChild(tightChip);
+        }
+        rowBtn.insertAdjacentElement('afterend', tightCluster);
+        var tightRect = tightCluster.getBoundingClientRect();
+        add('新版：行被挤窄时成分标记不折行（不会压住下面的正文）',
+            tightRect.height <= tightRowRect.height + 1 && tightRect.bottom <= tightRowRect.bottom + 1,
+            '行高=' + tightRowRect.height.toFixed(1) + ' 标记高=' + tightRect.height.toFixed(1) +
+            ' 越界=' + (tightRect.bottom - tightRowRect.bottom).toFixed(1) + 'px');
+        add('新版：行被挤窄时成分标记不顶出行右边界',
+            headRow.scrollWidth <= scrollBefore + 1,
+            '标记 right=' + tightRect.right.toFixed(1) + ' 行 right=' + tightRowRect.right.toFixed(1) +
+            ' scrollWidth=' + scrollBefore + ' → ' + headRow.scrollWidth +
+            ' clientWidth=' + headRow.clientWidth);
+        tightCluster.remove();
+        if (headInfo && saveInfoWidth !== null) headInfo.style.width = saveInfoWidth;
       }
-      var tightRowRect = headRow.getBoundingClientRect();
-      var tightCluster = document.createElement('span');
-      tightCluster.className = 'tb-eztb-badges';
-      for (var t = 0; t < 3; t++) {
-        var tightChip = document.createElement('span');
-        tightChip.className = 'tb-eztb-badge';
-        tightChip.textContent = '🎮崩坏星穹铁道';
-        tightCluster.appendChild(tightChip);
-      }
-      rowBtn.insertAdjacentElement('afterend', tightCluster);
-      var tightRect = tightCluster.getBoundingClientRect();
-      add('新版：行被挤窄时成分标记不折行（不会压住下面的正文）',
-          tightRect.height <= tightRowRect.height + 1 && tightRect.bottom <= tightRowRect.bottom + 1,
-          '行高=' + tightRowRect.height.toFixed(1) + ' 标记高=' + tightRect.height.toFixed(1) +
-          ' 越界=' + (tightRect.bottom - tightRowRect.bottom).toFixed(1) + 'px');
-      add('新版：行被挤窄时成分标记不顶出行右边界',
-          headRow.scrollWidth <= headRow.clientWidth + 1,
-          '标记 right=' + tightRect.right.toFixed(1) + ' 行 right=' + tightRowRect.right.toFixed(1) +
-          ' scrollWidth=' + headRow.scrollWidth + ' clientWidth=' + headRow.clientWidth);
-      tightCluster.remove();
-      if (headInfo && saveInfoWidth !== null) headInfo.style.width = saveInfoWidth;
     }
   }
 
   if (__LAYOUT_PROBE) {
+    add('布局诊断-样式表自检（浏览器里取一次）', true, JSON.stringify(window.__cssProbe || 'still pending'));
+    add('布局诊断-样式表 link 状态', true, JSON.stringify(
+      Array.prototype.map.call(document.querySelectorAll('link[rel~="stylesheet"]'), function (link) {
+        return {
+          href: String(link.getAttribute('href') || '').slice(0, 60),
+          有sheet: !!link.sheet,
+          disabled: link.sheet ? link.sheet.disabled : null,
+          规则: link.sheet ? (function () { try { return link.sheet.cssRules.length; } catch (e) { return 'ERR'; } })() : null
+        };
+      })
+    ));
+    add('布局诊断-资源加载记录', true, JSON.stringify(
+      performance.getEntriesByType('resource')
+        .filter(function (e) { return e.name.indexOf('.css') >= 0; })
+        .map(function (e) {
+          return e.name.split('/').pop() + ' status=' + (e.responseStatus || '?') +
+            ' size=' + (e.transferSize || 0) + ' dur=' + Math.round(e.duration);
+        })
+    ));
     // 逐行量：头部行的可用余量、3 个标记会不会折行（折行就会顶到下面的正文）
     var rowsInfo = [];
     Array.prototype.forEach.call(document.querySelectorAll('.head-line'), function (row) {
@@ -304,11 +459,282 @@ function report() {
         }
       });
       overlaps.sort(function (a, b) { return b.area - a.area; });
-      add('布局诊断-按钮矩形', true,
-          'left=' + Math.round(br.left) + ' top=' + Math.round(br.top) +
-          ' w=' + Math.round(br.width) + ' h=' + Math.round(br.height));
-      add('布局诊断-与按钮重叠的元素', true, JSON.stringify(overlaps.slice(0, 6)));
+    add('布局诊断-按钮矩形', true,
+        'left=' + Math.round(br.left) + ' top=' + Math.round(br.top) +
+        ' w=' + Math.round(br.width) + ' h=' + Math.round(br.height));
+    add('布局诊断-与按钮重叠的元素', true, JSON.stringify(overlaps.slice(0, 6)));
+
+    /**
+     * 逐行看：我们的按钮/标记盖住了同一行里的哪些**页面元素**。
+     * 判据是"点它中心时命中的是不是我们自己的元素"——这才是用户眼里的"被遮挡"，
+     * 光看包围盒相交会把"并排但没盖住"也算进去。
+     */
+    var coveredReport = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.head-line'), function (row, index) {
+      if (index > 5) return;
+      var ours = row.querySelector('.tb-eztb-btn');
+      if (!ours) return;
+      var wrapper = ours.closest('.btn-wrapper');
+      var wcs = wrapper ? getComputedStyle(wrapper) : null;
+      var covered = [];
+      Array.prototype.forEach.call(row.querySelectorAll('*'), function (el) {
+        if (ours.contains(el) || el.contains(ours)) return;
+        if (el.classList.contains('tb-eztb-badges') || el.classList.contains('tb-eztb-badge')) return;
+        var r = el.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) return;
+        var hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (hit === ours || ours.contains(hit)) {
+          covered.push({
+            el: el.tagName + '.' + String(el.className || '').slice(0, 34),
+            text: String(el.textContent || '').replace(/\\s+/g, ' ').slice(0, 24),
+            w: Math.round(r.width),
+            h: Math.round(r.height)
+          });
+        }
+      });
+      var rowR = row.getBoundingClientRect();
+      var ourR = ours.getBoundingClientRect();
+      coveredReport.push({
+        row: [Math.round(rowR.left), Math.round(rowR.top), Math.round(rowR.width), Math.round(rowR.height)],
+        btn: [Math.round(ourR.left), Math.round(ourR.top), Math.round(ourR.width), Math.round(ourR.height)],
+        wrapper: wrapper
+          ? (Math.round(wrapper.getBoundingClientRect().width) + 'x' +
+             Math.round(wrapper.getBoundingClientRect().height) +
+             ' pos=' + wcs.position + ' overflow=' + wcs.overflow + ' pe=' + wcs.pointerEvents)
+          : '(不在 btn-wrapper 里)',
+        covered: covered.slice(0, 4)
+      });
+    });
+    add('布局诊断-被按钮盖住的元素（逐行）', true, JSON.stringify(coveredReport));
+
+    // 容器内部结构：我们的按钮在 .btn-wrapper 里是第几个、和页面自己的按钮是不是同一行
+    var wrapperDetail = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.head-line'), function (row, index) {
+      if (index > 2) return;
+      var wrapper = row.querySelector('.btn-wrapper');
+      if (!wrapper) return;
+      var wcs = getComputedStyle(wrapper);
+      var kids = Array.prototype.map.call(wrapper.children, function (el) {
+        var r = el.getBoundingClientRect();
+        return el.className.toString().slice(0, 28) +
+          ' [' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' +
+          Math.round(r.width) + 'x' + Math.round(r.height) + ']';
+      });
+      var headInfo = row.querySelector('.head-info');
+      var icon = row.querySelector('.icon_level');
+      var infoR = headInfo ? headInfo.getBoundingClientRect() : null;
+      var iconR = icon ? icon.getBoundingClientRect() : null;
+      wrapperDetail.push({
+        display: wcs.display + ' wrap=' + wcs.flexWrap + ' dir=' + wcs.flexDirection +
+          ' h=' + Math.round(wrapper.getBoundingClientRect().height),
+        kids: kids,
+        headInfo: infoR ? [Math.round(infoR.left), Math.round(infoR.top), Math.round(infoR.width), Math.round(infoR.height)] : null,
+        icon: iconR ? [Math.round(iconR.left), Math.round(iconR.top), Math.round(iconR.width), Math.round(iconR.height)] : null,
+        iconPE: icon ? getComputedStyle(icon).pointerEvents : '',
+        iconZ: icon ? getComputedStyle(icon).zIndex : ''
+      });
+    });
+    add('布局诊断-btn-wrapper 内部结构', true, JSON.stringify(wrapperDetail));
+
+    /**
+     * 按钮**下面**到底是什么：把按钮临时藏起来，再在同样几个点上取一次命中。
+     * 这比"包围盒相交"准——相交不代表真的挡着，命中才算。
+     */
+    var underneath = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.head-line'), function (row, index) {
+      row.scrollIntoView({ block: 'center' });
+      var btns = Array.prototype.slice.call(row.querySelectorAll('.tb-eztb-btn'));
+      var btn = btns[0];
+      if (!btn) return;
+      var r = btn.getBoundingClientRect();
+      var points = [
+        [r.left + 3, r.top + 3],
+        [r.left + r.width / 2, r.top + r.height / 2],
+        [r.right - 3, r.bottom - 3]
+      ];
+      var describe = function (el) {
+        if (!el) return 'null';
+        return el.tagName + '.' + String(el.className || '').slice(0, 26) +
+          '「' + String(el.textContent || '').replace(/\\s+/g, ' ').slice(0, 18) + '」';
+      };
+      var before = points.map(function (p) { return describe(document.elementFromPoint(p[0], p[1])); });
+      // 注意：脚本自己的 CSS 里写了 visibility:visible !important，
+      // 用普通 style.visibility='hidden' 是压不住的，必须带 important。
+      var prevVis = btns.map(function (b) { return b.style.getPropertyValue('visibility'); });
+      btns.forEach(function (b) { b.style.setProperty('visibility', 'hidden', 'important'); });
+      var after = points.map(function (p) { return describe(document.elementFromPoint(p[0], p[1])); });
+      btns.forEach(function (b, i) {
+        if (prevVis[i]) b.style.setProperty('visibility', prevVis[i]);
+        else b.style.removeProperty('visibility');
+      });
+      // 只有"盖住了别人"或"按钮跑出了自己的行/被挤到单独一行"才值得报
+      var rowRect = row.getBoundingClientRect();
+      var wrapper = row.querySelector('.btn-wrapper');
+      var wrapperRect = wrapper.getBoundingClientRect();
+      var aside = row.querySelector('.btn-track-wrapper, .button-wrapper');
+      var asideRect = aside ? aside.getBoundingClientRect() : null;
+      var coversOther = after.some(function (text) {
+        return text !== 'null' &&
+          text.indexOf('DIV.btn-wrapper') < 0 &&
+          text.indexOf('DIV.head-line') < 0 &&
+          text.indexOf('BODY') < 0 &&
+          text.indexOf('HTML') < 0;
+      });
+      var sameLineAsPageButtons = !asideRect ||
+        Math.abs(asideRect.top - r.top) < 4;
+      var insideRow = r.top >= rowRect.top - 1 && r.bottom <= rowRect.bottom + 1;
+      if (!coversOther && sameLineAsPageButtons && insideRow) return;
+      underneath.push({
+        行号: index,
+        按钮数: btns.length,
+        按钮矩形: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+        所在行: [Math.round(rowRect.top), Math.round(rowRect.height)],
+        容器: [Math.round(wrapperRect.top), Math.round(wrapperRect.height)],
+        页面自己的按钮: asideRect ? [Math.round(asideRect.left), Math.round(asideRect.top)] : null,
+        与页面按钮同一行: sameLineAsPageButtons,
+        在行内: insideRow,
+        盖住了: after,
+        原本命中: before
+      });
+    });
+    add('布局诊断-按钮底下是什么（藏起来再测命中）', true, JSON.stringify(underneath));
+    add('布局诊断-异常行数量', true, underneath.length + ' 行异常（共 ' +
+        document.querySelectorAll('.head-line').length + ' 行）');
+
+    // 回复行里到底是谁浮在谁上面：容器定位方式 + 正文块位置
+    var replyDetail = null;
+    if (underneath.length) {
+      var badRow = document.querySelectorAll('.head-line')[underneath[0].行号];
+      badRow.scrollIntoView({ block: 'center' });
+      var wrap = badRow.querySelector('.btn-wrapper');
+      var text = badRow.parentElement
+        ? badRow.parentElement.querySelector('.pb-rich-text')
+        : null;
+      var styleOf = function (el) {
+        if (!el) return null;
+        var cs = getComputedStyle(el);
+        var r = el.getBoundingClientRect();
+        return {
+          el: el.tagName + '.' + String(el.className || '').slice(0, 30),
+          rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+          display: cs.display, position: cs.position, float: cs.cssFloat,
+          top: cs.top, right: cs.right, z: cs.zIndex, overflow: cs.overflow
+        };
+      };
+      replyDetail = {
+        行: styleOf(badRow),
+        容器: styleOf(wrap),
+        按钮: styleOf(badRow.querySelector('.tb-eztb-btn')),
+        正文: styleOf(text),
+        行的兄弟: Array.prototype.map.call(badRow.parentElement.children, function (el) {
+          return el.tagName + '.' + String(el.className || '').slice(0, 24);
+        }),
+        容器父节点: wrap ? wrap.parentElement.tagName + '.' +
+          String(wrap.parentElement.className || '').slice(0, 30) : null
+      };
     }
+    add('布局诊断-回复行定位方式', true, JSON.stringify(replyDetail));
+
+    // 祖先链：看清我们的按钮挂在谁里面、哪一层是固定高度/会裁剪
+    var chain = [];
+    var chainBtn = document.querySelector('.head-line .tb-eztb-btn');
+    if (chainBtn) {
+      var el = chainBtn;
+      for (var depth = 0; el && depth < 8; depth++) {
+        var r = el.getBoundingClientRect();
+        var cs = getComputedStyle(el);
+        chain.push({
+          el: el.tagName + '.' + String(el.className || '').slice(0, 30),
+          rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+          display: cs.display,
+          height: cs.height,
+          overflow: cs.overflow,
+          position: cs.position,
+          pe: cs.pointerEvents,
+          attrs: String(el.getAttributeNames ? el.getAttributeNames().filter(function (n) {
+            return n.indexOf('data-v-') === 0;
+          }).join(',') : '')
+        });
+        el = el.parentElement;
+      }
+    }
+    add('布局诊断-按钮的祖先链', true, JSON.stringify(chain));
+
+    var pbLoaded = Array.prototype.some.call(document.styleSheets, function (sheet) {
+      return String(sheet.href || '').indexOf('pb.') >= 0;
+    });
+    add('布局诊断-pb.css 是否加载', pbLoaded,
+        Array.prototype.map.call(document.styleSheets, function (s) {
+          return String(s.href || '(inline)').split('/').pop();
+        }).join(','));
+
+    // 谁把 .btn-wrapper 定成了 block：把匹配它、并且声明了 display 的规则全列出来
+    var wrapperEl = document.querySelector('.head-line .btn-wrapper');
+    if (wrapperEl) {
+      var hits = [];
+      // 递归进 @media / @supports：不递归会漏掉页面大部分规则（踩过：命中列表全空）
+      var walkRules = function (rules, sheetIndex, condition, visit) {
+        Array.prototype.forEach.call(rules, function (rule) {
+          if (rule.cssRules && rule.conditionText !== undefined) {
+            walkRules(rule.cssRules, sheetIndex,
+              condition ? condition + ' && ' + rule.conditionText : rule.conditionText, visit);
+            return;
+          }
+          visit(rule, sheetIndex, condition);
+        });
+      };
+      Array.prototype.forEach.call(document.styleSheets, function (sheet, sheetIndex) {
+        var rules;
+        try { rules = sheet.cssRules; } catch (e) { return; }
+        walkRules(rules, sheetIndex, '', function (rule) {
+          if (!rule.selectorText || !rule.style) return;
+          if (!rule.style.display && !rule.style.height) return;
+          var matched = false;
+          try { matched = wrapperEl.matches(rule.selectorText); } catch (e) { return; }
+          if (!matched) return;
+          hits.push({
+            sheet: sheetIndex,
+            sel: rule.selectorText.slice(0, 90),
+            media: String(rule.parentRule && rule.parentRule.conditionText || '').slice(0, 60),
+            display: rule.style.display || '',
+            height: rule.style.height || ''
+          });
+        });
+      });
+      add('布局诊断-作用于 .btn-wrapper 的 display/height 规则', true, JSON.stringify(hits));
+      add('布局诊断-.btn-wrapper 是否匹配 scoped 选择器', true,
+          wrapperEl.matches('.btn-wrapper[data-v-3c03969c]') + ' attrs=' +
+          wrapperEl.getAttributeNames().join(','));
+      add('布局诊断-各样式表的规则数', true, JSON.stringify(
+        Array.prototype.map.call(document.styleSheets, function (sheet) {
+          var n = -1;
+          try { n = sheet.cssRules.length; } catch (e) { n = 'ERR:' + e.name; }
+          return String(sheet.href || '(inline)').split('/').pop() + '=' + n;
+        })
+      ));
+      add('布局诊断-用户信息行的高度规则', true, (function () {
+        var info = document.querySelector('.head-line.user-info');
+        if (!info) return '没有 .head-line.user-info';
+        var found = [];
+        Array.prototype.forEach.call(document.styleSheets, function (sheet, sheetIndex) {
+          var rules;
+          try { rules = sheet.cssRules; } catch (e) { return; }
+          walkRules(rules, sheetIndex, '', function (rule) {
+            if (!rule.selectorText || !rule.style || !rule.style.height) return;
+            var ok = false;
+            try { ok = info.matches(rule.selectorText); } catch (e) { return; }
+            if (ok) {
+              found.push(sheetIndex + ':' + rule.selectorText.slice(0, 60) +
+                '{height:' + rule.style.height + '}' +
+                (rule.parentRule && rule.parentRule.conditionText
+                  ? ' @' + String(rule.parentRule.conditionText).slice(0, 40) : ''));
+            }
+          });
+        });
+        return 'computed=' + getComputedStyle(info).height + ' 规则=' + JSON.stringify(found.slice(0, 6));
+      })());
+    }
+  }
   }
 
   fetch('/result', { method: 'POST', body: 'TBSTART\\n' + lines.join('\\n') + '\\nTBEND' }).catch(function () {});
@@ -335,6 +761,10 @@ const resultPromise = new Promise((resolve) => {
 	resolveResult = resolve;
 });
 let currentPage = "";
+/** 当前这一轮快照的资源目录（「网页，完整」格式才有） */
+let currentFilesDir = "";
+/** 资源目录对应的 URL 前缀（同样只在「网页，完整」格式下有值） */
+let currentFilesPrefixes = [];
 
 const server = http.createServer(async (req, res) => {
 	const url = new URL(req.url, "http://127.0.0.1");
@@ -364,6 +794,47 @@ const server = http.createServer(async (req, res) => {
 		res.end();
 		return;
 	}
+	// 「网页，完整」快照自带的资源（外部 CSS / 图片 / 字体）：按原目录名提供，
+	// 页面里的相对引用就能原样命中（不要再改写 HTML，见 loadSavedPage 的注释）。
+	{
+		const decodedPath = decodeURIComponent(url.pathname);
+		// 前缀有两种形态（URL 编码过 / 没编码），必须**用匹配到的那个**去切，
+		// 否则编码长度和解码长度不同，切出来的文件名是错的（踩过一次：全部 404）。
+		let name = null;
+		if (currentFilesDir) {
+			for (const prefix of currentFilesPrefixes) {
+				if (url.pathname.startsWith(prefix)) {
+					name = decodeURIComponent(url.pathname.slice(prefix.length));
+					break;
+				}
+				if (decodedPath.startsWith(prefix)) {
+					name = decodedPath.slice(prefix.length);
+					break;
+				}
+			}
+		}
+		if (name !== null && currentFilesDir) {
+			const file = path.resolve(currentFilesDir, name);
+			// 只允许读该快照自己的 _files 目录，禁止路径穿越
+			if (
+				name &&
+				file.startsWith(path.resolve(currentFilesDir)) &&
+				fs.existsSync(file) &&
+				fs.statSync(file).isFile()
+			) {
+				res.writeHead(200, {
+					"content-type":
+						MIME_BY_EXT[path.extname(file).toLowerCase()] ??
+						"application/octet-stream",
+				});
+				res.end(fs.readFileSync(file));
+				return;
+			}
+			res.writeHead(404);
+			res.end();
+			return;
+		}
+	}
 	res.writeHead(404);
 	res.end();
 });
@@ -379,8 +850,14 @@ async function runSample(sample, minButtons) {
 		return null;
 	}
 
+	// 「网页，完整」格式（html + _files/）自带资源，直接用它；
+	// 其余（MHTML）先解码，再按下面的规则把外部 CSS 换成本地缓存的那份。
+	const saved = loadSavedPage(source);
+	currentFilesDir = saved ? saved.filesDir : "";
+	currentFilesPrefixes = saved ? saved.prefixes : [];
+	const decoded = saved ? saved.html : extractHtml(source);
 	// 把快照里引用的样式表换成本地缓存的那份（抓不到的保持原样，至少不影响其余断言）
-	const html = extractHtml(source).replace(
+	const html = decoded.replace(
 		/https?:\/\/[^"'\s>]+\.css[^"'\s>]*/g,
 		(absolute) => {
 			const name = path.basename(absolute.split("?")[0]);
@@ -391,9 +868,14 @@ async function runSample(sample, minButtons) {
 		},
 	);
 	const injection =
+		// 窄容器场景：在脚本注入之前就把内容容器压窄，我们的宽度预算逻辑就会按窄行来算
+		(sample.narrow
+			? `<style>.pb-page-wrapper{width:420px !important;}</style>`
+			: "") +
 		`<script>${GM_STUB}</script>` +
 		`<script>${bundle}</script>` +
 		`<script>var __MIN_BUTTONS = ${minButtons}; var __WAIT_MS = 1200;` +
+			`var __NARROW = ${sample.narrow ? "true" : "false"};` +
 			`var __LAYOUT_PROBE = ${process.env.EZTB_LAYOUT_PROBE ? "true" : "false"};${DRIVER}</script>`;
 
 	// 直接追加到文档末尾：无论页面结构如何都能执行到

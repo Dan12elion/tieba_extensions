@@ -164,7 +164,11 @@ export const STYLE_TEXT = `
 .tb-eztb-pie-dot{
   width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block;
 }
-.tb-eztb-pie-label{min-width:44px;}
+/* 吧名可以很长：给个上限并省略，别把图例撑破 */
+.tb-eztb-pie-label{
+  display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;vertical-align:bottom;
+}
 .tb-eztb-pie-count{color:#24292f !important;font-weight:600;}
 .tb-eztb-pie-percent{color:#8a8f99 !important;}
 .tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
@@ -216,6 +220,12 @@ export const STYLE_TEXT = `
 /* 行实在挤不下时，先让我们这块被压缩裁剪，而不是把整行顶出去。
    :has 保证只在"这个槽里真的插了我们的标记"时才生效，不干扰页面自己的按钮。 */
 .head-line > .btn-wrapper:has(> .tb-eztb-badges){min-width:0;flex-shrink:1;}
+/* 回复行（头部行后面紧跟正文块 .comment-content）：
+   正文块会**往上顶**到头部行的下半部分（实测：40px 的行，正文从 y=271 开始，
+   而按钮默认在这行里垂直居中、占 255~279，正好压住正文第一行的尾巴）。
+   这类行里把按钮/标记贴到行顶——行顶那 24px 是空的，正文碰不到。
+   用户报的"查询按钮有时部分遮挡发言"就是这个（快照里 20/23 行如此）。 */
+.head-line:has(+ .comment-content) > .btn-wrapper{align-self:flex-start;padding-top:0;}
 .tb-eztb-badge{
   display:inline-block;padding:0 6px;border-radius:999px;font-size:11px;line-height:17px;
   font-weight:600;white-space:nowrap;cursor:pointer;pointer-events:auto !important;flex:0 0 auto;

@@ -21,11 +21,10 @@ import {
 	readReplyFloorCache,
 } from "../core/replyFloor.ts";
 import {
-	type PostCounts,
-	buildPieSvg,
-	countPosts,
-	emptyCounts,
-	mergeCounts,
+	type ForumCounts,
+	buildForumPieSvg,
+	countPostsByForum,
+	mergeForumCounts,
 	postRowSubParts,
 } from "../core/postStats.ts";
 import { type ForumActivity, loadForumActivity } from "../core/forumActivity.ts";
@@ -678,7 +677,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	const active: PostSubTab = body.dataset.subtab === "reply" ? "reply" : "topic";
 
 	body.innerHTML =
-		// 占比饼图：随已加载的行更新（两个子页签各自取数，先点哪个就先统计哪个）
+		// 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
 		`<div class="tb-eztb-piestat"></div>` +
 		`<div class="tb-eztb-subtabs" role="tablist">` +
 		POST_SUBTABS.map(
@@ -691,15 +690,29 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 				`<div class="tb-eztb-subpane${item.id === active ? " active" : ""}" data-subpane="${item.id}"></div>`,
 		).join("");
 
-	let counts: PostCounts = emptyCounts();
+	let counts: ForumCounts = {};
 	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
 	const updatePie = () => {
-		if (pieEl) pieEl.innerHTML = buildPieSvg(counts);
+		if (pieEl) pieEl.innerHTML = buildForumPieSvg(counts);
 	};
 	updatePie();
 
-	// 首次切到某个子页签时才取数：没点过的那个不会白白发请求
 	const mounted = new Set<PostSubTab>();
+
+	/** 取一页并挂上去（同一个子页签只挂一次）。 */
+	const mount = (id: PostSubTab) => {
+		if (mounted.has(id)) return;
+		mounted.add(id);
+		const pane = body.querySelector<HTMLElement>(
+			`.tb-eztb-subpane[data-subpane="${id}"]`,
+		);
+		if (pane) {
+			mountPostsSubList(pane, identity, id, (rows) => {
+				counts = mergeForumCounts(counts, countPostsByForum(rows));
+				updatePie();
+			});
+		}
+	};
 
 	const activate = (id: PostSubTab) => {
 		body.dataset.subtab = id;
@@ -709,18 +722,18 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 		for (const pane of body.querySelectorAll<HTMLElement>(".tb-eztb-subpane")) {
 			pane.classList.toggle("active", pane.dataset.subpane === id);
 		}
-		if (mounted.has(id)) return;
-		mounted.add(id);
-		const pane = body.querySelector<HTMLElement>(
-			`.tb-eztb-subpane[data-subpane="${id}"]`,
-		);
-		if (pane) {
-			mountPostsSubList(pane, identity, id, (rows) => {
-				counts = mergeCounts(counts, countPosts(rows));
-				updatePie();
-			});
-		}
+		mount(id);
 	};
+
+	/**
+	 * 进「发帖」页签就把**两路 feed 的第一页都取回来**。
+
+	 * 这两个子页签原本是点哪个取哪个（省请求），但饼图现在是按吧统计的：
+	 * 只算主题帖会漏掉一半数据（用户 2026-09-27 反馈"初次点进只统计了发帖的数据"）。
+	 * 代价是进页签时多一次请求，换来饼图一开始就是完整的。
+	 */
+	for (const item of POST_SUBTABS) mount(item.id);
+	activate(active);
 
 	for (const button of body.querySelectorAll<HTMLElement>(".tb-eztb-subtab")) {
 		button.addEventListener("click", () => {
@@ -728,8 +741,6 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 			if (id === "topic" || id === "reply") activate(id);
 		});
 	}
-
-	activate(active);
 }
 
 /**

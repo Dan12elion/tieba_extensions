@@ -6,6 +6,12 @@ node_modules/
 dist/.verify/
 dist/.samples/
 
+# 页面快照：用户把贴吧页面另存到仓库里时会出现，含真实帖子内容、体积也大，不进仓库。
+# 两种保存格式：MHTML（*.mhtml）与「网页，完整」（<标题>.html + <标题>_files/）。
+/*.mhtml
+/*-百度贴吧.html
+/*_files/
+
 # 本机配置（BDUSS 只存在油猴存储里，永远不会写进仓库；这里只是兜底）
 .env
 .env.*
