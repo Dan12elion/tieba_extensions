@@ -78,11 +78,68 @@ function loadSavedPage(htmlPath) {
 		/<script\b[^>]*>[\s\S]*?<\/script>/gi,
 		"<!-- page script removed by page-test -->",
 	);
+	/**
+	 * 再剥掉**我们自己**上一次注入留下的东西。
+
+	 * 用户保存页面时脚本正在运行，所以快照里已经有按钮、`data-tb-eztb-toolbox-done` 标记、
+	 * 成分标记以及**当时那一版**的 `<style>`。不剥掉的话：
+	 *   1. "按钮数达标"会靠旧按钮蒙混过关（扫描器看见标记就跳过，根本不注入）；
+	 *   2. 布局断言量的是旧版 CSS，而不是本次构建的产物。
+	 * 剥干净之后，页面是"原样 DOM + 原样 CSS"，注入与排版都由被测的那份产物决定。
+	 */
+	const withoutOurArtifacts = withoutPageScripts
+		// 我们注入的 <style>（含 tb-eztb 的那个块）
+		.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (block) =>
+			block.includes("tb-eztb") ? "<!-- eztb style removed -->" : block,
+		)
+		// 注入的按钮
+		.replace(
+			/<button\b[^>]*class="[^"]*tb-eztb-btn[^"]*"[^>]*>[\s\S]*?<\/button>/gi,
+			"",
+		)
+		// 标记属性
+		.replace(/\sdata-tb-eztb-toolbox-done(="[^"]*")?/gi, "");
 	return {
-		html: withoutPageScripts,
+		html: stripEztbBadges(withoutOurArtifacts),
 		filesDir,
 		prefixes: [`/${encodeURIComponent(folder)}/`, `/${folder}/`],
 	};
+}
+
+/**
+ * 剥掉成分标记（`.tb-eztb-badges` 里还嵌着若干 `<span>`，正则的非贪婪匹配会只吃掉一半，
+ * 所以手动配对到它自己的闭合标签）。
+ */
+function stripEztbBadges(html) {
+	let out = html;
+	for (let guard = 0; guard < 50; guard += 1) {
+		const marker = out.indexOf("tb-eztb-badges");
+		if (marker < 0) break;
+		const open = out.lastIndexOf("<span", marker);
+		if (open < 0) break;
+		let depth = 0;
+		let cursor = open;
+		let end = -1;
+		while (cursor < out.length) {
+			const nextOpen = out.indexOf("<span", cursor);
+			const nextClose = out.indexOf("</span>", cursor);
+			if (nextClose < 0) break;
+			if (nextOpen >= 0 && nextOpen < nextClose) {
+				depth += 1;
+				cursor = nextOpen + 5;
+				continue;
+			}
+			depth -= 1;
+			cursor = nextClose + 7;
+			if (depth <= 0) {
+				end = cursor;
+				break;
+			}
+		}
+		if (end < 0) break;
+		out = out.slice(0, open) + out.slice(end);
+	}
+	return out;
 }
 
 const MIME_BY_EXT = {
