@@ -1,8 +1,16 @@
 {
+	// 这份配置同时服务两件事：编辑器的 IntelliSense，以及 `tsc --noEmit` 类型检查。
+	// 真正打包走的是 esbuild（见 build.mjs / scripts/shims-plugin.mjs），两者必须对齐：
+	//   - src 里的相对导入带 .ts 后缀（esbuild 直接按路径解析），所以这里要开 allowImportingTsExtensions；
+	//   - `tieba.js` / `tieba.js/generated/*` 是构建期指向上游 SDK 源码的别名（见 shims-plugin.mjs）；
+	//   - `eztb-internal/*` 只被测试入口 src/shims/live-entry.ts 用到，同样是别名；
+	//   - `effect` 从上游 ../eztb 的 node_modules 取——本工程刻意不重复安装依赖。
+	// 改了别名记得两边一起改，否则会出现「包能打出来、类型检查却找不到模块」或者反过来。
 	"compilerOptions": {
 		"target": "ES2020",
 		"module": "ESNext",
 		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
 		"lib": ["ES2020", "DOM", "DOM.Iterable"],
 		"types": [],
 		"strict": true,
@@ -10,7 +18,11 @@
 		"skipLibCheck": true,
 		"baseUrl": ".",
 		"paths": {
-			"tieba.js": ["../eztb/packages/sdk/dist/index.d.ts"]
+			"tieba.js": ["../eztb/packages/sdk/src/index.ts"],
+			"tieba.js/generated/*": ["../eztb/packages/sdk/src/generated/*"],
+			"eztb-internal/userpost-req": ["../eztb/packages/sdk/src/generated/UserPostReqIdl.ts"],
+			"eztb-internal/userpost-res": ["../eztb/packages/sdk/src/generated/UserPostResIdl.ts"],
+			"effect": ["../eztb/node_modules/effect"]
 		}
 	},
 	"include": ["src"]

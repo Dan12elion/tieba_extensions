@@ -2,7 +2,7 @@
 
 > 用途：在新对话中继续这个项目时，先读这份文档即可恢复全部上下文。
 > 最后更新：2026-09-27
-> 当前版本：**1.7.1**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
+> 当前版本：**1.7.2**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
 > （装在油猴里的那条对应 `dist/tieba-eztb-toolbox.user.js`）
 
 ---
@@ -59,8 +59,10 @@ fork 出去的人要用 `EZTB_NAMESPACE` / `EZTB_AUTHOR` 改成自己的。
 ```
 eztb-userscript/
 ├─ build.mjs                    # esbuild 打包 + 拼接油猴元数据
+├─ tsconfig.json                # 类型检查配置（paths 与 shims-plugin 的别名必须一致）
+├─ package.json                 # 版本号：产物元数据的 @version 从这里来
 ├─ README.md                    # 用户向文档（功能、构建、踩坑说明）
-├─ PLAN.md                      # 最初的改造/验证清单
+├─ PLAN.md                      # 立项时的改造/验证清单（已归档，顶部有说明）
 ├─ HANDOFF.md                   # 本文件
 ├─ LICENSE                      # MIT（只覆盖本工程自己的代码）
 ├─ THIRD-PARTY.md               # 内嵌的第三方代码与授权状态（含 SDK 无 LICENSE 的提醒）
@@ -68,6 +70,7 @@ eztb-userscript/
 ├─ .gitignore                   # 忽略 node_modules、dist/.verify、dist/.samples
 ├─ scripts/
 │  ├─ shims-plugin.mjs          # Node→浏览器 的解析替换规则（打包与测试共用）
+│  ├─ typecheck.mjs             # tsc --noEmit（别名、参数形状、字段是否真的存在）
 │  ├─ verify.mjs                # 签名逐字符比对 + 产物检查
 │  ├─ live-test.mjs             # 真实接口连通性测试（EZTB_PROBE=1 开探查）
 │  ├─ click-test.mjs            # 无头浏览器 + 本地代理，真实数据交互测试
@@ -324,6 +327,9 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 | 29 | 「初次点进时饼图有时只统计主题帖」的**时序**成因与取舍 | 回复那一页要按吧反查吧名，而反查当时排在 400ms 的串行队列里：实测 uid 3408054413 主题帖 511ms 到、回复 **8577ms** 才到（`dist/.verify/pierace.mjs`）。这 8 秒里饼图只有主题帖的段，看起来却像完整结果 | ① 图上写明「「回复」的数据还在加载，下面的占比还不完整——到齐后会自动补上」（`buildPieNotes`，两路到齐自动消失）；② 从**主题帖 feed 白捡** id→吧名（它本来就带吧名，实测回复页 12 个唯一吧里能白捡 8 个，零请求成本，`dist/.verify/harvest-value.mjs`）；③ 吧名反查改成有界并发：最多 3 个在飞、间隔取 `max(150ms, 用户设置 ÷ 3)`——**不硬编码忽略用户设置**（默认 400ms 时约 150ms；用户调到 1200ms 时自动放宽到 400ms）。两个 feed 的正文请求仍然严格走串行队列 |
 | 30 | 「复制的吧名缓存第二次不再请求」这条断言一直通过，其实**什么都没测** | 同一个进程里前面已经取过那个用户的回复页，`forumNames` 是热的，量出来「第一次 +0、第二次 +0」——两边相等，断言恒真 | 打断言前先 `clearForumNameCache()`；并且要断言「第一次 > 0 **且** 第二次 == 0」，只写「两次相等」是不够的 |
 | 31 | 一个**变异测试用的临时行**被别人的提交带上了 `main` | 做反向验证时在 `rememberForumNames` 顶部临时插了 `return items; // ★变异测试用`，而协调方那两分钟里正好 `git add -A` 提交并推送 → 那个提交把"白捡吧名"整个关掉（src 与 dist 都提前返回），回复那一路又回到每吧 400ms 串行反查，只是被"数据还在加载"的提示盖住（用户只会觉得"怎么一直慢"） | 发现后立刻撤掉并重建产物（`4946ef3`），并核对用户实际安装的那份 raw 产物里 `rememberForumNames` 是先 harvest 再返回。教训：**变异测试的改动不要在工作区里久留，尤其别跨越并发提交的窗口**——要么在仓库副本里做，要么改完立刻还原并 `git status` 确认干净 |
+| 32 | 复查时又揪出两处小问题：① 某一路"第一页成功、翻后面某页失败"时，饼图旁边仍写「饼图里缺这一路的条数」——可它前面那几页的条数**明明已经算进去了**；② 面板与「成分 / 签到号检测」同时取同一页回复时，吧名反查会各发一遍（实测 9 个吧发了 15 次） | ① `buildPieNotes` 手上没有"这一路有没有已经加载出来的行"这个信息；② `resolveForumNames` 的 `wanted` 是开头算一次的，轮到某个 id 时另一条路径可能已经把它取回来了——**in-flight 去重能挡"同时在飞"的，但挡不住"已经写进缓存、只是不在我的 wanted 快照里"的** | ① `PieFeedState.hasRows`：已经取到过行就改说「后续页没取到（饼图只统计到已经加载出来的那部分）」；② 反查加按 id 去重的 in-flight 表，并且在**取数前**与**等完限速名额后**各回看一次缓存。实测两路并发 15 次 → 9 次（正好等于该页唯一吧数）；live-test 加了一条自归一断言（不去重会是唯一吧数的两倍） |
+| 33 | 提交信息与内容不符，把"文档提交"写成了大杂烩 | `3b183b2` 的信息是 `docs: 把子代理提到的两个小遗留记进「可以继续做的事」`，实际同时带了 #32 的**代码修复**（`postStats.ts` / `userPost.ts` / `userPanel.ts`）、两份测试的改动与重建后的产物。`git log --oneline` 看起来那一版只动了文档，回头查"这个改动是哪个版本引入的"会找错地方 | 已把 §9.2 里那两条（同一提交已经修掉的"遗留"）移走、在 §9.1 补记 #32 的归属；以后 `docs:` 只提交文档，动代码或产物就写 `feat:` / `fix:` |
+| 34 | 仓库里其实**没有可用的类型检查**：`tsc --noEmit` 报 100 多个错 | 根 `tsconfig.json` 只有 `baseUrl` 和一条指向 `../eztb/packages/sdk/dist/index.d.ts` 的 `paths`——那个 `dist` 根本不存在（SDK 是从**源码**消费的）；而 `src` 里的相对导入带 `.ts` 后缀，又用了 `tieba.js` / `tieba.js/generated/*` / `eztb-internal/*` / `effect` 这些构建期别名，`tsc` 一个都解析不到。于是"有 tsconfig"只是摆设，静态检查等于零，只有 esbuild 打包不报错（它不做类型检查）。真正能跑的配置此前只存在于被 gitignore 的 `dist/.verify/tsconfig.check.json` 里 | 把配置并进根 `tsconfig.json`（`allowImportingTsExtensions` + 与 `shims-plugin.mjs` 对齐的 `paths`，并把这份对齐关系写成注释），再加 `scripts/typecheck.mjs`（从上游借 typescript，缺了会给出可读的报错），并写进测试清单。改别名时两边一起改 |
 
 ### 排查方法论（有效，建议沿用）
 
@@ -342,15 +348,16 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 
 ## 6. 测试设施
 
-**五套测试 + 三个工具**，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
+**五套测试 + 一次类型检查 + 三个工具**，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
 
 ```powershell
 cd <本项目目录>
 node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 要求）
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
+node scripts/typecheck.mjs    # 类型检查（tsc --noEmit，借上游的 typescript）
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
-node scripts/keyword-test.mjs # 规则解析/匹配 + 按吧占比与"全部吧列表" + 签到判定 + 发帖行副标题（纯离线，69 项断言）
-node scripts/live-test.mjs    # 真实接口链路（32 项断言）
+node scripts/keyword-test.mjs # 规则解析/匹配 + 按吧占比与"全部吧列表" + 签到判定 + 发帖行副标题（纯离线，70 项断言）
+node scripts/live-test.mjs    # 真实接口链路（33 项断言）
 node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（140 项断言）
 node scripts/fetch-sample-css.mjs  # 换 MHTML 快照后跑一次：抓快照引用的外部 CSS
 node scripts/page-test.mjs    # 真实页面快照回归（1 份「网页，完整」快照 ×2 次运行，34 项断言）
@@ -380,8 +387,11 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 
 - 已装：Node v24、Edge（`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`）
 - **没有** `bun`、**没有** `npm`（不要在方案里依赖安装步骤）
-- page-test 需要快照的 CSS 缓存：`../test0/_css_cache`（首次或换快照后跑一次
-  `node scripts/fetch-sample-css.mjs`）；缺了它布局类断言会失真（见 §5 #15）
+- TypeScript 也从上游借：`../eztb/node_modules/typescript`（`scripts/typecheck.mjs` 用；
+  缺了会直接报出路径，见 §5 #34）
+- page-test 的快照：仓库里的 `dist/.samples/`（「网页，完整」那种自带 `<标题>_files/` 的 CSS，
+  **不需要**额外准备）；如果用的是 **MHTML** 快照，它只存内联样式，得先跑一次
+  `node scripts/fetch-sample-css.mjs` 把外部 CSS 抓到 `../test0/_css_cache`，否则布局类断言会失真（见 §5 #15）
 - esbuild 从上游仓库借用：`../eztb/node_modules/esbuild`；
   依赖（`effect` / `@bufbuild/protobuf` / `long`）也走 `nodePaths` 指向上游 node_modules
 - 上游路径默认是同级的 `../eztb`，可用环境变量覆盖：`$env:EZTB_ROOT = "<上游路径>"`
@@ -459,12 +469,25 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 
 > 版本号为什么到 1.7.1：1.7.0 推上去之后又改过两次产物（先是撤掉误入提交的变异行，见 §5 #31），
 > **同名同版本号用户不会收到更新**，所以任何"产物内容变了"的后续改动都必须提 `@version`。
+> 同样的原因，这一轮收尾又改了一次产物 → 提到了 **1.7.2**（见下面那一段）。
 
 | 需求 | 根因/做法 | 验证 |
 |---|---|---|
 | 「初次点进时饼图**有时**只统计主题帖」 | 回复行的吧名要靠 `getForumName` 反查，反查失败时 `forumName` 是空串，而按吧统计**把空吧名 continue 掉了** → 回复条数整批消失。现在空吧名归到「未知贴吧」（一条不少），反查失败重试一次，某一路 feed 取数失败会在饼图旁边写明缺哪一路（原来错误藏在不显示的子页签里） | keyword-test：空吧名归到「未知贴吧」而不是被跳过；click-test 不变量：**饼图条数 == 两路子页签已加载的行数** |
 | 同上（**"有时"的主因其实是时序**） | 独立子代理用真实计时把这条钉死了：主题帖 511ms 到、回复 **8577ms** 才到——只画着主题帖的窗口有 **8.1 秒**，而它看起来和完整结果一模一样（反查失败率实测≈0，所以"未知贴吧"只是兜底不是主因）。做法：① 没到齐时图上写明「数据还在加载，下面的占比还不完整」；② 从主题帖 feed 白捡吧名（零请求，回复页 12 个唯一吧里白捡 8 个）；③ 反查改成有界并发（最多 3 个、间隔取 `max(150ms, 用户设置÷3)`）。详见 §5 #28/#29。**实测**：回复 8577ms → 1824ms，窗口 8066ms → 1285ms，请求数 11 → 5 | click-test 新增**同步**断言"点开「发帖」的瞬间必须看到加载提示"，另有"两路到齐后提示必须消失"；`live-test` 加了"回复页只反查 3 次（不白捡要 9 次）"，做反向验证时把它自己的变异抓了出来 |
 | 「其它贴吧占比大时，要能看全部吧的占比列表」 | `buildForumStats` / `buildForumListHtml`：饼图下加「查看全部 N 个吧的占比」按钮，展开后每个吧一行（吧名 + 横条 + 条数 + 占比，按条数排序）；展开状态存在面板闭包里（`updatePie` 每次都重建 innerHTML，状态不能放 DOM） | keyword-test 5 项（排序与百分比、"其它"里的吧一个不落、收起态只有按钮、单吧不给按钮、吧名转义）；click-test：按钮存在、展开后每个吧一行且行内有名字/条数/占比、按钮变「收起」、再点收起 |
+| （1.7.1）复查跟着修的两处 | ① 失败提示措辞：已经加载过这一路时改说「后续页没取到」（`PieFeedState.hasRows`）；② 吧名反查加一张 in-flight 表，按 id 去重（面板与成分检测同时取同一页时不再各发一遍）。详见 §5 #32；配套的"取数前回看缓存"是 §9.1 的 1.7.2 那一行 | keyword-test 新增"后续页失败不能说成整路都缺"；live-test 新增"两路并发只反查唯一吧数次" |
+
+**1.7.2 · 1.7.1 的收尾 + 工程整体整理（文档 / 提交 / 类型检查）**：
+
+> 1.7.1 推上仓库之后又补了一处改动（见下），产物内容随之改变，按上面同一条规则提到 1.7.2。
+
+| 事项 | 做法 | 验证 |
+|---|---|---|
+| 吧名反查还剩最后一处重复 | `resolveForumNames` 现在在**取数前**与**等完限速名额后**各回看一次缓存——另一条路径（面板 / 成分检测）可能在"我的 wanted 快照"之后、轮到我之前就已经把那个吧名写进缓存了。in-flight 表只能挡"同时在飞"，挡不住"已经写好了" | live-test「两条路径并发取同一页回复时吧名反查按 id 去重」：该页 9 个吧，两路并发只反查 9 次（不去重会是 18 次） |
+| §5 #33：提交信息与内容不符 | 如实拆分提交（`docs:` 只提交文档）；把 §9.2 里"实际上已经在同一个提交里修掉"的两条遗留删掉 | `git log` 与实际改动对得上 |
+| §5 #34：仓库里没有可用的类型检查 | 根 `tsconfig.json` 补上 `allowImportingTsExtensions` 与和 `shims-plugin.mjs` 对齐的 `paths`，并新增 `scripts/typecheck.mjs`（从上游借 typescript） | `node scripts/typecheck.mjs` 退出码 0；五套测试同时全绿 |
+| 文档与实现对齐 | README 的断言条数、"四个脚本"、快照与 CSS 缓存的说明原来都落后于实现；PLAN.md 标注为已归档清单（顺手改掉它里面把 `getFollow` 写成"关注贴吧"、别名文件名写错这两处） | 逐条对照 `scripts/*.mjs` 的实际断言数与行为 |
 
 **1.6.0 · 饼图改按吧统计 + 两路 feed 一起加载 + 「查询」按钮不再压住正文**（用户 2026-09-27 的三条反馈）：
 
@@ -584,14 +607,12 @@ raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环
   但标记不会出现；可以考虑给这种情况一个"证据不足"的独立标记。
 - V4 / V6 那两项人工验证（带真实 BDUSS 的鉴权接口、真实贴吧页面上的日常使用）
   仍然没做，需要用户在自己的浏览器里装一次。
-- **两条路径同时取同一个人的回复页时，吧名反查会重复少量请求**（面板与成分/签到检测各算一次
-  `wanted`）。吧名缓存是共享的，所以第二次多半已命中；真要抠可以给 `resolveForumNames`
-  加一个"同 id 正在解析"的 in-flight 表（像 `pending` 那种）。不急。
-- 饼图那两种提示的措辞还能再细一点：**第一页成功、后一页失败**时，现在也写「这一路的数据没取到」
-  （严格说是"缺了这一页的条数"）。用户能理解，但不够准。
 - **上传 Greasy Fork（还没做）**：产物已经满足它的硬性要求（未压缩、1.0 MB、元数据齐全），
   直接传 `dist/` 那份即可。用户已经决定把代码公开在 GitHub（`THIRD-PARTY.md` 里写明了
   上游 SDK 没有 LICENSE 这件事）；剩下的是他自己愿不愿意往脚本站再发一份。
+- 饼图那两种提示的措辞还能再细一点：**第一页成功、后一页失败**时，现在写的是
+  「后续页没取到（饼图只统计到已经加载出来的那部分）」（§5 #32 修过一次，比原来准确了，
+  但仍没说清"缺的是哪一页"）。
 
 ### 9.3 明确排除的范围（不要擅自扩大）
 
@@ -614,15 +635,18 @@ raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环
 ## 10. 新对话怎么接着干
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
-2. **改完必须跑五套测试**（`verify` / `keyword-test` / `live-test` / `click-test` / `page-test`），
-当前基线（1.7.0 实测）：verify 39 / keyword-test 69 / live-test 32 / click-test 140 / page-test 34 项全绿；
-   page-test 现在读**仓库根目录下那份网页快照**（已 gitignore），不再需要 `../test0`；
+2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` /
+   `click-test` / `page-test`），当前基线（1.7.2 实测）：typecheck 0 错 / verify 39 /
+   keyword-test 70 / live-test 33 / click-test 140 / page-test 34 项全绿；
+   page-test 读的是仓库里的那份网页快照（`dist/.samples/`，已 gitignore；同级的 `../test0` 也会找），
    快照不在时相关用例会显示"跳过"并注明。
 3. 涉及 DOM 或布局的改动，**加反向验证**：把修复改回去，确认断言会失败。
 4. 涉及协议或数据模型的疑问，**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs`
    或 `node scripts/probe-user.mjs <portrait|ID> [吧名]`，不要凭推测改。
 5. **改完代码要重新构建产物并提交**：`node build.mjs` → 跑测试 → 改 `package.json` 版本号 →
    `git add -A && git commit && git push`（仓库已公开，`main` 直接推）。
+   **只要 `dist/` 的内容变了就必须提 `@version`**——同名同版本号用户收不到更新（见 §9.1 的说明）；
+   另外 `docs:` 就只提交文档，别捎带代码与产物（§5 #33）。
 6. 每次交付都要提醒用户：**重装脚本**（油猴里覆盖，或者用 README 里的 raw 链接）。
 7. 交付时按"用户能感知到什么"来描述（面板多了什么按钮、标记长什么样），
    而不是只报"改了哪个文件"。

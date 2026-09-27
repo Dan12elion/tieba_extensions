@@ -1,5 +1,9 @@
 # eztb-userscript — 改造与验证清单
 
+> **已归档：本文件是立项时的清单，下面每一项都已经落地。**
+> 现状、后续改动、踩过的坑与"新对话怎么接着干"都在 [`HANDOFF.md`](HANDOFF.md)，
+> 那份才是需要持续维护的文档；这里保留下来是为了说明"为什么一开始这么定"。
+
 把 [eztb](https://github.com/Dilettante258/tieba-toolbox) 的核心能力（tieba.js SDK）
 直接编译进油猴脚本，让脚本在贴吧页面上就地查询数据，**不再经过 eztb.org 等任何第三方服务**。
 
@@ -31,14 +35,14 @@
 ### A. 构建工程
 
 - [x] 建立独立仓库（与上游 eztb 仓库并列）
-- [x] esbuild 打包：`--bundle --format=iife --platform=browser --target=es2020 --minify`
-- [x] 三个别名：
-      `--alias:undici=./src/shims/undici-gm.ts`
-      `--alias:node:crypto=./src/shims/md5.ts`
-      `--alias:node-html-parser=./src/shims/html.ts`
+- [x] esbuild 打包：`--bundle --format=iife --platform=browser --target=es2020`
+      （默认**不压缩**——Greasy Fork 要求提交未压缩的可读版，见 README）
+- [x] 依赖替换改用 esbuild 解析插件（`scripts/shims-plugin.mjs`，打包与测试共用同一套规则），
+      而不是最初的 `--alias` 命令行参数：`undici` → `src/shims/undici.ts`、
+      `node:crypto` → `src/shims/md5.ts`、`node-html-parser` → `src/shims/html.ts`
 - [x] 注入 `Buffer` 垫片（全 SDK 仅 `core/http.ts` 一处用到 `Buffer.from`）
 - [x] 构建产物 + 元数据 → 拼出单个 `.user.js`
-- [x] 体积预算 800KB（实际 414.8 KB）
+- [x] 体积预算 800KB（实际约 1.0 MB——为了不压缩牺牲了体积，仍远低于 Greasy Fork 的 2.0 MB 上限）
 
 ### B. 适配点
 
@@ -54,27 +58,27 @@ HTTPS，因此在传输层统一升级协议，避免 HTTPS 页面发起明文�
 
 ### C. 运行时
 
-- [ ] `@connect tiebac.baidu.com`
-- [ ] 限速队列（串行、最小间隔 300–500ms），SDK 层不含限速
-- [ ] BDUSS 入口：`GM_registerMenuCommand` → 输入 → `GM_setValue`
-- [ ] BDUSS 失效识别与重填提示
-- [ ] 结果缓存
+- [x] `@connect tiebac.baidu.com`
+- [x] 限速队列（串行、最小间隔默认 400ms，可配置），SDK 层不含限速
+- [x] BDUSS 入口：`GM_registerMenuCommand` → 输入 → `GM_setValue`
+- [x] BDUSS 失效识别与重填提示
+- [x] 结果缓存（用户资料 7 天；成分结果带规则指纹；吧名 / 楼层 / 吧内等级各有缓存）
 
 ### D. 现有脚本改造
 
 基线脚本：早期那个把 `eztb.org/follow` 内嵌进 iframe 的版本（不在本仓库里）
 
-- [ ] 删除 `EZTB_BASE`、`.tb-eztb-popup*` 样式、`eztbUrl()`、`showEztbPopup()` 的 iframe 逻辑
-- [ ] 弹窗改为自渲染列表
-- [ ] 保留：新旧版 DOM 适配、uid 解析、按钮注入、缓存策略
+- [x] 删除 `EZTB_BASE`、`.tb-eztb-popup*` 样式、`eztbUrl()`、`showEztbPopup()` 的 iframe 逻辑
+- [x] 弹窗改为自渲染列表（现在的 `src/ui/` + `src/features/`）
+- [x] 保留：新旧版 DOM 适配、uid 解析、按钮注入、缓存策略
 
 ### E. 第一版功能（D4：方便做的全上）
 
-- [ ] 用户资料（`getProfile` / `getUserByUid`）
-- [ ] 关注贴吧列表（`getFollow`，支持全量）
-- [ ] 粉丝列表（`getFans`，支持全量）
-- [ ] 收藏/关注贴吧（`getLikeForum` / `getHiddenLikeForum`）
-- [ ] 用户发帖记录（`getUserPost`）
+- [x] 用户资料（`getProfile` / `getUserByUid`）
+- [x] 关注的人（`getFollow`——注意它返回的是**用户**，不是贴吧；分页加载）
+- [x] 粉丝（`getFans`）
+- [x] 关注的吧（`getLikeForum`，空则回退 `getHiddenLikeForum`，带吧内等级）
+- [x] 用户发帖记录（自建 `is_thread` 双 feed：主题帖 / 回复各自分页）
 
 ## 五、验证清单
 
@@ -82,12 +86,12 @@ HTTPS，因此在传输层统一升级协议，避免 HTTPS 页面发起明文�
 | --- | --- | --- |
 | V1 | BDUSS 是否可从 cookie 读取 | 已决定不依赖（D3 手动粘贴） |
 | V2 | 带鉴权的 `POST /c/s/login`（tbs） | 只读方案不需要，跳过 |
-| V3 | 三个别名能否 bundle 成功、体积多少 | 待验 |
-| V4 | 裸 HTML 页面内跑通 `getFollow` | 待验（需用户提供 BDUSS） |
-| V5 | `packRequest` 签名与 Node 版逐字符比对 | 待验 |
-| V6 | 装进油猴，新旧版贴吧页各测一遍 | 待验 |
+| V3 | 三个别名能否 bundle 成功、体积多少 | 已通过（`scripts/verify.mjs` 会自动查产物与体积） |
+| V4 | 裸 HTML 页面内跑通 `getFollow` | 未验证（需要带真实 BDUSS 的鉴权接口，只能由用户在自己的浏览器里试） |
+| V5 | `packRequest` 签名与 Node 版逐字符比对 | 已通过（`scripts/verify.mjs`） |
+| V6 | 装进油猴，新旧版贴吧页各测一遍 | 未验证（同上；`scripts/page-test.mjs` 用真实页面快照覆盖了大部分排版与注入问题） |
 
-> 更新：V3 与 V5 已由 `node scripts/verify.mjs` 自动通过（24 项断言）。
+> 更新：V3 与 V5 已由 `node scripts/verify.mjs` 自动通过（该项目前是 39 项断言）。
 > V4 / V6 需要真实浏览器与有效 BDUSS，仍需人工验证。
 
 > 说明：`https://tiebac.baidu.com` 的 HTTPS 可用性、GM_xhr 的 multipart + arraybuffer 支持，
@@ -99,6 +103,10 @@ HTTPS，因此在传输层统一升级协议，避免 HTTPS 页面发起明文�
 - **M2**：V4 通过 → 协议 + 凭据链路成立
 - **M3**：V6 通过 → 可日常使用
 - **M4**：扩展更多只读功能
+
+> 现实中的推进顺序与此不同：M1 之后直接靠"匿名接口 + 真实数据"把协议链路验通了
+> （`scripts/live-test.mjs`），M4 的只读功能（成分检测、查楼层、签到号、饼图等）也早就做完了；
+> M2/M3 那两项需要真人浏览器里的 BDUSS 才能验，至今没做。
 
 ## 七、明确不做
 

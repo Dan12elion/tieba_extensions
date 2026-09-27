@@ -264,9 +264,18 @@
 ```
 eztb-userscript/
 ├─ build.mjs              # esbuild 打包 + 拼接油猴元数据
+├─ tsconfig.json          # 类型检查配置（paths 与 shims-plugin.mjs 的别名对齐）
+├─ package.json           # 版本号：产物元数据里的 @version 就是它
+├─ HANDOFF.md / PLAN.md   # 交接文档 / 立项时的清单（历史）
 ├─ scripts/
 │  ├─ shims-plugin.mjs    # Node → 浏览器 的解析替换规则（打包与校验共用）
-│  └─ verify.mjs          # 自动校验：MD5 签名、产物检查
+│  ├─ typecheck.mjs       # tsc --noEmit（借上游的 typescript）
+│  ├─ verify.mjs          # MD5 签名逐字符比对 + 产物检查 + Greasy Fork 要求
+│  ├─ keyword-test.mjs    # 纯逻辑离线测试（规则 / 饼图 / 判定）
+│  ├─ live-test.mjs       # 真实接口链路测试
+│  ├─ click-test.mjs      # 无头浏览器 + 本地代理的交互测试
+│  ├─ page-test.mjs       # 真实页面快照回归
+│  └─ fetch-sample-css.mjs / extract-mhtml.mjs / probe-user.mjs  # 一次性排查工具
 ├─ src/
 │  ├─ main.ts             # 入口：注入样式、挂按钮、注册菜单
 │  ├─ core/               # 设置、限速队列、缓存、身份解析、关注的吧、发帖、成分规则
@@ -288,6 +297,7 @@ eztb-userscript/
 $env:EZTB_ROOT = "<上游 eztb 仓库的路径>"   # 可选，默认 ../eztb
 node build.mjs            # 可读版（默认）
 node build.mjs --minify   # 压缩版，写到 dist/tieba-eztb-toolbox.min.user.js
+node scripts/typecheck.mjs   # 类型检查（同样从上游借 typescript）
 node scripts/verify.mjs
 ```
 
@@ -312,19 +322,24 @@ node scripts/verify.mjs
 
 ## 自动校验
 
-四个脚本，都不需要 BDUSS：
+五套测试脚本加一次类型检查，都不需要 BDUSS：
 
 | 命令 | 验证内容 |
 | --- | --- |
+| `node scripts/typecheck.mjs` | 类型检查（`tsc --noEmit`）。别名解析、接口参数形状、字段确实存在——esbuild 只打包不检查，所以这条单列 |
 | `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；以及 Greasy Fork 的发布要求（39 项） |
-| `node scripts/keyword-test.mjs` | 「成分」规则解析、匹配、排除词、证据强弱、高亮转义，以及发帖占比/饼图几何、「疑似只签到」判定与发帖行副标题（楼中楼的「回复了谁」）（59 项，纯离线） |
-| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配、"隐藏关注贴吧"的恢复、"点了才查"的等级（与面板交叉验证）、「查楼层」楼层号（与直接调接口交叉验证）、隐藏发帖记录的不变量、按吧统计的样本、回复页吧名反查的缓存（29 项） |
-| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、关注吧的「查等级」/「检测签到号」按钮与菜单命令、发帖占比饼图、回复正文与「查楼层」、隐藏发帖时的说辞（127 项） |
-| `node scripts/page-test.mjs` | 用真实页面快照（mhtml + 抓下来的 CSS）离线回归：按钮注入、新版头部行的排版约束（66 项） |
+| `node scripts/keyword-test.mjs` | 「成分」规则解析、匹配、排除词、证据强弱、高亮转义，以及发帖占比/饼图几何、「查看全部吧」列表、签到号判定与发帖行副标题（楼中楼的「回复了谁」）（70 项，纯离线） |
+| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配、"隐藏关注贴吧"的恢复、"点了才查"的等级与「查楼层」楼层号（都与直接调接口交叉验证）、隐藏发帖记录的不变量、按吧统计的样本、回复页吧名反查的缓存与去重（33 项） |
+| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、关注吧的「查等级」/「检测签到号」按钮与菜单命令、发帖占比饼图、回复正文与「查楼层」、隐藏发帖时的说辞（140 项） |
+| `node scripts/page-test.mjs` | 用真实页面快照离线回归：按钮注入、新版头部行的排版约束、「查询」按钮与正文不重叠（同一份快照跑正常宽度与 420px 窄容器两遍，34 项） |
 
-> 快照本身不带外部 CSS（MHTML 只存内联样式）。先跑一次
+> page-test 的快照放在仓库根的 `dist/.samples/`（已 gitignore，不进仓库；也可放同级的
+> `../test0`，两个目录都会找）。找不到的用例会明确显示"跳过"并注明，不会假装通过。
+>
+> 只有 **MHTML** 快照会丢外部 CSS（它只存内联样式），那种快照要先跑一次
 > `node scripts/fetch-sample-css.mjs` 把样式抓到 `../test0/_css_cache`（可用 `EZTB_SAMPLE_DIR` / `EZTB_CSS_DIR` 改路径），
-> 否则"标记压住正文"这类布局问题测不出来。
+> 否则"标记压住正文"这类布局问题测不出来；浏览器另存的「网页，完整」快照自带
+> `<标题>_files/` 里的 CSS，不需要这一步。
 
 另有几个一次性的排查工具：
 
