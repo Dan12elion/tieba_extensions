@@ -403,7 +403,8 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 			// 把"为什么有些吧没等级"直接写在界面上（两个原因分别说明，见 userForums.ts）
 			const notes = [
 				hidden ? HIDDEN_FORUMS_NOTE : "",
-				!hidden && missingLevel ? NO_LEVEL_NOTE : "",
+				// 缺等级就说明一次：隐藏关注贴吧的用户同样会看到（F1 精简后不再重复这件事）
+				missingLevel ? NO_LEVEL_NOTE : "",
 				hidden && !identity.profile?.un ? NO_USERNAME_NOTE : "",
 			].filter(Boolean);
 			body.innerHTML =
@@ -528,7 +529,7 @@ const POST_KIND_LABEL: Record<PostKind, string> = {
 
 /** 发帖记录被隐藏时的说明（feed 的 hidePost != 0，见 core/userPost.ts）。 */
 const HIDDEN_POSTS_NOTE =
-	"该用户把发帖记录设成了私密：贴吧接口对两路 feed 都只返回空列表，脚本拿不到任何帖子内容。这不是「没有发过帖」，而是「看不到」——被隐藏的帖子目前没有可取到的接口。";
+	"发帖信息设为私密。";
 
 /**
  * 楼层那一格：已知就显示「N楼」，不知道就给一个「查楼层」按钮（点了才查）。

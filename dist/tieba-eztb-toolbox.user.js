@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.7.2
+// @version             1.7.3
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -29190,9 +29190,9 @@ ${endStackCall}`;
   }
 
   // src/core/userForums.ts
-  var HIDDEN_FORUMS_NOTE = "该用户的关注贴吧没有完整公开。下面这份列表里混入了从用户资料 / 用户面板恢复出来的部分，可能仍然不完整；标了等级的表示这是他在该吧的吧内等级，没标的是资料里只给了吧名。";
-  var NO_USERNAME_NOTE = "注意：该用户没有设置用户名（页面上显示为「贴吧用户_xxxx」这类系统昵称）。贴吧的等级数据只能按用户名查询，所以这个用户的所有吧内等级都查不到——这是贴吧数据源的限制，不是脚本出错。";
-  var NO_LEVEL_NOTE = "没有等级的项来自用户资料里的吧名：贴吧只给了吧名，没有给该吧的等级。";
+  var HIDDEN_FORUMS_NOTE = "该用户的关注贴吧未公开，以下数据从用户数据中还原，可能不完整。";
+  var NO_USERNAME_NOTE = "注意：该用户没有设置用户名，「吧内等级」无法查询。";
+  var NO_LEVEL_NOTE = "部分吧缺少等级信息。";
   async function loadUserForums(id, profileForums = []) {
     let items = [];
     let primaryFailed = false;
@@ -30849,7 +30849,8 @@ ${endStackCall}`;
         const missingLevel = items.length - withLevel;
         const notes = [
           hidden ? HIDDEN_FORUMS_NOTE : "",
-          !hidden && missingLevel ? NO_LEVEL_NOTE : "",
+          // 缺等级就说明一次：隐藏关注贴吧的用户同样会看到（F1 精简后不再重复这件事）
+          missingLevel ? NO_LEVEL_NOTE : "",
           hidden && !identity4.profile?.un ? NO_USERNAME_NOTE : ""
         ].filter(Boolean);
         body.innerHTML = notes.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`).join("") + `<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div><div class="tb-eztb-actions" style="justify-content:flex-start;margin:8px 0;"><button type="button" class="tb-eztb-minibtn" data-act="activity">检测签到号</button><span class="tb-eztb-hint">等级高、最近又不在该吧发言的吧</span></div><div class="tb-eztb-activity"></div><div class="tb-eztb-list">` + items.map(
@@ -30940,7 +30941,7 @@ ${endStackCall}`;
     reply: "回复",
     sub: "楼中楼"
   };
-  var HIDDEN_POSTS_NOTE = "该用户把发帖记录设成了私密：贴吧接口对两路 feed 都只返回空列表，脚本拿不到任何帖子内容。这不是「没有发过帖」，而是「看不到」——被隐藏的帖子目前没有可取到的接口。";
+  var HIDDEN_POSTS_NOTE = "发帖信息设为私密。";
   function renderFloorSlot(post) {
     if (!post.postId) return "";
     const cached4 = readReplyFloorCache(post.threadId, post.postId);

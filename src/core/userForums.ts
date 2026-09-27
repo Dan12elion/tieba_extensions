@@ -44,7 +44,7 @@ export interface UserForums {
 }
 
 export const HIDDEN_FORUMS_NOTE =
-	"该用户的关注贴吧没有完整公开。下面这份列表里混入了从用户资料 / 用户面板恢复出来的部分，可能仍然不完整；标了等级的表示这是他在该吧的吧内等级，没标的是资料里只给了吧名。";
+	"该用户的关注贴吧未公开，以下数据从用户数据中还原，可能不完整。";
 
 /**
  * 为什么有些吧拿不到等级——两个原因，界面上要说清楚，否则看着像 bug。
@@ -56,10 +56,9 @@ export const HIDDEN_FORUMS_NOTE =
  * 而资料接口的 likeForum 字段本身就只给吧名、不给等级。
  */
 export const NO_USERNAME_NOTE =
-	"注意：该用户没有设置用户名（页面上显示为「贴吧用户_xxxx」这类系统昵称）。贴吧的等级数据只能按用户名查询，所以这个用户的所有吧内等级都查不到——这是贴吧数据源的限制，不是脚本出错。";
+	"注意：该用户没有设置用户名，「吧内等级」无法查询。";
 
-export const NO_LEVEL_NOTE =
-	"没有等级的项来自用户资料里的吧名：贴吧只给了吧名，没有给该吧的等级。";
+export const NO_LEVEL_NOTE = "部分吧缺少等级信息。";
 
 export async function loadUserForums(
 	id: number,

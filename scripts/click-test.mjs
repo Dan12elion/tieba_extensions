@@ -625,7 +625,7 @@ const PAGE = `<!doctype html>
         var text = String(pane && pane.textContent);
         var who = String((inPanel('.tb-eztb-title') || {}).textContent || '?') +
           ' / ' + String((inPanel('.tb-eztb-sub') || {}).textContent || '?');
-        add('隐藏了发帖记录时给出了原因提示', /隐藏/.test(text),
+        add('把发帖信息设为私密时给出了原因提示', /私密/.test(text),
             '面板=' + who + ' 内容=' + text.slice(0, 90));
         add('隐藏时不再说"该用户没有公开的主题帖"',
             !/没有公开的主题帖/.test(text), text.slice(0, 130));
@@ -743,10 +743,10 @@ const PAGE = `<!doctype html>
         var forumsText = String(forumsPane && forumsPane.textContent);
         add('「关注的吧」页签列出了恢复出来的吧', ok,
             '共 ' + (forumsPane ? forumsPane.querySelectorAll('.tb-eztb-row').length : 0) + ' 个');
-        add('「关注的吧」页签说明了这是恢复出来的列表',
-            /没有完整公开/.test(forumsText), forumsText.slice(0, 80));
+        add('「关注的吧」页签说明了这是还原出来的列表',
+            /未公开/.test(forumsText), forumsText.slice(0, 80));
         add('「关注的吧」页签说明了等级为什么缺失',
-            /没有设置用户名|只给了吧名/.test(forumsText), forumsText.slice(0, 140));
+            /没有设置用户名|缺少等级信息/.test(forumsText), forumsText.slice(0, 140));
 
         // 「点了才查」的等级：没等级的吧应当带一个按钮，点它去他在该吧的帖子里找
         var levelButtons = forumsPane
