@@ -1,7 +1,7 @@
 # eztb-userscript 项目交接文档
 
 > 新对话继续这个项目时，读完这份就能恢复全部上下文。
-> 最后更新 2026-09-27 · 当前版本 **1.7.3**
+> 最后更新 2026-09-27 · 当前版本 **1.7.4**
 > 仓库（公开）：<https://github.com/Dan12elion/tieba_extensions>
 > 用户装的那条对应 `dist/tieba-eztb-toolbox.user.js`
 
@@ -380,6 +380,18 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 
 ### 9.1 已完成
 
+**1.7.4 · 界面文案（第二批）**
+
+| 位置 | 改后文字 |
+|---|---|
+| 「查询」按钮 hover（`main.ts`） | 查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖 |
+| 设置里「单个列表最多加载页数」的说明（`settingsDialog.ts`） | 每页 20 条。 |
+
+按钮 hover 原来写的是"关注吧 / 粉丝 / **收藏吧**"：术语与面板不一致，而且同一句里
+"关注吧"和"关注的吧"并排容易看成同一个东西。现在统一用页签上的名字
+（关注的人 / 关注的吧）。设置里那句说明原来是"关注吧每页 20 条。50 页约等于 1000 条…"，
+既把页签名写错（每页 20 条的是「关注的人」），又啰嗦，现在只留事实。
+
 **1.7.3 · 界面文案精简（按用户逐条确认的措辞）**
 
 只改用户看得见的文字，逻辑与请求行为不变。这一轮改了 4 条：
@@ -504,7 +516,7 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test`）。
-   当前基线（1.7.3 实测）：typecheck 0 错 / verify 39 / keyword-test 70 / live-test 33 / click-test 140 / page-test 34 全绿。
+   当前基线（1.7.4 实测）：typecheck 0 错 / verify 39 / keyword-test 70 / live-test 33 / click-test 140 / page-test 34 全绿。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。
 4. 涉及协议或数据模型的疑问**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs` 或

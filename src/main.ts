@@ -29,7 +29,7 @@ function createButton(ref: UserRef): HTMLButtonElement {
 	button.type = "button";
 	button.className = BUTTON_CLASS;
 	button.textContent = "查询";
-	button.title = "查看该用户的资料 / 关注吧 / 粉丝 / 收藏吧 / 发帖";
+	button.title = "查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖";
 	buttonRefs.set(button, ref);
 	button.addEventListener("mousedown", (event) => {
 		// 阻止页面的拖拽/框选逻辑抢占鼠标事件

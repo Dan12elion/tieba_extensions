@@ -77,7 +77,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 		`<input id="tb-eztb-maxpages" class="tb-eztb-input" type="number" min="1" step="1" value="${current.maxPagesPerList}">`,
 	);
 	parts.push(
-		`<div class="tb-eztb-hint">关注吧每页 20 条。50 页约等于 1000 条，够用且不至于误点造成大量请求。</div>`,
+		`<div class="tb-eztb-hint">每页 20 条。</div>`,
 	);
 	parts.push(`</div>`);
 
