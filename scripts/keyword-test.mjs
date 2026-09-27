@@ -18,17 +18,27 @@ const esbuild = require(path.join(eztbRoot, "node_modules/esbuild"));
 const outDir = path.join(projectRoot, "dist/.verify");
 fs.mkdirSync(outDir, { recursive: true });
 const outFile = path.join(outDir, "composition.mjs");
-await esbuild.build({
-	entryPoints: [path.join(projectRoot, "src/core/composition.ts")],
-	bundle: true,
-	format: "esm",
-	platform: "neutral",
-	target: ["es2020"],
-	outfile: outFile,
-	nodePaths: [path.join(eztbRoot, "node_modules")],
-	plugins: [createShimPlugin({ projectRoot, eztbRoot })],
-	logLevel: "silent",
-});
+
+/** 一个纯逻辑模块 → 一个可 import 的 ESM 包（与线上跑的是同一份代码） */
+async function bundle(source, name) {
+	const file = path.join(outDir, name);
+	await esbuild.build({
+		entryPoints: [path.join(projectRoot, source)],
+		bundle: true,
+		format: "esm",
+		platform: "neutral",
+		target: ["es2020"],
+		outfile: file,
+		nodePaths: [path.join(eztbRoot, "node_modules")],
+		plugins: [createShimPlugin({ projectRoot, eztbRoot })],
+		logLevel: "silent",
+	});
+	return import(pathToFileURL(file).href);
+}
+
+await bundle("src/core/composition.ts", "composition.mjs");
+const postStats = await bundle("src/core/postStats.ts", "postStats.mjs");
+const activityRule = await bundle("src/core/activityRule.ts", "activityRule.mjs");
 
 const {
 	parseRules,
@@ -323,6 +333,251 @@ console.log("高亮与截取");
 		"截取命中位置前后并带省略号",
 		excerpt.includes("原神") && excerpt.startsWith("…") && excerpt.endsWith("…"),
 		excerpt,
+	);
+}
+
+// ── 「发帖所在吧」= 规则的第 6 列 ─────────────────────────────────────
+console.log("发帖所在吧（规则第 6 列）");
+{
+	const rules = parseRules(
+		[
+			"🛒带货 | | | | | 拼多多,淘宝",
+			"老规则 | 关键词 | 某个吧 | 排除词 | 1234567890",
+			"尾分隔符的老规则 | 关键词 | 某个吧 | 排除词 | 1234567890 | ",
+		].join("\n"),
+	);
+
+	check(
+		"第 6 段解析成 postForumKeywords",
+		rules[0].postForumKeywords.join(",") === "拼多多,淘宝",
+		JSON.stringify(rules[0].postForumKeywords),
+	);
+	check(
+		"老规则（5 段）的列序不变",
+		rules[1].postKeywords.join(",") === "关键词" &&
+			rules[1].forumKeywords.join(",") === "某个吧" &&
+			rules[1].excludes.join(",") === "排除词" &&
+			rules[1].uids.join(",") === "1234567890" &&
+			rules[1].postForumKeywords.length === 0,
+		JSON.stringify(rules[1]),
+	);
+	check(
+		"老规则末尾多写一个分隔符也不会被误读成第 6 列",
+		rules[2].excludes.join(",") === "排除词" &&
+			rules[2].uids.join(",") === "1234567890" &&
+			rules[2].postForumKeywords.length === 0,
+		JSON.stringify(rules[2]),
+	);
+	check(
+		"改第 6 列会让规则指纹变化（旧缓存自动失效）",
+		hashRules("带货 | | | | | 拼多多") !== hashRules("带货 | | | | | 淘宝"),
+	);
+
+	const topicHit = matchComposition(
+		{
+			uid: "",
+			forums: [],
+			posts: [
+				{
+					title: "转卖这个",
+					preview: "便宜出",
+					kind: "topic",
+					forumName: "拼多多吧",
+				},
+			],
+		},
+		parseRules("🛒带货 | | | | | 拼多多"),
+	);
+	check(
+		"在他发过主题帖的吧命中，且算强证据",
+		topicHit.length === 1 &&
+			topicHit[0].sure &&
+			topicHit[0].evidences.some((item) => item.source === "postForum"),
+		topicHit[0]?.summary ?? "没有命中",
+	);
+
+	const replyOnly = matchComposition(
+		{
+			uid: "",
+			forums: [],
+			posts: [
+				{
+					title: "回复：求推荐",
+					preview: "我也买过",
+					kind: "reply",
+					forumName: "拼多多吧",
+				},
+			],
+		},
+		parseRules("🛒带货 | | | | | 拼多多"),
+	);
+	check(
+		"只在回复里出现该吧 → 命中但只是弱证据",
+		replyOnly.length === 1 && !replyOnly[0].sure,
+		replyOnly[0]?.summary ?? "没有命中",
+	);
+
+	const excluded = matchComposition(
+		{
+			uid: "",
+			forums: [],
+			posts: [
+				{
+					title: "转卖这个",
+					preview: "便宜出",
+					kind: "topic",
+					forumName: "拼多多吧",
+				},
+			],
+		},
+		parseRules("🛒带货 | | | 拼多多吧 | | 拼多多"),
+	);
+	check("排除词对「发帖所在吧」同样生效", excluded.length === 0, "仍然命中");
+
+	const untouched = matchComposition(
+		{
+			uid: "",
+			forums: ["拼多多吧"],
+			posts: [
+				{ title: "t", preview: "p", kind: "topic", forumName: "别的吧" },
+			],
+		},
+		parseRules("🛒带货 | | | | | 拼多多"),
+	);
+	check(
+		"关注了吧但没在那儿发过帖：第 6 列不命中",
+		untouched.length === 0,
+		untouched[0]?.summary ?? "没有命中",
+	);
+}
+
+// ── 占比饼图：纯计算，边界比图形更值得钉 ─────────────────────────────
+console.log("发帖 / 回复占比");
+{
+	const { countPosts, buildPieSlices, buildPieSvg, totalCount, mergeCounts } =
+		postStats;
+
+	const counts = countPosts([
+		{ kind: "topic" },
+		{ kind: "topic" },
+		{ kind: "reply" },
+		{ kind: "sub" },
+	]);
+	check(
+		"按类型计数",
+		counts.topic === 2 && counts.reply === 1 && counts.sub === 1,
+		JSON.stringify(counts),
+	);
+	check(
+		"两批行可以累加（翻页时用）",
+		totalCount(
+			mergeCounts({ topic: 1, reply: 0, sub: 0 }, {
+				topic: 1,
+				reply: 2,
+				sub: 0,
+			}),
+		) === 4,
+	);
+
+	const slices = buildPieSlices({ topic: 3, reply: 1, sub: 0 });
+	check(
+		"占比按总数算，保留一位小数",
+		slices[0].percentText === "75.0%" && slices[1].percentText === "25.0%",
+		slices.map((item) => item.percentText).join(" / "),
+	);
+	check(
+		"占比之和为 1",
+		Math.abs(slices.reduce((sum, item) => sum + item.fraction, 0) - 1) < 1e-9,
+	);
+
+	const empty = buildPieSlices({ topic: 0, reply: 0, sub: 0 });
+	check(
+		"一条数据都没有时占比是 0（不会算出 NaN）",
+		empty.every((item) => item.fraction === 0 && item.percentText === "0.0%"),
+		empty.map((item) => item.percentText).join(" / "),
+	);
+	check(
+		"没有数据时画的是一句说明，而不是空饼",
+		buildPieSvg({ topic: 0, reply: 0, sub: 0 }).includes("还没有加载到发帖记录"),
+	);
+
+	const circumference = 2 * Math.PI * 46;
+	const onlyTopic = buildPieSvg({ topic: 60, reply: 0, sub: 0 });
+	const onlyTopicArcs = onlyTopic.match(/class="tb-eztb-pie-slice"/g) ?? [];
+	check(
+		"只有一个分类时只画一段（不会因为起终点重合而崩）",
+		onlyTopicArcs.length === 1 && !onlyTopic.includes("NaN"),
+		`${onlyTopicArcs.length} 段`,
+	);
+
+	const threeKinds = buildPieSvg({ topic: 60, reply: 30, sub: 10 });
+	const dash = Array.from(
+		threeKinds.matchAll(/stroke-dasharray="([\d.]+) ([\d.]+)"/g),
+	);
+	const lens = dash.map((item) => Number(item[1]));
+	check(
+		"三段弧长加起来等于整圈（不重不漏）",
+		dash.length === 3 &&
+			Math.abs(lens.reduce((sum, value) => sum + value, 0) - circumference) < 1,
+		`${dash.length} 段 / 合计 ${lens.reduce((sum, value) => sum + value, 0).toFixed(2)} / 整圈 ${circumference.toFixed(2)}`,
+	);
+	check(
+		"图例写了条数与百分比",
+		threeKinds.includes("楼中楼") &&
+			threeKinds.includes("10.0%") &&
+			!threeKinds.includes("NaN"),
+	);
+}
+
+// ── 签到号判定（等级高但几乎不发言） ──────────────────────────────────
+console.log("签到号判定");
+{
+	const { countPostsByForum, findSignInForums, signInSummary } = activityRule;
+
+	check(
+		"按吧统计发言条数，空吧名不计入",
+		JSON.stringify(countPostsByForum([
+			{ forumName: "百度" },
+			{ forumName: "百度" },
+			{ forumName: "" },
+			{ forumName: "贴吧" },
+		])) === JSON.stringify({ 百度: 2, 贴吧: 1 }),
+	);
+
+	const forums = [
+		{ name: "百度", level: 12 },
+		{ name: "贴吧", level: 12 },
+		{ name: "原神" },
+		{ name: "冷吧", level: 2 },
+	];
+	const byForum = { 百度: 0, 贴吧: 5, 原神: 0, 冷吧: 0 };
+	const candidates = findSignInForums(forums, byForum, 6);
+	check(
+		"只挑「等级达标 + 该吧 0 条发言」",
+		candidates.length === 1 && candidates[0].forumName === "百度",
+		JSON.stringify(candidates),
+	);
+	check(
+		"没有等级的吧不参与判断（未知不等于达标）",
+		!candidates.some((item) => item.forumName === "原神"),
+	);
+	check(
+		"提高门槛后原来的候选不再算",
+		findSignInForums(forums, byForum, 13).length === 0,
+	);
+
+	const text = signInSummary(candidates, 6, { topics: 60, replies: 60 });
+	check(
+		"结论里写明了判定条件与样本大小（不许说成「从来不发言」）",
+		text.includes("Lv.12") &&
+			text.includes("≥ 6") &&
+			text.includes("主题帖 60 条") &&
+			text.includes("回复 60 条"),
+		text,
+	);
+	check(
+		"没有候选时也给一句明确的话",
+		signInSummary([], 6, { topics: 0, replies: 0 }).includes("没有发现"),
 	);
 }
 

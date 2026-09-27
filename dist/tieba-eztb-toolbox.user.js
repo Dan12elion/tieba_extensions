@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.4.1
+// @version             1.5.0
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -156,7 +156,8 @@
     compositionRules: "",
     compositionAuto: true,
     compositionMaxPerPage: 20,
-    compositionCacheDays: 3
+    compositionCacheDays: 3,
+    signInLevelThreshold: 6
   };
   var cache = null;
   function readRaw() {
@@ -189,6 +190,10 @@
       next4.compositionCacheDays = DEFAULT_SETTINGS.compositionCacheDays;
     }
     if (next4.compositionCacheDays > 365) next4.compositionCacheDays = 365;
+    if (!Number.isFinite(next4.signInLevelThreshold) || next4.signInLevelThreshold < 1) {
+      next4.signInLevelThreshold = DEFAULT_SETTINGS.signInLevelThreshold;
+    }
+    if (next4.signInLevelThreshold > 18) next4.signInLevelThreshold = 18;
     next4.compositionAuto = next4.compositionAuto !== false;
     cache = next4;
     try {
@@ -261,12 +266,14 @@
 
   // src/core/composition.ts
   var LIST_SEPARATOR = /[,，;；]+/;
-  var RULE_FORMAT_HINT = "每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省)；关键词用逗号分隔，`#` 开头是注释。";
+  var RULE_FORMAT_HINT = "每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释。";
   var EXAMPLE_RULES = [
     "# 每行一条规则，示例如下（可以直接改成你要的词）",
-    "# 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省)",
+    "# 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)",
     "🎮原神 | 原神,芙宁娜,米哈游 | 原神吧,米哈游吧 | 原神怎么你了",
     "🎁抽奖 | 互动抽奖,转发本条动态 | 抽奖吧",
+    "# 最后一段看的是他实际在哪个吧发过言，与关注了哪个吧是两回事",
+    "🛒带货 | | | | | 拼多多,淘宝",
     "⚠️示例名单 | | | | 1234567890"
   ].join("\n");
   function splitList(value) {
@@ -297,9 +304,10 @@
         postKeywords: splitList(parts2[1]),
         forumKeywords: splitList(parts2[2]),
         excludes: splitList(parts2[3]),
-        uids: splitList(parts2[4])
+        uids: splitList(parts2[4]),
+        postForumKeywords: splitList(parts2[5])
       };
-      if (!rule.postKeywords.length && !rule.forumKeywords.length && !rule.uids.length) {
+      if (!rule.postKeywords.length && !rule.forumKeywords.length && !rule.postForumKeywords.length && !rule.uids.length) {
         continue;
       }
       const key = name.toLowerCase();
@@ -371,6 +379,23 @@
         });
         break;
       }
+      let postForumEvidence = null;
+      for (const post of input.posts) {
+        const name = String(post.forumName ?? "").trim();
+        if (!name || isExcluded(name, rule.excludes)) continue;
+        const keyword = firstKeyword(name, rule.postForumKeywords);
+        if (!keyword) continue;
+        const evidence = {
+          source: "postForum",
+          keyword,
+          reason: `在「${name}」发过帖`,
+          excerpt: [post.title, post.preview].filter(Boolean).join(" ").slice(0, 60),
+          sure: post.kind === "topic"
+        };
+        postForumEvidence = evidence;
+        if (evidence.sure) break;
+      }
+      if (postForumEvidence) evidences.push(postForumEvidence);
       let postEvidence = null;
       for (const post of input.posts) {
         const text = [post.title, post.preview].filter(Boolean).join(" ");
@@ -29247,38 +29272,57 @@ ${endStackCall}`;
       if (errorno) {
         throw new TiebaServerError(errorno, decoded?.error?.errmsg ?? "");
       }
-      return decoded?.data?.postList ?? [];
+      return {
+        postList: decoded?.data?.postList ?? [],
+        hidden: toNumber(decoded?.data?.hidePost) > 0
+      };
     });
   }
   function textOf(contents) {
     if (!Array.isArray(contents)) return "";
     return contents.map((item) => item?.text ?? "").join("").replace(/\s+/g, " ").trim();
   }
-  async function loadTopicRows(uid, page) {
+  async function loadTopicPage(uid, page) {
     const raw = await fetchRaw(uid, 1, page);
-    return raw.map((item) => ({
-      kind: "topic",
-      threadId: String(item.threadId ?? ""),
-      title: item.title || "",
-      preview: textOf(item.firstPostContent),
-      forumName: item.forumName || "",
-      createTime: toNumber(item.createTime)
-    }));
+    return {
+      hidden: raw.hidden,
+      rows: raw.postList.map((item) => ({
+        kind: "topic",
+        threadId: String(item.threadId ?? ""),
+        postId: String(item.postId ?? ""),
+        title: item.title || "",
+        preview: textOf(item.firstPostContent),
+        forumName: item.forumName || "",
+        createTime: toNumber(item.createTime)
+      }))
+    };
   }
-  async function loadReplyRows(uid, page) {
+  async function loadReplyPage(uid, page) {
     const raw = await fetchRaw(uid, 0, page);
     const posts = await requestQueue.run(async () => {
-      const result = processUserPosts(raw, true);
+      const result = processUserPosts(raw.postList, true);
       return await Effect_exports.runPromise(result);
     });
-    return (posts ?? []).map((post) => ({
-      kind: post.affiliated ? "sub" : "reply",
-      threadId: String(post.threadId ?? ""),
-      title: post.title || post.content || "",
-      preview: post.content || "",
-      forumName: post.forumName || "",
-      createTime: toNumber(post.createTime)
-    }));
+    return {
+      hidden: raw.hidden,
+      rows: (posts ?? []).map((post) => ({
+        kind: post.affiliated ? "sub" : "reply",
+        threadId: String(post.threadId ?? ""),
+        // 楼中楼的 pid 指向那条楼中楼本身，/c/f/pb/floor 会回它所在的那一楼
+        postId: String(post.postId ?? ""),
+        title: post.title || post.content || "",
+        preview: post.content || "",
+        forumName: post.forumName || "",
+        createTime: toNumber(post.createTime),
+        replyTo: post.replyTo || void 0
+      }))
+    };
+  }
+  async function loadTopicRows(uid, page) {
+    return (await loadTopicPage(uid, page)).rows;
+  }
+  async function loadReplyRows(uid, page) {
+    return (await loadReplyPage(uid, page)).rows;
   }
 
   // src/core/compositionDetect.ts
@@ -29305,12 +29349,20 @@ ${endStackCall}`;
         stat.failed.push(`关注的吧：${errorMessage(error)}`);
       }
     }
-    if (rules.some((rule) => rule.postKeywords.length)) {
+    const needPosts = rules.some(
+      (rule) => rule.postKeywords.length || rule.postForumKeywords.length
+    );
+    if (needPosts) {
       try {
         const rows = await loadTopicRows(target.id, 1);
         stat.topics = rows.length;
         for (const row of rows) {
-          posts.push({ title: row.title, preview: row.preview, kind: "topic" });
+          posts.push({
+            title: row.title,
+            preview: row.preview,
+            kind: "topic",
+            forumName: row.forumName
+          });
         }
       } catch (error) {
         stat.failed.push(`主题帖：${errorMessage(error)}`);
@@ -29322,7 +29374,8 @@ ${endStackCall}`;
           posts.push({
             title: row.title,
             preview: row.preview,
-            kind: row.kind === "sub" ? "sub" : "reply"
+            kind: row.kind === "sub" ? "sub" : "reply",
+            forumName: row.forumName
           });
         }
       } catch (error) {
@@ -29658,6 +29711,209 @@ ${endStackCall}`;
     };
   }
 
+  // src/core/replyFloor.ts
+  var CACHE_KEY4 = "tbEztbToolboxReplyFloorV1";
+  var CACHE_MAX4 = 800;
+  var memory4 = /* @__PURE__ */ new Map();
+  var disk4 = loadDisk4();
+  function loadDisk4() {
+    try {
+      const stored = GM_getValue(
+        CACHE_KEY4,
+        {}
+      );
+      return stored && typeof stored === "object" ? stored : {};
+    } catch {
+      return {};
+    }
+  }
+  var cacheKey2 = (threadId, postId) => `${threadId}:${postId}`;
+  function readReplyFloorCache(threadId, postId) {
+    const key = cacheKey2(threadId, postId);
+    const hit = memory4.get(key) ?? disk4[key];
+    if (!hit || !(hit.floor > 0)) return null;
+    return hit;
+  }
+  function writeReplyFloorCache(threadId, postId, floor, excerpt) {
+    const value = { floor, excerpt, ts: Date.now() };
+    memory4.set(cacheKey2(threadId, postId), value);
+    disk4[cacheKey2(threadId, postId)] = value;
+    const keys5 = Object.keys(disk4);
+    if (keys5.length > CACHE_MAX4) {
+      keys5.sort((a, b) => (disk4[a].ts ?? 0) - (disk4[b].ts ?? 0));
+      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX4)) {
+        delete disk4[stale];
+      }
+    }
+    try {
+      GM_setValue(CACHE_KEY4, disk4);
+    } catch {
+    }
+    return value;
+  }
+  function clearReplyFloorCache() {
+    memory4.clear();
+    disk4 = {};
+    try {
+      GM_setValue(CACHE_KEY4, {});
+    } catch {
+    }
+  }
+  function contentText(contents) {
+    if (!Array.isArray(contents)) return "";
+    return contents.map((item) => item?.text ?? "").join("").replace(/\s+/g, " ").trim();
+  }
+  async function fetchReplyFloor(threadId, postId) {
+    const tid = toNumber(threadId);
+    const pid = toNumber(postId);
+    if (!tid || !pid) {
+      return { reason: "这条记录没有楼层可查（缺 threadId / postId）" };
+    }
+    const cached4 = readReplyFloorCache(threadId, postId);
+    if (cached4) {
+      return {
+        floor: cached4.floor,
+        excerpt: cached4.excerpt,
+        via: "cache"
+      };
+    }
+    try {
+      const data = await callSdkLoose(
+        () => getComments({ tid, pid, pn: 1 })
+      );
+      const floor = toNumber(data?.post?.floor);
+      if (!(floor > 0)) {
+        return {
+          reason: "贴吧没有返回楼层号（这一楼可能已被删除）"
+        };
+      }
+      const entry = writeReplyFloorCache(
+        threadId,
+        postId,
+        floor,
+        contentText(data?.post?.content)
+      );
+      return { floor: entry.floor, excerpt: entry.excerpt, via: "request" };
+    } catch (error) {
+      return { reason: errorMessage(error) };
+    }
+  }
+
+  // src/core/activityRule.ts
+  function countPostsByForum(rows) {
+    const out = {};
+    for (const row of rows) {
+      const name = String(row.forumName ?? "").trim();
+      if (!name) continue;
+      out[name] = (out[name] ?? 0) + 1;
+    }
+    return out;
+  }
+  function findSignInForums(forums, byForum, levelThreshold) {
+    const threshold = Number.isFinite(levelThreshold) ? levelThreshold : 6;
+    const out = [];
+    for (const forum of forums) {
+      const level = Number(forum.level ?? 0);
+      if (!(level >= threshold)) continue;
+      const posts = Number(byForum[forum.name] ?? 0);
+      if (posts > 0) continue;
+      out.push({ forumName: forum.name, level, posts });
+    }
+    return out.sort((a, b) => b.level - a.level);
+  }
+  function signInSummary(candidates, levelThreshold, sample) {
+    const sampleText = `样本：最近一页发帖（主题帖 ${sample.topics} 条 + 回复 ${sample.replies} 条）`;
+    if (!candidates.length) {
+      return `没有发现「等级 ≥ ${levelThreshold} 但最近没在该吧发言」的吧。判定条件：吧内等级 ≥ ${levelThreshold}，且最近这批帖子里在该吧 0 条发言。${sampleText}。`;
+    }
+    const names = candidates.slice(0, 5).map((item) => `${item.forumName}(Lv.${item.level})`).join("、");
+    return `疑似只签到 ${candidates.length} 个吧：${names}${candidates.length > 5 ? " 等" : ""}。判定条件：吧内等级 ≥ ${levelThreshold}，且最近这批帖子里在该吧 0 条发言。${sampleText}——所以也可能是"以前发言多、最近没来"，请结合其它信息判断。`;
+  }
+
+  // src/core/forumActivity.ts
+  var CACHE_KEY5 = "tbEztbToolboxForumActivityV1";
+  var CACHE_MAX5 = 300;
+  var TTL_MS = 24 * 60 * 60 * 1e3;
+  var memory5 = /* @__PURE__ */ new Map();
+  var disk5 = loadDisk5();
+  function loadDisk5() {
+    try {
+      const stored = GM_getValue(CACHE_KEY5, {});
+      return stored && typeof stored === "object" ? stored : {};
+    } catch {
+      return {};
+    }
+  }
+  function readForumActivityCache(uid, maxAgeMs = TTL_MS) {
+    const key = String(uid);
+    const hit = memory5.get(key) ?? disk5[key];
+    if (!hit) return null;
+    if (Date.now() - (hit.ts ?? 0) > maxAgeMs) return null;
+    if (hit.hidden) return null;
+    return hit;
+  }
+  function writeForumActivityCache(uid, value) {
+    const key = String(uid);
+    memory5.set(key, value);
+    disk5[key] = value;
+    const keys5 = Object.keys(disk5);
+    if (keys5.length > CACHE_MAX5) {
+      keys5.sort((a, b) => (disk5[a].ts ?? 0) - (disk5[b].ts ?? 0));
+      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX5)) {
+        delete disk5[stale];
+      }
+    }
+    try {
+      GM_setValue(CACHE_KEY5, disk5);
+    } catch {
+    }
+  }
+  function clearForumActivityCache() {
+    memory5.clear();
+    disk5 = {};
+    try {
+      GM_setValue(CACHE_KEY5, {});
+    } catch {
+    }
+  }
+  async function loadForumActivity(uid, force = false) {
+    if (!force) {
+      const cached4 = readForumActivityCache(uid);
+      if (cached4) return cached4;
+    }
+    const failed = [];
+    const rows = [];
+    let topics = 0;
+    let replies = 0;
+    let hidden = false;
+    try {
+      const page = await loadTopicPage(uid, 1);
+      topics = page.rows.length;
+      hidden = hidden || page.hidden;
+      rows.push(...page.rows);
+    } catch (error) {
+      failed.push(`主题帖：${errorMessage(error)}`);
+    }
+    try {
+      const page = await loadReplyPage(uid, 1);
+      replies = page.rows.length;
+      hidden = hidden || page.hidden;
+      rows.push(...page.rows);
+    } catch (error) {
+      failed.push(`回复：${errorMessage(error)}`);
+    }
+    const value = {
+      byForum: countPostsByForum(rows),
+      topics,
+      replies,
+      hidden,
+      failed,
+      ts: Date.now()
+    };
+    if (!failed.length && !hidden) writeForumActivityCache(uid, value);
+    return value;
+  }
+
   // src/ui/modal.ts
   function openDialog(options) {
     closeOpenDialog();
@@ -29825,11 +30081,22 @@ ${endStackCall}`;
       `<div class="tb-eztb-hint">同一个用户在这段时间内不再重复查询；改规则会让缓存自动失效。</div>`
     );
     parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-signin-level">「疑似只签到」的等级门槛</label>`);
+    parts2.push(
+      `<input id="tb-eztb-signin-level" class="tb-eztb-input" type="number" min="1" max="18" step="1" value="${current.signInLevelThreshold}">`
+    );
+    parts2.push(
+      `<div class="tb-eztb-hint">「关注的吧」里的「检测签到号」用它判定：吧内等级 ≥ 这个值，且最近一页发帖里在该吧 0 条发言，就标成疑似只签到。</div>`
+    );
+    parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-actions">`);
     parts2.push(`<button data-act="help">打开辅助获取网址</button>`);
     parts2.push(`<button data-act="clear">清空资料缓存</button>`);
     parts2.push(`<button data-act="clear-composition">清空成分缓存</button>`);
     parts2.push(`<button data-act="clear-forum-level">清空吧内等级缓存</button>`);
+    parts2.push(`<button data-act="clear-reply-floor">清空楼层缓存</button>`);
+    parts2.push(`<button data-act="clear-activity">清空签到检测缓存</button>`);
     parts2.push(`<button data-act="save" class="primary">保存</button>`);
     parts2.push(`</div>`);
     parts2.push(`</div>`);
@@ -29848,7 +30115,8 @@ ${endStackCall}`;
         compositionRules: rawValue("tb-eztb-rules").trim(),
         compositionAuto: value("tb-eztb-composition-auto") !== "0",
         compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
-        compositionCacheDays: Number(value("tb-eztb-cachedays"))
+        compositionCacheDays: Number(value("tb-eztb-cachedays")),
+        signInLevelThreshold: Number(value("tb-eztb-signin-level"))
       };
     };
     const textarea = () => dialog.body.querySelector("#tb-eztb-rules");
@@ -29882,6 +30150,20 @@ ${endStackCall}`;
       clearForumLevelCache();
       const button = dialog.body.querySelector(
         '[data-act="clear-forum-level"]'
+      );
+      if (button) button.textContent = "已清空";
+    });
+    dialog.body.querySelector('[data-act="clear-reply-floor"]')?.addEventListener("click", () => {
+      clearReplyFloorCache();
+      const button = dialog.body.querySelector(
+        '[data-act="clear-reply-floor"]'
+      );
+      if (button) button.textContent = "已清空";
+    });
+    dialog.body.querySelector('[data-act="clear-activity"]')?.addEventListener("click", () => {
+      clearForumActivityCache();
+      const button = dialog.body.querySelector(
+        '[data-act="clear-activity"]'
       );
       if (button) button.textContent = "已清空";
     });
@@ -30124,15 +30406,88 @@ ${endStackCall}`;
     console.log("[eztb] 页面诊断\n" + report);
   }
 
+  // src/core/postStats.ts
+  var POST_KIND_ORDER = ["topic", "reply", "sub"];
+  var POST_KIND_TEXT2 = {
+    topic: "主题帖",
+    reply: "回复",
+    sub: "楼中楼"
+  };
+  var POST_KIND_COLOR = {
+    topic: "#1677ff",
+    reply: "#8a8f99",
+    sub: "#e8a33d"
+  };
+  function emptyCounts() {
+    return { topic: 0, reply: 0, sub: 0 };
+  }
+  function countPosts(rows) {
+    const counts = emptyCounts();
+    for (const row of rows) {
+      if (row.kind === "topic") counts.topic += 1;
+      else if (row.kind === "reply") counts.reply += 1;
+      else if (row.kind === "sub") counts.sub += 1;
+    }
+    return counts;
+  }
+  function mergeCounts(a, b) {
+    return {
+      topic: a.topic + b.topic,
+      reply: a.reply + b.reply,
+      sub: a.sub + b.sub
+    };
+  }
+  function totalCount(counts) {
+    return counts.topic + counts.reply + counts.sub;
+  }
+  function buildPieSlices(counts) {
+    const total = totalCount(counts);
+    return POST_KIND_ORDER.map((key) => {
+      const count3 = counts[key];
+      const fraction = total > 0 ? count3 / total : 0;
+      return {
+        key,
+        label: POST_KIND_TEXT2[key],
+        count: count3,
+        color: POST_KIND_COLOR[key],
+        fraction,
+        percentText: `${(fraction * 100).toFixed(1)}%`
+      };
+    });
+  }
+  var RADIUS = 46;
+  var STROKE = 18;
+  var CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  function buildPieSvg(counts) {
+    const slices = buildPieSlices(counts);
+    const total = totalCount(counts);
+    if (!total) {
+      return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle cx="60" cy="60" r="${RADIUS}" fill="none" stroke="#eef0f3" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
+    }
+    let acc = 0;
+    const arcs = slices.filter((slice) => slice.count > 0).map((slice) => {
+      const length2 = slice.fraction * CIRCUMFERENCE;
+      const gap = CIRCUMFERENCE - length2;
+      const offset = -acc;
+      acc += length2;
+      return `<circle class="tb-eztb-pie-slice" cx="60" cy="60" r="${RADIUS}" fill="none" stroke="${slice.color}" stroke-width="${STROKE}" stroke-dasharray="${length2.toFixed(3)} ${gap.toFixed(3)}" stroke-dashoffset="${offset.toFixed(3)}" data-kind="${slice.key}"><title>${slice.label} ${slice.count} 条（${slice.percentText}）</title></circle>`;
+    }).join("");
+    const legend = slices.map(
+      (slice) => `<span class="tb-eztb-pie-item" data-kind="${slice.key}"><i class="tb-eztb-pie-dot" style="background:${slice.color}"></i><span class="tb-eztb-pie-label">${slice.label}</span><b class="tb-eztb-pie-count">${slice.count}</b><span class="tb-eztb-pie-percent">${slice.percentText}</span></span>`
+    ).join("");
+    return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖与回复占比"><g transform="rotate(-90 60 60)">${arcs}</g></svg><figcaption class="tb-eztb-pie-legend">${legend}<div class="tb-eztb-pie-total">已加载 ${total} 条</div></figcaption></figure>`;
+  }
+
   // src/features/userPanel.ts
   var FOLLOW_PAGE_SIZE = 20;
   function mountPagedList(options) {
     const settings = getSettings();
     const maxPages = Math.max(1, settings.maxPagesPerList);
-    options.body.innerHTML = `<div class="tb-eztb-list"></div><button class="tb-eztb-more" disabled>加载中…</button><div class="tb-eztb-hint"></div>`;
+    options.body.innerHTML = `<div class="tb-eztb-notice"></div><div class="tb-eztb-list"></div><button class="tb-eztb-more" disabled>加载中…</button><div class="tb-eztb-hint"></div>`;
     const listEl = options.body.querySelector(".tb-eztb-list");
     const moreBtn = options.body.querySelector(".tb-eztb-more");
     const hintEl = options.body.querySelector(".tb-eztb-hint");
+    const noticeEl = options.body.querySelector(".tb-eztb-notice");
     let page = 0;
     let loaded = 0;
     let totalPages = Number.POSITIVE_INFINITY;
@@ -30164,9 +30519,17 @@ ${endStackCall}`;
             result.items.map(options.renderRow).join("")
           );
         }
+        if (result.hidden) {
+          noticeEl.innerHTML = `<div class="tb-eztb-warn">${escapeHtml(
+            options.hiddenText ?? options.emptyText
+          )}</div>`;
+        }
+        options.onPage?.(result);
         const exhausted = result.items.length === 0 || page >= maxPages || page >= totalPages && Number.isFinite(totalPages);
         if (!loaded && exhausted) {
-          listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
+          if (!result.hidden) {
+            listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
+          }
         }
         moreBtn.disabled = exhausted;
         moreBtn.textContent = exhausted ? "没有更多了" : "加载更多";
@@ -30256,6 +30619,60 @@ ${endStackCall}`;
       renderRow: renderUserRow
     });
   }
+  function applyForumActivity(body, items, activity, levelThreshold) {
+    const activityEl = body.querySelector(".tb-eztb-activity");
+    const parts2 = [];
+    if (activity.hidden) {
+      parts2.push(
+        `<div class="tb-eztb-warn">该用户隐藏了发帖记录，读不到发帖样本，因此没法判断「等级与活跃度是否相符」。</div>`
+      );
+    } else {
+      const candidates = findSignInForums(items, activity.byForum, levelThreshold);
+      const candidateNames = new Set(candidates.map((item) => item.forumName));
+      parts2.push(
+        `<div class="tb-eztb-hint">${escapeHtml(
+          signInSummary(candidates, levelThreshold, {
+            topics: activity.topics,
+            replies: activity.replies
+          })
+        )}</div>`
+      );
+      for (const row of Array.from(
+        body.querySelectorAll(".tb-eztb-row[data-forum]")
+      )) {
+        const name = row.dataset.forum ?? "";
+        const count3 = activity.byForum[name] ?? 0;
+        const main = row.querySelector(".tb-eztb-row-main");
+        if (main) {
+          let sub = main.querySelector(".tb-eztb-row-sub");
+          if (!sub) {
+            sub = document.createElement("span");
+            sub.className = "tb-eztb-row-sub";
+            main.appendChild(sub);
+          }
+          if (sub.dataset.baseHtml === void 0) {
+            sub.dataset.baseHtml = sub.innerHTML;
+          }
+          sub.innerHTML = sub.dataset.baseHtml + ` <span class="tb-eztb-row-extra">近期发言 ${count3} 条</span>`;
+        }
+        if (!candidateNames.has(name)) continue;
+        const meta = row.querySelector(".tb-eztb-row-meta");
+        if (!meta || meta.querySelector(".tb-eztb-signin")) continue;
+        const level = items.find((item) => item.name === name)?.level;
+        const mark = document.createElement("span");
+        mark.className = "tb-eztb-signin";
+        mark.textContent = "疑似只签到";
+        mark.title = `吧内等级 Lv.${level}（≥ ${levelThreshold}），但最近一页发帖里在这个吧 0 条发言。可能是只签到不发言，也可能是最近没来。`;
+        meta.prepend(mark);
+      }
+    }
+    if (activity.failed.length) {
+      parts2.push(
+        `<div class="tb-eztb-warn">部分数据没取到：${escapeHtml(activity.failed.join("；"))}</div>`
+      );
+    }
+    if (activityEl) activityEl.innerHTML = parts2.join("");
+  }
   function renderFollowForumsTab(body, identity4) {
     body.innerHTML = `<div class="tb-eztb-loading"><div class="tb-eztb-spinner"></div>正在加载…</div>`;
     void (async () => {
@@ -30283,9 +30700,9 @@ ${endStackCall}`;
           !hidden && missingLevel ? NO_LEVEL_NOTE : "",
           hidden && !identity4.profile?.un ? NO_USERNAME_NOTE : ""
         ].filter(Boolean);
-        body.innerHTML = notes.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`).join("") + `<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div><div class="tb-eztb-list">` + items.map(
+        body.innerHTML = notes.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`).join("") + `<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div><div class="tb-eztb-actions" style="justify-content:flex-start;margin:8px 0;"><button type="button" class="tb-eztb-minibtn" data-act="activity">检测签到号</button><span class="tb-eztb-hint">等级高、最近又不在该吧发言的吧</span></div><div class="tb-eztb-activity"></div><div class="tb-eztb-list">` + items.map(
           (item) => [
-            `<a class="tb-eztb-row" href="${escapeHtml(forumUrl(item.name))}" target="_blank" rel="noopener noreferrer">`,
+            `<a class="tb-eztb-row" data-forum="${escapeHtml(item.name)}" href="${escapeHtml(forumUrl(item.name))}" target="_blank" rel="noopener noreferrer">`,
             `<span class="tb-eztb-row-main">`,
             `<span class="tb-eztb-row-title">${escapeHtml(item.display)}</span>`,
             item.slogan || item.levelName ? `<span class="tb-eztb-row-sub">${escapeHtml(item.slogan || item.levelName)}</span>` : "",
@@ -30294,6 +30711,38 @@ ${endStackCall}`;
             `</a>`
           ].join("")
         ).join("") + `</div>`;
+        const activityButton = body.querySelector(
+          '[data-act="activity"]'
+        );
+        const activityEl = body.querySelector(".tb-eztb-activity");
+        activityButton?.addEventListener("click", () => {
+          if (activityButton.disabled) return;
+          activityButton.disabled = true;
+          const originalLabel = activityButton.textContent ?? "检测签到号";
+          activityButton.textContent = "检测中…";
+          if (activityEl) {
+            activityEl.innerHTML = `<div class="tb-eztb-hint">正在读取他最近一页的发帖…</div>`;
+          }
+          void (async () => {
+            try {
+              const activity = await loadForumActivity(identity4.id);
+              applyForumActivity(
+                body,
+                items,
+                activity,
+                getSettings().signInLevelThreshold
+              );
+              activityButton.textContent = "重新检测";
+            } catch (error) {
+              if (activityEl) {
+                activityEl.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
+              }
+              activityButton.textContent = originalLabel;
+            } finally {
+              activityButton.disabled = false;
+            }
+          })();
+        });
         for (const button of Array.from(
           body.querySelectorAll(".tb-eztb-levelbtn")
         )) {
@@ -30339,8 +30788,61 @@ ${endStackCall}`;
     reply: "回复",
     sub: "楼中楼"
   };
+  var HIDDEN_POSTS_NOTE = "该用户把发帖记录设成了私密：贴吧接口对两路 feed 都只返回空列表，脚本拿不到任何帖子内容。这不是「没有发过帖」，而是「看不到」——被隐藏的帖子目前没有可取到的接口。";
+  function renderFloorSlot(post) {
+    if (!post.postId) return "";
+    const cached4 = readReplyFloorCache(post.threadId, post.postId);
+    if (cached4) {
+      return `<span class="tb-eztb-floor" title="${escapeHtml(
+        cached4.excerpt ? `${cached4.floor} 楼的内容：${cached4.excerpt}` : `${cached4.floor} 楼`
+      )}">${cached4.floor}楼</span>`;
+    }
+    return `<button type="button" class="tb-eztb-floorbtn" data-thread="${escapeHtml(post.threadId)}" data-post="${escapeHtml(post.postId)}" title="发帖列表里没有楼层号，点一下去这个帖子里查他在第几楼">查楼层</button>`;
+  }
   function renderPostRow(post) {
-    return `<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span><span class="tb-eztb-row-sub">${escapeHtml(post.forumName || "未知贴吧")}</span></span><span class="tb-eztb-row-meta">${escapeHtml(formatTimestamp(post.createTime))}</span></a>`;
+    const isReply = post.kind !== "topic";
+    const subParts = [];
+    if (post.forumName) {
+      subParts.push(
+        `<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`
+      );
+    }
+    if (isReply && post.preview) {
+      subParts.push(escapeHtml(post.preview));
+    }
+    return `<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">未知贴吧</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`;
+  }
+  function bindFloorButtons(root) {
+    for (const button of Array.from(
+      root.querySelectorAll(".tb-eztb-floorbtn")
+    )) {
+      if (button.dataset.bound === "1") continue;
+      button.dataset.bound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled) return;
+        const threadId = button.dataset.thread ?? "";
+        const postId = button.dataset.post ?? "";
+        if (!threadId || !postId) return;
+        button.disabled = true;
+        button.textContent = "查询中…";
+        void (async () => {
+          const result = await fetchReplyFloor(threadId, postId);
+          if (result.floor) {
+            const span2 = document.createElement("span");
+            span2.className = "tb-eztb-floor";
+            span2.textContent = `${result.floor}楼`;
+            span2.title = result.excerpt ? `${result.floor} 楼的内容：${result.excerpt}` : `${result.floor} 楼`;
+            button.replaceWith(span2);
+            return;
+          }
+          button.textContent = "查不到";
+          button.title = result.reason ?? "没查到";
+          button.disabled = false;
+        })();
+      });
+    }
   }
   var POST_SUBTABS = [
     {
@@ -30356,27 +30858,40 @@ ${endStackCall}`;
       summaryText: (loaded) => `已加载 ${loaded} 条回复`
     }
   ];
-  function mountPostsSubList(pane, identity4, subTab) {
+  function mountPostsSubList(pane, identity4, subTab, onRows) {
     const spec = POST_SUBTABS.find((item) => item.id === subTab);
     mountPagedList({
       body: pane,
       emptyText: spec.emptyText,
+      hiddenText: HIDDEN_POSTS_NOTE,
       summaryText: spec.summaryText,
       // 主题帖与回复是两个独立 feed，各自翻页，不再合并成一个列表：
       // 合并后两条 feed 的页码对不上，跨页的时间倒序只能近似。
-      loadPage: async (page) => ({
-        items: subTab === "topic" ? await loadTopicRows(identity4.id, page) : await loadReplyRows(identity4.id, page)
-      }),
-      renderRow: renderPostRow
+      loadPage: async (page) => {
+        const feed = subTab === "topic" ? await loadTopicPage(identity4.id, page) : await loadReplyPage(identity4.id, page);
+        return { items: feed.rows, hidden: feed.hidden };
+      },
+      renderRow: renderPostRow,
+      onPage: (result) => {
+        bindFloorButtons(pane);
+        onRows(result.items);
+      }
     });
   }
   function renderPostsTab(body, identity4) {
     const active2 = body.dataset.subtab === "reply" ? "reply" : "topic";
-    body.innerHTML = `<div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
+    body.innerHTML = // 占比饼图：随已加载的行更新（两个子页签各自取数，先点哪个就先统计哪个）
+    `<div class="tb-eztb-piestat"></div><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-subtab${item.id === active2 ? " active" : ""}" data-subtab="${item.id}">${item.label}</button>`
     ).join("") + `</div>` + POST_SUBTABS.map(
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
     ).join("");
+    let counts = emptyCounts();
+    const pieEl = body.querySelector(".tb-eztb-piestat");
+    const updatePie = () => {
+      if (pieEl) pieEl.innerHTML = buildPieSvg(counts);
+    };
+    updatePie();
     const mounted = /* @__PURE__ */ new Set();
     const activate = (id) => {
       body.dataset.subtab = id;
@@ -30391,7 +30906,12 @@ ${endStackCall}`;
       const pane = body.querySelector(
         `.tb-eztb-subpane[data-subpane="${id}"]`
       );
-      if (pane) mountPostsSubList(pane, identity4, id);
+      if (pane) {
+        mountPostsSubList(pane, identity4, id, (rows) => {
+          counts = mergeCounts(counts, countPosts(rows));
+          updatePie();
+        });
+      }
     };
     for (const button of body.querySelectorAll(".tb-eztb-subtab")) {
       button.addEventListener("click", () => {
@@ -30706,13 +31226,60 @@ ${endStackCall}`;
   flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.4;
   color:#8a8f99 !important;text-align:right;white-space:nowrap;
 }
-/* 「关注的吧」里"点了才查等级"的小按钮 */
-.tb-eztb-levelbtn{
+/* 右侧要同时放「查楼层」和时间：竖着排，别把行撑宽 */
+.tb-eztb-row-meta-stack{
+  display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+}
+.tb-eztb-row-time{font-size:12px;color:#8a8f99 !important;}
+/* 副标题里的小吧名：和正文区分开 */
+.tb-eztb-row-forum{
+  display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;
+  background:#f2f3f5 !important;color:#57606a !important;font-size:11px;line-height:16px;
+}
+/* 「检测签到号」之后补上的"近期发言 N 条" */
+.tb-eztb-row-extra{color:#8a8f99 !important;}
+/* 楼层号（查到了就换成它） */
+.tb-eztb-floor{
+  padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
+  font-size:11px;line-height:17px;white-space:nowrap;
+}
+/* 「疑似只签到」标记：只提示、不结论，所以用弱一点的样式 */
+.tb-eztb-signin{
+  display:inline-block;margin-right:4px;padding:0 6px;border-radius:999px;
+  background:#fff8e6 !important;color:#9a6700 !important;border:1px dashed #ffe2b8;
+  font-size:11px;line-height:16px;white-space:nowrap;
+}
+/* 「关注的吧」里的签到检测结论区 */
+.tb-eztb-activity{margin:0 0 10px;}
+.tb-eztb-activity .tb-eztb-hint{margin:0 0 6px;}
+
+/* 「发帖」页签顶部的占比饼图 */
+.tb-eztb-piestat{margin:0 0 12px;}
+.tb-eztb-pie{
+  display:flex;align-items:center;gap:16px;margin:0;padding:10px 12px;
+  border:1px solid #e8e8e8;border-radius:8px;background:#fafbfc !important;
+}
+.tb-eztb-pie-svg{width:96px;height:96px;flex:0 0 auto;}
+.tb-eztb-pie-legend{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0;}
+.tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:#57606a !important;}
+.tb-eztb-pie-dot{
+  width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block;
+}
+.tb-eztb-pie-label{min-width:44px;}
+.tb-eztb-pie-count{color:#24292f !important;font-weight:600;}
+.tb-eztb-pie-percent{color:#8a8f99 !important;}
+.tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
+.tb-eztb-pie-empty{color:#8a8f99 !important;}
+/* 三种行内小按钮共用一套样式：「查等级」「查楼层」「检测签到号」。
+   注意别互相复用类名——测试和排查都按类名找按钮，混用会点错目标。 */
+.tb-eztb-levelbtn,.tb-eztb-floorbtn,.tb-eztb-minibtn{
   padding:1px 8px;border:1px solid #bcd8ff;border-radius:6px;cursor:pointer;
   background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
 }
-.tb-eztb-levelbtn:hover{background:#e8f3ff !important;}
-.tb-eztb-levelbtn[disabled]{opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;}
+.tb-eztb-levelbtn:hover,.tb-eztb-floorbtn:hover,.tb-eztb-minibtn:hover{background:#e8f3ff !important;}
+.tb-eztb-levelbtn[disabled],.tb-eztb-floorbtn[disabled],.tb-eztb-minibtn[disabled]{
+  opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;
+}
 /* 发帖页签的类型标签：主题 / 回复 / 楼中楼 */
 .tb-eztb-tag{
   display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;

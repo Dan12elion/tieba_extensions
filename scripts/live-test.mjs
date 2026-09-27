@@ -138,6 +138,28 @@ const authorIds = Array.from(
 	),
 ).slice(0, 4);
 
+/**
+ * 更宽一点的样本：只取一个吧的前几个作者时，容易撞上"那个人恰好没发帖 / 隐藏了帖子 / 没有楼中楼"，
+ * 断言就会因为样本问题变红（2026-09-27 实测过一次：两条断言因为样本里有零发帖的用户而失败）。
+ * 所以多发两个吧，凑一份更像样的候选名单——断言在名单里找"符合条件的那一个"，而不是赌第一个。
+ */
+const sampleIds = [...authorIds];
+for (const fname of ["李毅", "天涯", "小红书"]) {
+	try {
+		const list = await Effect.runPromise(
+			sdk.getThreads({ fname, page: 1, rn: 30 }),
+		);
+		for (const thread of list?.threadList ?? list?.thread_list ?? []) {
+			const id = String(thread?.authorId ?? thread?.author_id ?? "");
+			if (id && !sampleIds.includes(id)) sampleIds.push(id);
+		}
+	} catch (error) {
+		if (process.env.EZTB_PROBE) {
+			console.log(`    样本扩充：${fname} 取列表失败 ${error?.message ?? error}`);
+		}
+	}
+}
+
 let postHits = 0;
 let firstUidWithPosts = 0;
 for (const uid of authorIds) {
@@ -164,7 +186,9 @@ report(
 // 吧名解析：面板「发帖」页签要显示具体吧名，必须走 needForumName=true
 let namedHits = 0;
 let namedSample = "";
-for (const uid of authorIds.slice(0, 2)) {
+let namedTried = 0;
+for (const uid of sampleIds.slice(0, 6)) {
+	namedTried += 1;
 	try {
 		const posts = await Effect.runPromise(
 			sdk.getUserPost(Number(uid), 1, true),
@@ -176,6 +200,7 @@ for (const uid of authorIds.slice(0, 2)) {
 				.slice(0, 3)
 				.map((post) => post.forumName)
 				.join(" / ");
+			break;
 		}
 	} catch (error) {
 		console.log(`    getUserPost(needForumName) ${uid} 异常：${error?.message ?? error}`);
@@ -184,7 +209,7 @@ for (const uid of authorIds.slice(0, 2)) {
 report(
 	"needForumName=true 时能解析出吧名",
 	namedHits > 0,
-	namedHits ? namedSample : "没有解析出任何吧名",
+	namedHits ? namedSample : `扫了 ${namedTried} 个用户都没有解析出吧名`,
 );
 
 // ── 主题帖 / 回复 是两个独立 feed（由 is_thread 切换），这是「发帖」页签分类的基础 ──
@@ -211,15 +236,30 @@ try {
 
 	// 楼中楼（affiliated）在回复 feed 里：换几个用户找一条来验证
 	let subFound = 0;
-	for (const uid of authorIds.slice(0, 4)) {
-		const rows = await sdk.loadReplyRows(Number(uid), 1);
-		const subs = rows.filter((row) => row.kind === "sub");
-		if (subs.length) {
+	let subUid = "";
+	for (const uid of sampleIds.slice(0, 12)) {
+		try {
+			const rows = await sdk.loadReplyRows(Number(uid), 1);
+			const subs = rows.filter((row) => row.kind === "sub");
+			if (!subs.length) continue;
 			subFound = subs.length;
+			subUid = String(uid);
+			// 顺手验证：楼中楼行必须带 postId（「查楼层」要靠它）
+			report(
+				"楼中楼行带 postId（查楼层要用）",
+				subs.every((row) => Boolean(row.postId)),
+				subs[0]?.postId ?? "",
+			);
 			break;
+		} catch {
+			/* 单个用户取不到就换下一个 */
 		}
 	}
-	report("回复 feed 中的楼中楼被标记为 sub", subFound > 0, `${subFound} 条`);
+	report(
+		"回复 feed 中的楼中楼被标记为 sub",
+		subFound > 0,
+		subFound ? `uid=${subUid} ${subFound} 条` : `扫了 ${sampleIds.slice(0, 12).length} 个用户都没找到楼中楼`,
+	);
 } catch (error) {
 	report("发帖分类取数", false, error?.message ?? String(error));
 }
@@ -367,6 +407,114 @@ try {
 			? `uid=${readLevel.uid} 吧=${readLevel.forum} Lv.${readLevel.level}（来自${readLevel.via === "topic" ? "主题帖" : "回复"}）`
 			: "样本里没找到",
 	);
+}
+
+// ── 「这条回复在第几楼」：点了才查，一个请求拿一层楼 ─────────────────
+// 楼层号不在发帖 feed 里（PostInfoList 没有 floor 字段），只能去 /c/f/pb/floor 换。
+{
+	let floorCase = null;
+	for (const uid of sampleIds.slice(0, 10)) {
+		try {
+			const rows = await sdk.loadReplyRows(Number(uid), 1);
+			const row = rows.find((item) => item.postId && item.threadId);
+			if (!row) continue;
+			const result = await sdk.fetchReplyFloor(row.threadId, row.postId);
+			if (!result.floor) continue;
+			floorCase = { uid, row, result };
+			break;
+		} catch {
+			/* 单个用户取不到就换下一个 */
+		}
+	}
+	report(
+		"「查楼层」能读到楼层号",
+		Boolean(floorCase),
+		floorCase
+			? `uid=${floorCase.uid} tid=${floorCase.row.threadId} pid=${floorCase.row.postId} → ${floorCase.result.floor} 楼`
+			: "样本里没读到楼层",
+	);
+
+	if (floorCase) {
+		// 交叉验证：直接调一次接口，楼层号必须一致（否则说明封装读错了字段）
+		const direct = await Effect.runPromise(
+			sdk.getComments({
+				tid: Number(floorCase.row.threadId),
+				pid: Number(floorCase.row.postId),
+			}),
+		);
+		report(
+			"楼层号与直接调接口一致（交叉验证）",
+			Number(direct?.post?.floor) === floorCase.result.floor,
+			`封装=${floorCase.result.floor} / 直接=${direct?.post?.floor}`,
+		);
+		const again = await sdk.fetchReplyFloor(
+			floorCase.row.threadId,
+			floorCase.row.postId,
+		);
+		report(
+			"第二次查走缓存，且结果一致",
+			again.via === "cache" && again.floor === floorCase.result.floor,
+			`via=${again.via}`,
+		);
+	}
+}
+
+// ── 隐藏发帖记录：hidePost=1 时接口只给空列表（拿不到内容，但能识别）──
+{
+	let checked = 0;
+	let hiddenCase = null;
+	let invariant = true;
+	const skipped = [];
+	for (const uid of sampleIds.slice(0, 12)) {
+		try {
+			const topic = await sdk.loadTopicPage(Number(uid), 1);
+			const reply = await sdk.loadReplyPage(Number(uid), 1);
+			checked += 1;
+			// 不变量：说了隐藏就不该还给内容；见了反例说明这个字段的含义理解错了
+			if (topic.hidden && topic.rows.length) invariant = false;
+			if (reply.hidden && reply.rows.length) invariant = false;
+			if (!hiddenCase && (topic.hidden || reply.hidden)) {
+				hiddenCase = { uid, topic: topic.hidden, reply: reply.hidden };
+			}
+		} catch (error) {
+			// 有的 user id 接口会直接回 errno（例如账号已被注销）：跳过，不能把整轮测试带崩
+			skipped.push(`${uid}:${error?.message ?? error}`);
+		}
+	}
+	report(
+		"hidePost=1 的返回里列表必为空（没有反例）",
+		invariant,
+		`检查了 ${checked} 个用户${skipped.length ? `，跳过 ${skipped.length} 个（${skipped[0]}）` : ""}`,
+	);
+	report(
+		"样本里能找到隐藏了发帖记录的用户（界面据此改说辞）",
+		Boolean(hiddenCase),
+		hiddenCase
+			? `uid=${hiddenCase.uid} 主题帖隐藏=${hiddenCase.topic} 回复隐藏=${hiddenCase.reply}`
+			: `扫了 ${checked} 个用户都没遇到隐藏的`,
+	);
+}
+
+// ── 签到号判定的样本来源：最近一页发帖的按吧统计 ─────────────────────
+{
+	const uid = Number(firstUidWithPosts);
+	try {
+		const activity = await sdk.loadForumActivity(uid);
+		const forums = Object.keys(activity.byForum);
+		report(
+			"按吧统计的样本取得到（主题帖 / 回复各一页）",
+			activity.topics > 0 || activity.replies > 0,
+			`主题帖 ${activity.topics} 条 / 回复 ${activity.replies} 条 / 覆盖 ${forums.length} 个吧`,
+		);
+		report(
+			"统计出来的发言数不超过样本总数",
+			Object.values(activity.byForum).reduce((sum, value) => sum + value, 0) <=
+				activity.topics + activity.replies,
+			`合计 ${Object.values(activity.byForum).reduce((sum, value) => sum + value, 0)} / 样本 ${activity.topics + activity.replies}`,
+		);
+	} catch (error) {
+		report("按吧统计的样本取得到（主题帖 / 回复各一页）", false, String(error?.message ?? error));
+	}
 }
 
 // ── 关键词匹配：拿真实主题帖数据跑一遍规则（真实数据 + 线上同一份匹配代码）──

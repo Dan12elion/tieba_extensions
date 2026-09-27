@@ -123,13 +123,60 @@ export const STYLE_TEXT = `
   flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.4;
   color:#8a8f99 !important;text-align:right;white-space:nowrap;
 }
-/* 「关注的吧」里"点了才查等级"的小按钮 */
-.tb-eztb-levelbtn{
+/* 右侧要同时放「查楼层」和时间：竖着排，别把行撑宽 */
+.tb-eztb-row-meta-stack{
+  display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+}
+.tb-eztb-row-time{font-size:12px;color:#8a8f99 !important;}
+/* 副标题里的小吧名：和正文区分开 */
+.tb-eztb-row-forum{
+  display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;
+  background:#f2f3f5 !important;color:#57606a !important;font-size:11px;line-height:16px;
+}
+/* 「检测签到号」之后补上的"近期发言 N 条" */
+.tb-eztb-row-extra{color:#8a8f99 !important;}
+/* 楼层号（查到了就换成它） */
+.tb-eztb-floor{
+  padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
+  font-size:11px;line-height:17px;white-space:nowrap;
+}
+/* 「疑似只签到」标记：只提示、不结论，所以用弱一点的样式 */
+.tb-eztb-signin{
+  display:inline-block;margin-right:4px;padding:0 6px;border-radius:999px;
+  background:#fff8e6 !important;color:#9a6700 !important;border:1px dashed #ffe2b8;
+  font-size:11px;line-height:16px;white-space:nowrap;
+}
+/* 「关注的吧」里的签到检测结论区 */
+.tb-eztb-activity{margin:0 0 10px;}
+.tb-eztb-activity .tb-eztb-hint{margin:0 0 6px;}
+
+/* 「发帖」页签顶部的占比饼图 */
+.tb-eztb-piestat{margin:0 0 12px;}
+.tb-eztb-pie{
+  display:flex;align-items:center;gap:16px;margin:0;padding:10px 12px;
+  border:1px solid #e8e8e8;border-radius:8px;background:#fafbfc !important;
+}
+.tb-eztb-pie-svg{width:96px;height:96px;flex:0 0 auto;}
+.tb-eztb-pie-legend{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0;}
+.tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:#57606a !important;}
+.tb-eztb-pie-dot{
+  width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block;
+}
+.tb-eztb-pie-label{min-width:44px;}
+.tb-eztb-pie-count{color:#24292f !important;font-weight:600;}
+.tb-eztb-pie-percent{color:#8a8f99 !important;}
+.tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
+.tb-eztb-pie-empty{color:#8a8f99 !important;}
+/* 三种行内小按钮共用一套样式：「查等级」「查楼层」「检测签到号」。
+   注意别互相复用类名——测试和排查都按类名找按钮，混用会点错目标。 */
+.tb-eztb-levelbtn,.tb-eztb-floorbtn,.tb-eztb-minibtn{
   padding:1px 8px;border:1px solid #bcd8ff;border-radius:6px;cursor:pointer;
   background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
 }
-.tb-eztb-levelbtn:hover{background:#e8f3ff !important;}
-.tb-eztb-levelbtn[disabled]{opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;}
+.tb-eztb-levelbtn:hover,.tb-eztb-floorbtn:hover,.tb-eztb-minibtn:hover{background:#e8f3ff !important;}
+.tb-eztb-levelbtn[disabled],.tb-eztb-floorbtn[disabled],.tb-eztb-minibtn[disabled]{
+  opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;
+}
 /* 发帖页签的类型标签：主题 / 回复 / 楼中楼 */
 .tb-eztb-tag{
   display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;

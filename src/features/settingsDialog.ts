@@ -6,6 +6,8 @@ import { clearProfileCache } from "../core/cached.ts";
 import { requestQueue } from "../core/queue.ts";
 import { EXAMPLE_RULES, RULE_FORMAT_HINT } from "../core/composition.ts";
 import { clearForumLevelCache } from "../core/forumLevel.ts";
+import { clearReplyFloorCache } from "../core/replyFloor.ts";
+import { clearForumActivityCache } from "../core/forumActivity.ts";
 import { escapeHtml } from "../core/util.ts";
 import { openDialog } from "../ui/modal.ts";
 import { clearCompositionCache, rescanPage } from "./compositionScan.ts";
@@ -124,11 +126,23 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	);
 	parts.push(`</div>`);
 
+	parts.push(`<div class="tb-eztb-field">`);
+	parts.push(`<label for="tb-eztb-signin-level">「疑似只签到」的等级门槛</label>`);
+	parts.push(
+		`<input id="tb-eztb-signin-level" class="tb-eztb-input" type="number" min="1" max="18" step="1" value="${current.signInLevelThreshold}">`,
+	);
+	parts.push(
+		`<div class="tb-eztb-hint">「关注的吧」里的「检测签到号」用它判定：吧内等级 ≥ 这个值，且最近一页发帖里在该吧 0 条发言，就标成疑似只签到。</div>`,
+	);
+	parts.push(`</div>`);
+
 	parts.push(`<div class="tb-eztb-actions">`);
 	parts.push(`<button data-act="help">打开辅助获取网址</button>`);
 	parts.push(`<button data-act="clear">清空资料缓存</button>`);
 	parts.push(`<button data-act="clear-composition">清空成分缓存</button>`);
 	parts.push(`<button data-act="clear-forum-level">清空吧内等级缓存</button>`);
+	parts.push(`<button data-act="clear-reply-floor">清空楼层缓存</button>`);
+	parts.push(`<button data-act="clear-activity">清空签到检测缓存</button>`);
 	parts.push(`<button data-act="save" class="primary">保存</button>`);
 	parts.push(`</div>`);
 	parts.push(`</div>`);
@@ -153,6 +167,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 			compositionAuto: value("tb-eztb-composition-auto") !== "0",
 			compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
 			compositionCacheDays: Number(value("tb-eztb-cachedays")),
+			signInLevelThreshold: Number(value("tb-eztb-signin-level")),
 		};
 	};
 
@@ -206,6 +221,26 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 			clearForumLevelCache();
 			const button = dialog.body.querySelector<HTMLButtonElement>(
 				'[data-act="clear-forum-level"]',
+			);
+			if (button) button.textContent = "已清空";
+		});
+
+	dialog.body
+		.querySelector('[data-act="clear-reply-floor"]')
+		?.addEventListener("click", () => {
+			clearReplyFloorCache();
+			const button = dialog.body.querySelector<HTMLButtonElement>(
+				'[data-act="clear-reply-floor"]',
+			);
+			if (button) button.textContent = "已清空";
+		});
+
+	dialog.body
+		.querySelector('[data-act="clear-activity"]')
+		?.addEventListener("click", () => {
+			clearForumActivityCache();
+			const button = dialog.body.querySelector<HTMLButtonElement>(
+				'[data-act="clear-activity"]',
 			);
 			if (button) button.textContent = "已清空";
 		});

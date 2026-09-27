@@ -1,14 +1,16 @@
 /**
  * 「成分」关键词规则：把参考脚本（B站成分检测器）的做法搬到贴吧。
  *
- * 规则一行一条，用 `|` 分成最多 5 段：
+ * 规则一行一条，用 `|` 分成最多 6 段：
  *
- *     名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单
+ *     名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单 | 发帖所在吧关键词
  *
- * 后三段可以省略；关键词用逗号分隔（中英文逗号都行）；`#` 开头是注释行。
+ * 后四段可以省略；关键词用逗号分隔（中英文逗号都行）；`#` 开头是注释行。
  * 判定方式与参考脚本一致，是「包含」（大小写不敏感）：
  *   - 发帖关键词打在「标题 + 正文摘要」上
  *   - 吧关键词打在该用户关注的吧名上
+ *   - 发帖所在吧关键词打在「他发过帖的吧名」上（注意与上一段相反：一段看他关注了什么，
+ *     这一段看他**实际在哪儿发言**）——新增字段放在最后一段，就是为了不动老规则的列序
  *   - 排除关键词命中就整条跳过（对应参考脚本的 keywordsReverse，用来压住玩梗误伤）
  *
  * 证据强度（sure）也照参考脚本分档：名单 / 关注的吧 / **主题帖**是强证据，
@@ -26,6 +28,14 @@ export interface CompositionRule {
 	postKeywords: string[];
 	/** 关注的吧关键词 */
 	forumKeywords: string[];
+	/**
+	 * 发帖所在吧的关键词：他**实际发过言**的吧。
+	 *
+	 * 与 forumKeywords 的区别：forumKeywords 看的是"关注了什么吧"（关注是主动行为，
+	 * 但很多人关注了并不说话），这一段看的是"他确实在这个吧发过帖"。
+	 * 规则文本里这是第 6 段，放在最后是为了不改动老规则（5 段）的列序。
+	 */
+	postForumKeywords: string[];
 	/** 排除关键词：命中则这条证据不算数 */
 	excludes: string[];
 	/** 直接命中名单：贴吧号或内部用户 ID */
@@ -36,13 +46,15 @@ export interface CompositionRule {
 const LIST_SEPARATOR = /[,，;；]+/;
 
 export const RULE_FORMAT_HINT =
-	"每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省)；关键词用逗号分隔，`#` 开头是注释。";
+	"每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释。";
 
 export const EXAMPLE_RULES = [
 	"# 每行一条规则，示例如下（可以直接改成你要的词）",
-	"# 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省)",
+	"# 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)",
 	"🎮原神 | 原神,芙宁娜,米哈游 | 原神吧,米哈游吧 | 原神怎么你了",
 	"🎁抽奖 | 互动抽奖,转发本条动态 | 抽奖吧",
+	"# 最后一段看的是他实际在哪个吧发过言，与关注了哪个吧是两回事",
+	"🛒带货 | | | | | 拼多多,淘宝",
 	"⚠️示例名单 | | | | 1234567890",
 ].join("\n");
 
@@ -82,10 +94,12 @@ export function parseRules(text: string): CompositionRule[] {
 			forumKeywords: splitList(parts[2]),
 			excludes: splitList(parts[3]),
 			uids: splitList(parts[4]),
+			postForumKeywords: splitList(parts[5]),
 		};
 		if (
 			!rule.postKeywords.length &&
 			!rule.forumKeywords.length &&
+			!rule.postForumKeywords.length &&
 			!rule.uids.length
 		) {
 			continue;
@@ -120,6 +134,8 @@ export interface CompositionPostInput {
 	title: string;
 	preview: string;
 	kind: CompositionPostKind;
+	/** 这条帖子发在哪个吧（「发帖所在吧」那一类关键词打在它上面） */
+	forumName?: string;
 }
 
 export interface CompositionInput {
@@ -132,7 +148,7 @@ export interface CompositionInput {
 }
 
 export interface CompositionEvidence {
-	source: "uid" | "forum" | "post";
+	source: "uid" | "forum" | "postForum" | "post";
 	/** 命中的关键词 */
 	keyword: string;
 	/** 人类可读的原因，例如「关注了「原神吧」」 */
@@ -232,6 +248,29 @@ export function matchComposition(
 		}
 
 		// 3) 发帖：主题帖算强证据，回复 / 楼中楼只算弱证据
+		//    3a) 先看"发帖所在吧"：他确实在这个吧发过言
+		let postForumEvidence: CompositionEvidence | null = null;
+		for (const post of input.posts) {
+			const name = String(post.forumName ?? "").trim();
+			if (!name || isExcluded(name, rule.excludes)) continue;
+			const keyword = firstKeyword(name, rule.postForumKeywords);
+			if (!keyword) continue;
+			const evidence: CompositionEvidence = {
+				source: "postForum",
+				keyword,
+				reason: `在「${name}」发过帖`,
+				excerpt: [post.title, post.preview]
+					.filter(Boolean)
+					.join(" ")
+					.slice(0, 60),
+				sure: post.kind === "topic",
+			};
+			postForumEvidence = evidence;
+			if (evidence.sure) break;
+		}
+		if (postForumEvidence) evidences.push(postForumEvidence);
+
+		//    3b) 再看发帖内容关键词
 		let postEvidence: CompositionEvidence | null = null;
 		for (const post of input.posts) {
 			const text = [post.title, post.preview].filter(Boolean).join(" ");

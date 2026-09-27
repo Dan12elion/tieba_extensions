@@ -41,6 +41,33 @@ const PAGER_FIRST_PAGE = 60;
  */
 const HIDDEN_FORUM_KEYWORD = "小红书";
 
+/**
+ * 「发帖记录被隐藏」这条路没法依赖真实账号：对方随时可能改隐私设置，测试就会变红。
+ * 所以额外放一个测试用户，只把**他的 userpost 请求**用一段手工构造的 protobuf 顶掉：
+ * `{ data: { hidePost: 1 } }` 的字节是 `0x12 0x02 0x10 0x01`
+ * （用 SDK 的 UserPostResIdl.decode 验证过：hidePost=1、postList 为空；
+ * 真实链路上 hidePost=1 的账号返回的也正是这个形状，见 scripts/live-test.mjs 的断言）。
+ * 其它请求（资料、关注吧）仍然走真实接口。
+ */
+const HIDDEN_STUB_USER_ID = "2724733822";
+const HIDDEN_STUB_BYTES = Buffer.from([0x12, 0x02, 0x10, 0x01]);
+
+/**
+ * 请求体里找 user id 不能用 ASCII：proto 里的 userId 是 int64，走的是 varint 编码。
+ * （一开始按字符串匹配，桩一次都没命中，实测才发现。）
+ */
+function varintBytes(value) {
+	const bytes = [];
+	let rest = BigInt(value);
+	while (rest > 127n) {
+		bytes.push(Number((rest & 127n) | 128n));
+		rest >>= 7n;
+	}
+	bytes.push(Number(rest));
+	return Buffer.from(bytes);
+}
+const HIDDEN_STUB_NEEDLE = varintBytes(HIDDEN_STUB_USER_ID);
+
 const BROWSERS = [
 	"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 	"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -68,6 +95,9 @@ const PAGE = `<!doctype html>
   <div class="l_post" id="pager-post" data-field='{"author":{"user_id":${PAGER_USER_ID},"user_name":"%E7%BF%BB%E9%A1%B5","portrait":"tb.1.pager"}}'>
     <div class="d_author"><a class="p_author_name" href="/home/main?id=tb.1.pager">翻页用户</a></div>
   </div>
+  <div class="l_post" id="hidden-post" data-field='{"author":{"user_id":${HIDDEN_STUB_USER_ID},"user_name":"%E9%9A%90%E8%97%8F","portrait":"tb.1.hidden"}}'>
+    <div class="d_author"><a class="p_author_name" href="/home/main?id=tb.1.hidden">隐藏发帖用户</a></div>
+  </div>
 </div>
 <script>
   // ── 油猴 API 桩：请求经本地代理转发到贴吧 ──
@@ -89,17 +119,22 @@ const PAGE = `<!doctype html>
   window.__tbAlerts = [];
   window.alert = function (text) { window.__tbAlerts.push(String(text)); };
   window.__tbRequests = 0;
+  // 请求日志：定位"哪个请求发出去了但一直没回来"（桩/代理层的问题都靠它）
+  window.__tbLog = [];
   window.GM_xmlhttpRequest = function (d) {
     window.__tbRequests++;
+    var entry = { url: d.url, state: 'start' };
+    window.__tbLog.push(entry);
     fetch('/proxy?u=' + encodeURIComponent(d.url), {
       method: d.method || 'GET',
       headers: d.headers || {},
       body: d.data || undefined
     }).then(function (res) {
       return res.arrayBuffer().then(function (buf) {
+        entry.state = 'done:' + res.status + ':' + buf.byteLength;
         d.onload && d.onload({ status: res.status, statusText: res.statusText, responseHeaders: '', response: buf });
       });
-    }).catch(function () { d.onerror && d.onerror({}); });
+    }).catch(function (e) { entry.state = 'error:' + e; d.onerror && d.onerror({}); });
     return { abort: function () {} };
   };
   window.__tbErrors = [];
@@ -141,7 +176,21 @@ const PAGE = `<!doctype html>
     );
   }
   // 「发帖」页签拆成了两个子页签：主题帖 / 回复，各自独立分页
-  function postsPane() { return document.querySelector('.tb-eztb-pane[data-pane="posts"]'); }
+  /**
+   * 取**最新那个**面板里的元素。
+
+   * 页面上可能同时存在多个面板（点开新的会先关掉旧的，但旧的 DOM 在同一帧里还在），
+   * 用 querySelector 会命中最早的那个，断言就会看着像"新面板没生效"。
+   */
+  function lastMask() {
+    var masks = document.querySelectorAll('.tb-eztb-mask');
+    return masks.length ? masks[masks.length - 1] : null;
+  }
+  function inPanel(selector) {
+    var scope = lastMask() || document;
+    return scope.querySelector(selector);
+  }
+  function postsPane() { return inPanel('.tb-eztb-pane[data-pane="posts"]'); }
   function subPane(name) {
     var root = postsPane();
     return root ? root.querySelector('.tb-eztb-subpane[data-subpane="' + name + '"]') : null;
@@ -262,6 +311,189 @@ const PAGE = `<!doctype html>
   }
 
   /**
+   * 阶段 8：这一轮新增的功能——占比饼图、回复正文与「查楼层」、签到号检测，
+   * 以及"对方隐藏了发帖记录"时的说辞。
+   *
+   * 拆成几个小函数串起来，省得再嵌五层回调（前面几个阶段已经够深了）。
+   */
+  function phaseExtras() {
+    var postsTab = inPanel('.tb-eztb-tab[data-tab="posts"]');
+    add('（阶段 8）面板仍开着，可以继续看发帖页签', !!postsTab,
+        '遮罩 ' + document.querySelectorAll('.tb-eztb-mask').length + ' 个');
+    if (!postsTab) { extrasSignIn(); return; }
+    postsTab.click();
+    until(function () { return rowsIn(subPane('topic')).length > 0; }, function (ok) {
+      add('阶段 8：主题帖重新加载出来了', ok, ok ? '' : '超时');
+      extrasPie();
+      extrasReplies();
+    }, 200);
+  }
+
+  /** 占比饼图：三段的百分比必须合成 100%，图例要有条数 */
+  function extrasPie() {
+    var pie = inPanel('.tb-eztb-pane[data-pane="posts"] .tb-eztb-piestat .tb-eztb-pie');
+    add('「发帖」页签顶部画出了占比饼图', !!pie, pie ? String(pie.textContent).slice(0, 70) : '没找到');
+    var panePosts = postsPane();
+    var arcs = panePosts ? panePosts.querySelectorAll('.tb-eztb-pie-slice') : [];
+    var percents = Array.prototype.map.call(
+      panePosts ? panePosts.querySelectorAll('.tb-eztb-pie-percent') : [],
+      function (el) { return parseFloat(el.textContent) || 0; }
+    );
+    var counts = panePosts ? panePosts.querySelectorAll('.tb-eztb-pie-count') : [];
+    var sum = percents.reduce(function (a, b) { return a + b; }, 0);
+    add('饼图图例有 三段占比与条数', percents.length === 3 && counts.length === 3,
+        percents.length + ' 段 / ' + counts.length + ' 个条数');
+    add('三段占比合计 100%', Math.abs(sum - 100) < 0.5,
+        percents.map(function (v) { return v.toFixed(1); }).join('+') + '=' + sum.toFixed(1));
+    add('画出来的扇段数与有数据的分类数一致', arcs.length > 0, arcs.length + ' 段');
+    add('饼图没有画出 NaN', String(pie && pie.textContent).indexOf('NaN') < 0, '');
+  }
+
+  /** 回复正文 + 「查楼层」：正文要直接显示，楼层点了才查 */
+  function extrasReplies() {
+    var replyBtn = inPanel('.tb-eztb-subtab[data-subtab="reply"]');
+    add('存在「回复」子页签按钮（阶段 8）', !!replyBtn, '');
+    if (!replyBtn) { extrasSignIn(); return; }
+    replyBtn.click();
+    until(function () { return rowsIn(subPane('reply')).length > 0; }, function (gotReply) {
+      add('阶段 8：回复子页签拉到真实数据', gotReply, '共 ' + rowsIn(subPane('reply')).length + ' 行');
+      var rows = Array.prototype.slice.call(rowsIn(subPane('reply')));
+      var withContent = rows.filter(function (row) {
+        var sub = row.querySelector('.tb-eztb-row-sub');
+        if (!sub) return false;
+        // 副标题里带了吧名小标签，去掉空白后还应当有正文
+        return String(sub.textContent).replace(/\\s+/g, '').length > 3;
+      });
+      add('回复行显示了回复正文（不再只有标题）', withContent.length > 0,
+          withContent.length + '/' + rows.length + ' 行有正文');
+      add('刷新/重渲染后正文仍在（不是只在第一次渲染时有）',
+          withContent.length > 0 && withContent.length === rows.length,
+          withContent.length + ' 行有正文');
+
+      var floorBtn = subPane('reply').querySelector('.tb-eztb-floorbtn');
+      add('回复行带「查楼层」按钮', !!floorBtn, floorBtn ? floorBtn.textContent : '没找到');
+      add('没点之前不显示楼层（不会自动批量发请求）',
+          subPane('reply').querySelectorAll('.tb-eztb-floor').length === 0,
+          '已有 ' + subPane('reply').querySelectorAll('.tb-eztb-floor').length + ' 个楼层标记');
+      if (!floorBtn) { extrasSignIn(); return; }
+
+      // replaceWith 之后原按钮的 parentNode 会变成 null，所以先把所在行记下来
+      var floorRow = floorBtn.closest('.tb-eztb-row');
+      floorBtn.click();
+      add('点「查楼层」后按钮进入查询中状态',
+          /查询中|查不到|查询失败/.test(floorBtn.textContent), floorBtn.textContent);
+      until(function () {
+        if (!floorRow) return true;
+        return !!floorRow.querySelector('.tb-eztb-floor') ||
+          !floorBtn.isConnected ||
+          /查不到|查询失败/.test(floorBtn.textContent);
+      }, function (done) {
+        var chip = floorRow ? floorRow.querySelector('.tb-eztb-floor') : null;
+        add('点「查楼层」后换成了「N楼」', !!chip && /楼/.test(chip.textContent),
+            chip
+              ? chip.textContent
+              : '等到了 ' + done + '，按钮现在=' + floorBtn.textContent +
+                ' 标题=' + floorBtn.getAttribute('title') +
+                ' 还在页面上=' + floorBtn.isConnected +
+                '；相关请求=' + JSON.stringify(
+                  window.__tbLog.filter(function (item) {
+                    return item.url.indexOf('/c/f/pb/floor') >= 0;
+                  }).slice(-3)
+                ));
+        add('楼层标记带上了那一楼的内容（用来判断回的是哪一楼）',
+            !!chip && String(chip.getAttribute('title')).length > 4,
+            chip ? String(chip.getAttribute('title')).slice(0, 50) : '');
+        extrasSignIn();
+      }, 150);
+    }, 100);
+  }
+
+  /** 签到号检测：点了才查，查完要给结论，并逐行补上"近期发言 N 条" */
+  function extrasSignIn() {
+    var forumsTab = inPanel('.tb-eztb-tab[data-tab="forums"]');
+    add('存在「关注的吧」页签（阶段 8）', !!forumsTab, '');
+    if (!forumsTab) { extrasHidden(); return; }
+    forumsTab.click();
+    until(function () {
+      var pane = document.querySelector('.tb-eztb-pane[data-pane="forums"]');
+      return !!pane && !!pane.querySelector('[data-act="activity"]');
+    }, function (ready) {
+      var pane = inPanel('.tb-eztb-pane[data-pane="forums"]');
+      var button = pane && pane.querySelector('[data-act="activity"]');
+      add('「关注的吧」里有「检测签到号」按钮', !!button, button ? button.textContent : '没找到');
+      add('没点之前不显示发言统计',
+          pane && pane.querySelectorAll('.tb-eztb-row-extra').length === 0,
+          pane ? pane.querySelectorAll('.tb-eztb-row-extra').length + ' 行已有统计' : '');
+      if (!ready || !button) { extrasHidden(); return; }
+
+      button.click();
+      until(function () {
+        var el = inPanel('.tb-eztb-pane[data-pane="forums"] .tb-eztb-activity');
+        return !!el && /判定条件|没有发现|隐藏了发帖记录/.test(String(el.textContent));
+      }, function (done) {
+        var paneNow = inPanel('.tb-eztb-pane[data-pane="forums"]');
+        var text = String(paneNow.querySelector('.tb-eztb-activity').textContent);
+        add('点「检测签到号」会给出结论', done, text.slice(0, 110));
+        add('结论里写明了判定条件与样本大小（不许说成"从来不发言"）',
+            /判定条件/.test(text) && /样本/.test(text), text.slice(0, 160));
+        add('每一行都补上了「近期发言 N 条」',
+            paneNow.querySelectorAll('.tb-eztb-row-extra').length ===
+              paneNow.querySelectorAll('.tb-eztb-row[data-forum]').length,
+            paneNow.querySelectorAll('.tb-eztb-row-extra').length + '/' +
+              paneNow.querySelectorAll('.tb-eztb-row[data-forum]').length + ' 行');
+        add('检测跑完后按钮变成「重新检测」', button.textContent === '重新检测', button.textContent);
+        add('检测签到号期间没有 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+        extrasHidden();
+      }, 150);
+    }, 100);
+  }
+
+  /**
+   * 对方隐藏了发帖记录：必须说"看不到"，不能说"他没有公开的主题帖"。
+   * 这个用户的 userpost 响应由本地代理顶成 hidePost=1（见 click-test.mjs 顶部说明）。
+   */
+  function extrasHidden() {
+    var close = document.querySelector('.tb-eztb-close');
+    if (close) close.click();
+    add('（阶段 8）隐藏用例前旧面板已关闭', !document.querySelector('.tb-eztb-mask'),
+        '还剩 ' + document.querySelectorAll('.tb-eztb-mask').length + ' 个遮罩');
+    var hiddenBtn = document.querySelector('#hidden-post .tb-eztb-btn');
+    add('隐藏发帖的测试用户也注入了按钮', !!hiddenBtn, '');
+    if (!hiddenBtn) { extrasDone(); return; }
+    hiddenBtn.click();
+    until(function () {
+      return !!inPanel('.tb-eztb-kv') && !!inPanel('.tb-eztb-tab[data-tab="posts"]');
+    }, function (opened) {
+      add('隐藏发帖用户的面板已打开并解析出资料', opened, '');
+      var tab = inPanel('.tb-eztb-tab[data-tab="posts"]');
+      if (!opened || !tab) { extrasDone(); return; }
+      tab.click();
+      until(function () {
+        var pane = postsPane();
+        return !!pane && pane.querySelectorAll('.tb-eztb-row').length === 0 && !!pane.querySelector('.tb-eztb-warn');
+      }, function (got) {
+        var pane = postsPane();
+        var text = String(pane && pane.textContent);
+        var who = String((inPanel('.tb-eztb-title') || {}).textContent || '?') +
+          ' / ' + String((inPanel('.tb-eztb-sub') || {}).textContent || '?');
+        add('隐藏了发帖记录时给出了原因提示', /隐藏/.test(text),
+            '面板=' + who + ' 内容=' + text.slice(0, 90));
+        add('隐藏时不再说"该用户没有公开的主题帖"',
+            !/没有公开的主题帖/.test(text), text.slice(0, 130));
+        add('隐藏时列表为空（拿不到内容就是拿不到）',
+            rowsIn(subPane('topic')).length === 0,
+            '行数 ' + rowsIn(subPane('topic')).length);
+        extrasDone();
+      }, 150);
+    }, 100);
+  }
+
+  function extrasDone() {
+    add('阶段 8 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+    finish();
+  }
+
+  /**
    * 阶段 6：页面上的成分标记。
    *
    * 规则是「名单命中」，所以标记一定会出现在被点名的那位作者旁边，
@@ -342,7 +574,7 @@ const PAGE = `<!doctype html>
             '请求数 ' + requestsBefore + ' → ' + window.__tbRequests);
         add('重新检测后标记依然在', !!document.querySelector('.l_post .tb-eztb-badges .tb-eztb-badge'), '');
         add('运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-        finish();
+        phaseExtras();
       }, 60);
       };
 
@@ -646,6 +878,7 @@ for (const [index, match] of Array.from(
 
 // ── 本地服务：托管页面 + 转发请求 + 收集结果 ─────────────────────────
 let resolveResult;
+let hiddenStubHits = 0;
 const resultPromise = new Promise((resolve) => {
 	resolveResult = resolve;
 });
@@ -681,6 +914,21 @@ const server = http.createServer(async (req, res) => {
 			const chunks = [];
 			for await (const chunk of req) chunks.push(chunk);
 			const body = Buffer.concat(chunks);
+			// 只顶掉"隐藏了发帖记录"这一个用户的 userpost：其余请求照旧走真实接口
+			if (
+				target.includes("/c/u/feed/userpost") &&
+				body.includes(HIDDEN_STUB_NEEDLE)
+			) {
+				hiddenStubHits += 1;
+				res.writeHead(200, { "content-type": "application/octet-stream" });
+				res.end(HIDDEN_STUB_BYTES);
+				return;
+			}
+			if (process.env.EZTB_DEBUG && target.includes("/c/u/feed/userpost")) {
+				console.log(
+					`  [debug] userpost 请求体 ${body.length} 字节：${body.subarray(0, 48).toString("hex")} / ascii=${JSON.stringify(body.subarray(0, 48).toString("latin1"))}`,
+				);
+			}
 			const headers = {};
 			for (const [key, value] of Object.entries(req.headers)) {
 				if (
@@ -756,6 +1004,8 @@ if (!match) {
 }
 
 let failures = 0;
+// 「隐藏发帖记录」那条断言依赖这个桩；桩没被命中说明拦截条件写错了（比如 uid 没出现在请求体里）
+console.log(`  隐藏发帖桩命中 ${hiddenStubHits} 次`);
 for (const line of match[1].trim().split("\n")) {
 	const [status, label, detail] = line.split("|");
 	if (status === "PASS") {

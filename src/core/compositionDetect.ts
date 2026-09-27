@@ -73,12 +73,23 @@ export async function detectComposition(
 		}
 	}
 
-	if (rules.some((rule) => rule.postKeywords.length)) {
+	// 「发帖关键词」与「发帖所在吧关键词」都吃发帖 feed，所以两者只要有一个配了就得取；
+	// 只配了名单的规则一个请求都不会发。
+	const needPosts = rules.some(
+		(rule) => rule.postKeywords.length || rule.postForumKeywords.length,
+	);
+
+	if (needPosts) {
 		try {
 			const rows = await loadTopicRows(target.id, 1);
 			stat.topics = rows.length;
 			for (const row of rows) {
-				posts.push({ title: row.title, preview: row.preview, kind: "topic" });
+				posts.push({
+					title: row.title,
+					preview: row.preview,
+					kind: "topic",
+					forumName: row.forumName,
+				});
 			}
 		} catch (error) {
 			stat.failed.push(`主题帖：${errorMessage(error)}`);
@@ -91,6 +102,7 @@ export async function detectComposition(
 					title: row.title,
 					preview: row.preview,
 					kind: row.kind === "sub" ? "sub" : "reply",
+					forumName: row.forumName,
 				});
 			}
 		} catch (error) {

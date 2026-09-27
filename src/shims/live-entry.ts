@@ -20,13 +20,25 @@ export { UserPostReqIdl } from "eztb-internal/userpost-req";
 export { UserPostResIdl } from "eztb-internal/userpost-res";
 
 // 本工程自己的取数模块，用于在 Node 里复现问题
-export { loadPostPage, loadReplyRows, loadTopicRows } from "../core/userPost.ts";
+export {
+	loadPostPage,
+	loadReplyPage,
+	loadReplyRows,
+	loadTopicPage,
+	loadTopicRows,
+} from "../core/userPost.ts";
+// 「这条回复在第几楼」（点了才查）与它的缓存
+export { fetchReplyFloor, readReplyFloorCache } from "../core/replyFloor.ts";
+// 「他最近在哪些吧发过言」（签到号判定用的样本）
+export { loadForumActivity } from "../core/forumActivity.ts";
 // 关注的吧（含"隐藏关注贴吧"的回退），成分检测与面板共用这一份
 export { loadUserForums } from "../core/userForums.ts";
 // 探查脚本要单独调这两个接口做对照
 export { getHiddenLikeForum, getLikeForum } from "tieba.js";
 // 探查脚本要看清楼层里作者带的字段（比如"吧内等级"）
 export { getPosts } from "tieba.js";
+// 「回复/楼中楼 的楼层号」来源：/c/f/pb/floor 的 data.post.floor
+export { getComments } from "tieba.js";
 // 「点了才查」的吧内等级（从他在该吧的帖子里读）
 export { fetchUserForumLevel } from "../core/forumLevel.ts";
 // 关键词匹配是纯逻辑，这里导出让 live-test 用真实数据跑一遍

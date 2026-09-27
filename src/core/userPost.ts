@@ -30,11 +30,30 @@ export type PostKind = "topic" | "reply" | "sub";
 export interface PostRow {
 	kind: PostKind;
 	threadId: string;
+	/** 这条记录自身的帖子 ID（pid）。「查楼层」就是拿它去 /c/f/pb/floor 换楼层号 */
+	postId: string;
 	title: string;
 	/** 正文摘要：主题帖取正文，回复取回复内容 */
 	preview: string;
 	forumName: string;
 	createTime: number;
+	/** 楼中楼里被回复的人（只有楼中楼才有） */
+	replyTo?: string;
+}
+
+/**
+ * 一页发帖结果。
+ *
+ * `hidden` 来自响应里的 `data.hidePost`：实测（2026-09-27 抽样 108 个用户）
+ * 用户把发帖记录设为私密时，**两路 feed 都返回 `hidePost=1`、`maskType=3`、postList 为空**；
+ * 正常用户是 `hidePost=0`、`maskType=1`（抽样里 93/108 是 1，15/108 是 3）。
+ *
+ * 结论：被隐藏的帖子**拿不到内容**（服务端根本不返回），但脚本可以据此把
+ * 「对方没有公开的帖子」和「对方隐藏了帖子」区分开，而不是一律显示"没有公开的主题帖"。
+ */
+export interface PostFeedPage {
+	rows: PostRow[];
+	hidden: boolean;
 }
 
 function buildRequest(uid: number, isThread: number, pn: number): Uint8Array {
@@ -57,7 +76,7 @@ async function fetchRaw(
 	uid: number,
 	isThread: 0 | 1,
 	pn: number,
-): Promise<any[]> {
+): Promise<{ postList: any[]; hidden: boolean }> {
 	ensureClient();
 	return requestQueue.run(async () => {
 		const client = getClient();
@@ -69,7 +88,10 @@ async function fetchRaw(
 		if (errorno) {
 			throw new TiebaServerError(errorno, decoded?.error?.errmsg ?? "");
 		}
-		return (decoded?.data?.postList ?? []) as any[];
+		return {
+			postList: (decoded?.data?.postList ?? []) as any[],
+			hidden: toNumber(decoded?.data?.hidePost) > 0,
+		};
 	});
 }
 
@@ -84,39 +106,64 @@ function textOf(contents: unknown): string {
 }
 
 /** 一页主题帖（该用户自己开的帖）。 */
+export async function loadTopicPage(
+	uid: number,
+	page: number,
+): Promise<PostFeedPage> {
+	const raw = await fetchRaw(uid, 1, page);
+	return {
+		hidden: raw.hidden,
+		rows: raw.postList.map((item) => ({
+			kind: "topic" as const,
+			threadId: String(item.threadId ?? ""),
+			postId: String(item.postId ?? ""),
+			title: item.title || "",
+			preview: textOf(item.firstPostContent),
+			forumName: item.forumName || "",
+			createTime: toNumber(item.createTime),
+		})),
+	};
+}
+
+/** 一页回复（含楼中楼，楼中楼用 affiliated 标记）。 */
+export async function loadReplyPage(
+	uid: number,
+	page: number,
+): Promise<PostFeedPage> {
+	const raw = await fetchRaw(uid, 0, page);
+	const posts = await requestQueue.run(async () => {
+		const result = processUserPosts(raw.postList as never, true);
+		return (await Effect.runPromise(result)) as any[];
+	});
+	return {
+		hidden: raw.hidden,
+		rows: (posts ?? []).map((post) => ({
+			kind: post.affiliated ? ("sub" as const) : ("reply" as const),
+			threadId: String(post.threadId ?? ""),
+			// 楼中楼的 pid 指向那条楼中楼本身，/c/f/pb/floor 会回它所在的那一楼
+			postId: String(post.postId ?? ""),
+			title: post.title || post.content || "",
+			preview: post.content || "",
+			forumName: post.forumName || "",
+			createTime: toNumber(post.createTime),
+			replyTo: post.replyTo || undefined,
+		})),
+	};
+}
+
+/** 只要行的版本（面板、成分检测用）。 */
 export async function loadTopicRows(
 	uid: number,
 	page: number,
 ): Promise<PostRow[]> {
-	const raw = await fetchRaw(uid, 1, page);
-	return raw.map((item) => ({
-		kind: "topic" as const,
-		threadId: String(item.threadId ?? ""),
-		title: item.title || "",
-		preview: textOf(item.firstPostContent),
-		forumName: item.forumName || "",
-		createTime: toNumber(item.createTime),
-	}));
+	return (await loadTopicPage(uid, page)).rows;
 }
 
-/** 一页回复（含楼中楼，楼中楼用 affiliated 标记）。 */
 export async function loadReplyRows(
 	uid: number,
 	page: number,
 ): Promise<PostRow[]> {
-	const raw = await fetchRaw(uid, 0, page);
-	const posts = await requestQueue.run(async () => {
-		const result = processUserPosts(raw as never, true);
-		return (await Effect.runPromise(result)) as any[];
-	});
-	return (posts ?? []).map((post) => ({
-		kind: post.affiliated ? ("sub" as const) : ("reply" as const),
-		threadId: String(post.threadId ?? ""),
-		title: post.title || post.content || "",
-		preview: post.content || "",
-		forumName: post.forumName || "",
-		createTime: toNumber(post.createTime),
-	}));
+	return (await loadReplyPage(uid, page)).rows;
 }
 
 /** 一页合并结果：主题帖 + 回复，按时间倒序。 */

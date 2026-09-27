@@ -8,14 +8,27 @@ import { getFans, getFollow } from "tieba.js";
 import {
 	type PostKind,
 	type PostRow,
-	loadReplyRows,
-	loadTopicRows,
+	loadReplyPage,
+	loadTopicPage,
 } from "../core/userPost.ts";
 import { type Identity, callSdkLoose, resolveIdentity } from "../core/identity.ts";
 import {
 	fetchUserForumLevel,
 	readForumLevelCache,
 } from "../core/forumLevel.ts";
+import {
+	fetchReplyFloor,
+	readReplyFloorCache,
+} from "../core/replyFloor.ts";
+import {
+	type PostCounts,
+	buildPieSvg,
+	countPosts,
+	emptyCounts,
+	mergeCounts,
+} from "../core/postStats.ts";
+import { type ForumActivity, loadForumActivity } from "../core/forumActivity.ts";
+import { findSignInForums, signInSummary } from "../core/activityRule.ts";
 import {
 	HIDDEN_FORUMS_NOTE,
 	NO_LEVEL_NOTE,
@@ -49,6 +62,8 @@ const FOLLOW_PAGE_SIZE = 20;
 interface PageResult<T> {
 	items: T[];
 	totalPages?: number;
+	/** 数据源说这份记录被隐藏了（发帖页签用：hidePost != 0） */
+	hidden?: boolean;
 }
 
 interface PagedListOptions<T> {
@@ -56,7 +71,14 @@ interface PagedListOptions<T> {
 	loadPage: (page: number) => Promise<PageResult<T>>;
 	renderRow: (item: T) => string;
 	emptyText: string;
+	/** 数据被隐藏时的说明文字（不传就用 emptyText） */
+	hiddenText?: string;
 	summaryText?: (loaded: number, totalPages: number) => string;
+	/**
+	 * 每加载完一页调用一次：新插入的行才需要绑定各自的按钮（「查楼层」这类），
+	 * 也是更新占比饼图的时机。
+	 */
+	onPage?: (result: PageResult<T>) => void;
 }
 
 /** 分页列表：一次只取一页，点"加载更多"再取下一页。 */
@@ -65,6 +87,7 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 	const maxPages = Math.max(1, settings.maxPagesPerList);
 
 	options.body.innerHTML =
+		`<div class="tb-eztb-notice"></div>` +
 		`<div class="tb-eztb-list"></div>` +
 		`<button class="tb-eztb-more" disabled>加载中…</button>` +
 		`<div class="tb-eztb-hint"></div>`;
@@ -72,6 +95,7 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 	const listEl = options.body.querySelector<HTMLElement>(".tb-eztb-list")!;
 	const moreBtn = options.body.querySelector<HTMLButtonElement>(".tb-eztb-more")!;
 	const hintEl = options.body.querySelector<HTMLElement>(".tb-eztb-hint")!;
+	const noticeEl = options.body.querySelector<HTMLElement>(".tb-eztb-notice")!;
 
 	let page = 0;
 	let loaded = 0;
@@ -108,13 +132,24 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 				);
 			}
 
+			// 数据被隐藏时说清楚原因：不要显示成"该用户没有公开的主题帖"
+			if (result.hidden) {
+				noticeEl.innerHTML = `<div class="tb-eztb-warn">${escapeHtml(
+					options.hiddenText ?? options.emptyText,
+				)}</div>`;
+			}
+			options.onPage?.(result);
+
 			const exhausted =
 				result.items.length === 0 ||
 				page >= maxPages ||
 				(page >= totalPages && Number.isFinite(totalPages));
 
 			if (!loaded && exhausted) {
-				listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
+				// 隐藏的情况下上面已经给了原因，这里不再重复一句"没有公开的帖子"
+				if (!result.hidden) {
+					listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
+				}
 			}
 
 			moreBtn.disabled = exhausted;
@@ -255,6 +290,81 @@ function renderFansTab(body: HTMLElement, identity: Identity): void {
 }
 
 /**
+ * 把「检测签到号」的结果写进已经渲染好的列表里。
+ *
+ * 逐行补写而不是整块重渲染：重渲染会把「查等级」刚点出来的结果一起冲掉。
+ * 判定的措辞（把"样本只有最近一页"说清楚）在 core/activityRule.ts。
+ */
+function applyForumActivity(
+	body: HTMLElement,
+	items: ForumRow[],
+	activity: ForumActivity,
+	levelThreshold: number,
+): void {
+	const activityEl = body.querySelector<HTMLElement>(".tb-eztb-activity");
+	const parts: string[] = [];
+
+	if (activity.hidden) {
+		parts.push(
+			`<div class="tb-eztb-warn">该用户隐藏了发帖记录，读不到发帖样本，因此没法判断「等级与活跃度是否相符」。</div>`,
+		);
+	} else {
+		const candidates = findSignInForums(items, activity.byForum, levelThreshold);
+		const candidateNames = new Set(candidates.map((item) => item.forumName));
+		parts.push(
+			`<div class="tb-eztb-hint">${escapeHtml(
+				signInSummary(candidates, levelThreshold, {
+					topics: activity.topics,
+					replies: activity.replies,
+				}),
+			)}</div>`,
+		);
+
+		for (const row of Array.from(
+			body.querySelectorAll<HTMLElement>(".tb-eztb-row[data-forum]"),
+		)) {
+			const name = row.dataset.forum ?? "";
+			const count = activity.byForum[name] ?? 0;
+			const main = row.querySelector<HTMLElement>(".tb-eztb-row-main");
+			if (main) {
+				let sub = main.querySelector<HTMLElement>(".tb-eztb-row-sub");
+				if (!sub) {
+					sub = document.createElement("span");
+					sub.className = "tb-eztb-row-sub";
+					main.appendChild(sub);
+				}
+				// 反复点「重新检测」时不能越叠越多：原始内容只在第一次记下来
+				if (sub.dataset.baseHtml === undefined) {
+					sub.dataset.baseHtml = sub.innerHTML;
+				}
+				sub.innerHTML =
+					sub.dataset.baseHtml +
+					` <span class="tb-eztb-row-extra">近期发言 ${count} 条</span>`;
+			}
+
+			if (!candidateNames.has(name)) continue;
+			const meta = row.querySelector<HTMLElement>(".tb-eztb-row-meta");
+			if (!meta || meta.querySelector(".tb-eztb-signin")) continue;
+			const level = items.find((item) => item.name === name)?.level;
+			const mark = document.createElement("span");
+			mark.className = "tb-eztb-signin";
+			mark.textContent = "疑似只签到";
+			mark.title =
+				`吧内等级 Lv.${level}（≥ ${levelThreshold}），但最近一页发帖里在这个吧 0 条发言。` +
+				`可能是只签到不发言，也可能是最近没来。`;
+			meta.prepend(mark);
+		}
+	}
+
+	if (activity.failed.length) {
+		parts.push(
+			`<div class="tb-eztb-warn">部分数据没取到：${escapeHtml(activity.failed.join("；"))}</div>`,
+		);
+	}
+	if (activityEl) activityEl.innerHTML = parts.join("");
+}
+
+/**
  * 「关注的吧」。
  *
  * 取数（含隐藏关注贴吧的回退）在 core/userForums.ts 里，后台成分检测共用同一份。
@@ -296,11 +406,17 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 					.map((note) => `<div class="tb-eztb-warn">${escapeHtml(note)}</div>`)
 					.join("") +
 				`<div class="tb-eztb-hint">共 ${items.length} 个${withLevel ? ` · 其中 ${withLevel} 个有等级信息` : " · 都没有等级信息"}</div>` +
+				// 「等级与活跃度是否相符」要额外两次请求（发帖 feed 的最近一页），所以点了才查
+				`<div class="tb-eztb-actions" style="justify-content:flex-start;margin:8px 0;">` +
+				`<button type="button" class="tb-eztb-minibtn" data-act="activity">检测签到号</button>` +
+				`<span class="tb-eztb-hint">等级高、最近又不在该吧发言的吧</span>` +
+				`</div>` +
+				`<div class="tb-eztb-activity"></div>` +
 				`<div class="tb-eztb-list">` +
 				items
 					.map((item) =>
 						[
-							`<a class="tb-eztb-row" href="${escapeHtml(forumUrl(item.name))}" target="_blank" rel="noopener noreferrer">`,
+							`<a class="tb-eztb-row" data-forum="${escapeHtml(item.name)}" href="${escapeHtml(forumUrl(item.name))}" target="_blank" rel="noopener noreferrer">`,
 							`<span class="tb-eztb-row-main">`,
 							`<span class="tb-eztb-row-title">${escapeHtml(item.display)}</span>`,
 							item.slogan || item.levelName
@@ -315,6 +431,45 @@ function renderFollowForumsTab(body: HTMLElement, identity: Identity): void {
 					)
 					.join("") +
 				`</div>`;
+
+			/**
+			 * 「检测签到号」：用发帖 feed 的最近一页统计他在每个吧的发言数。
+			 *
+			 * 只标注、不重排：逐行把结论补进已经渲染好的行里，
+			 * 这样「查等级」刚点出来的结果不会被重渲染冲掉。
+			 */
+			const activityButton = body.querySelector<HTMLButtonElement>(
+				'[data-act="activity"]',
+			);
+			const activityEl = body.querySelector<HTMLElement>(".tb-eztb-activity");
+			activityButton?.addEventListener("click", () => {
+				if (activityButton.disabled) return;
+				activityButton.disabled = true;
+				const originalLabel = activityButton.textContent ?? "检测签到号";
+				activityButton.textContent = "检测中…";
+				if (activityEl) {
+					activityEl.innerHTML = `<div class="tb-eztb-hint">正在读取他最近一页的发帖…</div>`;
+				}
+				void (async () => {
+					try {
+						const activity = await loadForumActivity(identity.id);
+						applyForumActivity(
+							body,
+							items,
+							activity,
+							getSettings().signInLevelThreshold,
+						);
+						activityButton.textContent = "重新检测";
+					} catch (error) {
+						if (activityEl) {
+							activityEl.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
+						}
+						activityButton.textContent = originalLabel;
+					} finally {
+						activityButton.disabled = false;
+					}
+				})();
+			});
 
 			// 「查等级」按钮：点了才发请求（每个吧最多 3 次），结果写缓存。
 			// 按按钮逐个绑定，不用事件委托——刷新页签时按钮会重建，委托反而会留下旧闭包。
@@ -366,7 +521,43 @@ const POST_KIND_LABEL: Record<PostKind, string> = {
 	sub: "楼中楼",
 };
 
+/** 发帖记录被隐藏时的说明（feed 的 hidePost != 0，见 core/userPost.ts）。 */
+const HIDDEN_POSTS_NOTE =
+	"该用户把发帖记录设成了私密：贴吧接口对两路 feed 都只返回空列表，脚本拿不到任何帖子内容。这不是「没有发过帖」，而是「看不到」——被隐藏的帖子目前没有可取到的接口。";
+
+/**
+ * 楼层那一格：已知就显示「N楼」，不知道就给一个「查楼层」按钮（点了才查）。
+ *
+ * 楼层号不在发帖 feed 里（见 core/replyFloor.ts），一个楼层一次请求，
+ * 所以默认不查、点了才查，查过写缓存。
+ */
+function renderFloorSlot(post: PostRow): string {
+	if (!post.postId) return "";
+	const cached = readReplyFloorCache(post.threadId, post.postId);
+	if (cached) {
+		return `<span class="tb-eztb-floor" title="${escapeHtml(
+			cached.excerpt ? `${cached.floor} 楼的内容：${cached.excerpt}` : `${cached.floor} 楼`,
+		)}">${cached.floor}楼</span>`;
+	}
+	return (
+		`<button type="button" class="tb-eztb-floorbtn"` +
+		` data-thread="${escapeHtml(post.threadId)}" data-post="${escapeHtml(post.postId)}"` +
+		` title="发帖列表里没有楼层号，点一下去这个帖子里查他在第几楼">查楼层</button>`
+	);
+}
+
 function renderPostRow(post: PostRow): string {
+	const isReply = post.kind !== "topic";
+	// 回复与楼中楼要能看到"他到底回了什么"：正文在 preview 里，之前没显示出来
+	const subParts: string[] = [];
+	if (post.forumName) {
+		subParts.push(
+			`<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`,
+		);
+	}
+	if (isReply && post.preview) {
+		subParts.push(escapeHtml(post.preview));
+	}
 	return (
 		`<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
 		`<span class="tb-eztb-row-main">` +
@@ -374,11 +565,58 @@ function renderPostRow(post: PostRow): string {
 		`<span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>` +
 		`${escapeHtml(post.title || post.preview || "(无标题)")}` +
 		`</span>` +
-		`<span class="tb-eztb-row-sub">${escapeHtml(post.forumName || "未知贴吧")}</span>` +
+		(subParts.length
+			? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>`
+			: `<span class="tb-eztb-row-sub">未知贴吧</span>`) +
 		`</span>` +
-		`<span class="tb-eztb-row-meta">${escapeHtml(formatTimestamp(post.createTime))}</span>` +
+		`<span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` +
+		(isReply ? renderFloorSlot(post) : "") +
+		`<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span>` +
+		`</span>` +
 		`</a>`
 	);
+}
+
+/**
+ * 给新插入的行绑定「查楼层」。
+
+ * 逐个绑定而不是事件委托：刷新页签时行会重建，委托留下的旧闭包会指向已经不存在的行
+ * （「关注的吧」里的「查等级」当初就是这么定的）。dataset 打标避免重复绑定。
+ */
+function bindFloorButtons(root: HTMLElement): void {
+	for (const button of Array.from(
+		root.querySelectorAll<HTMLButtonElement>(".tb-eztb-floorbtn"),
+	)) {
+		if (button.dataset.bound === "1") continue;
+		button.dataset.bound = "1";
+		button.addEventListener("click", (event) => {
+			// 行本身是个链接：点按钮不能跳走
+			event.preventDefault();
+			event.stopPropagation();
+			if (button.disabled) return;
+			const threadId = button.dataset.thread ?? "";
+			const postId = button.dataset.post ?? "";
+			if (!threadId || !postId) return;
+			button.disabled = true;
+			button.textContent = "查询中…";
+			void (async () => {
+				const result = await fetchReplyFloor(threadId, postId);
+				if (result.floor) {
+					const span = document.createElement("span");
+					span.className = "tb-eztb-floor";
+					span.textContent = `${result.floor}楼`;
+					span.title = result.excerpt
+						? `${result.floor} 楼的内容：${result.excerpt}`
+						: `${result.floor} 楼`;
+					button.replaceWith(span);
+					return;
+				}
+				button.textContent = "查不到";
+				button.title = result.reason ?? "没查到";
+				button.disabled = false;
+			})();
+		});
+	}
 }
 
 type PostSubTab = "topic" | "reply";
@@ -408,21 +646,30 @@ function mountPostsSubList(
 	pane: HTMLElement,
 	identity: Identity,
 	subTab: PostSubTab,
+	/** 每加载出一页就把这些行交给「发帖」页签，用来更新占比饼图 */
+	onRows: (rows: PostRow[]) => void,
 ): void {
 	const spec = POST_SUBTABS.find((item) => item.id === subTab)!;
 	mountPagedList<PostRow>({
 		body: pane,
 		emptyText: spec.emptyText,
+		hiddenText: HIDDEN_POSTS_NOTE,
 		summaryText: spec.summaryText,
 		// 主题帖与回复是两个独立 feed，各自翻页，不再合并成一个列表：
 		// 合并后两条 feed 的页码对不上，跨页的时间倒序只能近似。
-		loadPage: async (page) => ({
-			items:
+		loadPage: async (page) => {
+			const feed =
 				subTab === "topic"
-					? await loadTopicRows(identity.id, page)
-					: await loadReplyRows(identity.id, page),
-		}),
+					? await loadTopicPage(identity.id, page)
+					: await loadReplyPage(identity.id, page);
+			// hidden=true 时贴吧返回的是空列表：界面要说"对方隐藏了"，而不是"没有帖子"
+			return { items: feed.rows, hidden: feed.hidden };
+		},
 		renderRow: renderPostRow,
+		onPage: (result) => {
+			bindFloorButtons(pane);
+			onRows(result.items);
+		},
 	});
 }
 
@@ -438,6 +685,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	const active: PostSubTab = body.dataset.subtab === "reply" ? "reply" : "topic";
 
 	body.innerHTML =
+		// 占比饼图：随已加载的行更新（两个子页签各自取数，先点哪个就先统计哪个）
+		`<div class="tb-eztb-piestat"></div>` +
 		`<div class="tb-eztb-subtabs" role="tablist">` +
 		POST_SUBTABS.map(
 			(item) =>
@@ -448,6 +697,13 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 			(item) =>
 				`<div class="tb-eztb-subpane${item.id === active ? " active" : ""}" data-subpane="${item.id}"></div>`,
 		).join("");
+
+	let counts: PostCounts = emptyCounts();
+	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
+	const updatePie = () => {
+		if (pieEl) pieEl.innerHTML = buildPieSvg(counts);
+	};
+	updatePie();
 
 	// 首次切到某个子页签时才取数：没点过的那个不会白白发请求
 	const mounted = new Set<PostSubTab>();
@@ -465,7 +721,12 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 		const pane = body.querySelector<HTMLElement>(
 			`.tb-eztb-subpane[data-subpane="${id}"]`,
 		);
-		if (pane) mountPostsSubList(pane, identity, id);
+		if (pane) {
+			mountPostsSubList(pane, identity, id, (rows) => {
+				counts = mergeCounts(counts, countPosts(rows));
+				updatePie();
+			});
+		}
 	};
 
 	for (const button of body.querySelectorAll<HTMLElement>(".tb-eztb-subtab")) {

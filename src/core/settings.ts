@@ -13,7 +13,7 @@ export interface ToolboxSettings {
 	maxPagesPerList: number;
 	/**
 	 * 「成分」关键词规则表，一行一条：
-	 * 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省)
+	 * 名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)
 	 */
 	compositionRules: string;
 	/** 是否在页面上自动检测并标注（默认开；规则为空时不会发任何请求） */
@@ -22,6 +22,11 @@ export interface ToolboxSettings {
 	compositionMaxPerPage: number;
 	/** 成分结果缓存多少天 */
 	compositionCacheDays: number;
+	/**
+	 * 「疑似只签到」判定的吧内等级门槛：
+	 * 等级 ≥ 这个值、且最近一页发帖里在该吧 0 条发言的吧会被标出来。
+	 */
+	signInLevelThreshold: number;
 }
 
 export const DEFAULT_SETTINGS: ToolboxSettings = {
@@ -33,6 +38,7 @@ export const DEFAULT_SETTINGS: ToolboxSettings = {
 	compositionAuto: true,
 	compositionMaxPerPage: 20,
 	compositionCacheDays: 3,
+	signInLevelThreshold: 6,
 };
 
 let cache: ToolboxSettings | null = null;
@@ -75,6 +81,13 @@ export function updateSettings(patch: Partial<ToolboxSettings>): ToolboxSettings
 		next.compositionCacheDays = DEFAULT_SETTINGS.compositionCacheDays;
 	}
 	if (next.compositionCacheDays > 365) next.compositionCacheDays = 365;
+	if (
+		!Number.isFinite(next.signInLevelThreshold) ||
+		next.signInLevelThreshold < 1
+	) {
+		next.signInLevelThreshold = DEFAULT_SETTINGS.signInLevelThreshold;
+	}
+	if (next.signInLevelThreshold > 18) next.signInLevelThreshold = 18;
 	next.compositionAuto = next.compositionAuto !== false;
 	cache = next;
 	try {

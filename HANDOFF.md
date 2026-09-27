@@ -1,8 +1,8 @@
 # eztb-userscript 项目交接文档
 
 > 用途：在新对话中继续这个项目时，先读这份文档即可恢复全部上下文。
-> 最后更新：2026-09-24
-> 当前版本：**1.4.0**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
+> 最后更新：2026-09-27
+> 当前版本：**1.5.0**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
 > （装在油猴里的那条对应 `dist/tieba-eztb-toolbox.user.js`）
 
 ---
@@ -84,6 +84,10 @@ eztb-userscript/
 │  │  ├─ identity.ts            # ★ UserRef → 带 ID 的 Identity（面板与成分检测共用）
 │  │  ├─ userPost.ts            # ★ 主题帖/回复双 feed 取数与分类
 │  │  ├─ userForums.ts          # ★ 关注的吧取数（含隐藏关注贴吧的回退）
+│  │  ├─ replyFloor.ts          # ★ "这条回复在第几楼"（点了才查 + 缓存）
+│  │  ├─ forumActivity.ts       # ★ "他最近在哪些吧发过言"（点了才查 + 缓存）
+│  │  ├─ activityRule.ts        # ★ 签到号判定（纯逻辑：等级高 + 该吧 0 发言）
+│  │  ├─ postStats.ts           # ★ 发帖/回复/楼中楼占比与饼图（纯逻辑）
 │  │  ├─ composition.ts         # ★ 成分规则解析 / 匹配 / 关键词高亮（纯逻辑）
 │  │  ├─ compositionDetect.ts   # ★ 成分取数编排（按需取关注吧 / 主题帖 / 回复）
 │  │  ├─ compositionCache.ts    # ★ 成分结果缓存（带规则指纹）
@@ -222,7 +226,7 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 规则文本一行一条，写在设置面板里：
 
 ```
-名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单
+名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词 | 直接命中名单 | 发帖所在吧关键词
 ```
 
 | 判定 | 说明 |
@@ -230,10 +234,46 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 | 分隔符 | 字段用 `|`，关键词用逗号（中英文都行）。**不按空格切**——参考脚本里就有「互动抽奖 #原神」这种带空格的词，切了就废 |
 | 发帖匹配 | 打在该用户主题帖/回复的「标题 + 正文摘要」上（各取第 1 页） |
 | 吧匹配 | 打在该用户关注的吧名上（`getLikeForum`，隐藏时回退 `getHiddenLikeForum`） |
+| 发帖所在吧 | 打在他**实际发过帖**的吧名上（1.5.0 新增，规则文本里的**第 6 段**）。与"关注的吧"是两回事：关注是一回事，说没说话是另一回事。放最后一段是为了不改老规则（5 段）的列序；末尾多写一个 `|` 也不会被误读 |
 | 证据强弱 | 名单 / 关注的吧 / **主题帖** = 强证据；**回复、楼中楼** = 弱证据（界面标"可能是误判"，标记也淡一些） |
 | 排除词 | 命中则整条证据作废（对应参考脚本的 keywordsReverse），用来压住玩梗误伤 |
 | 合并 | 同一条规则的多条证据合成一个命中，不会变成两个徽章刷屏 |
 | 缓存 | 结果里存规则指纹（`hashRules`），改规则自动失效；默认 3 天过期 |
+
+### 4.5 楼层号只在帖子接口里，发帖 feed 没有
+
+`PostInfoList` 的字段是 forumId / threadId / **postId** / createTime / title / content[] …
+**没有 `floor`**（`Post.floor` 属于 `/c/f/pb/page`、`/c/f/pb/floor` 那一侧的 `Post` 消息）。
+所以「回复在第几楼」只能额外换一次：
+
+```
+getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
+```
+
+实测（2026-09-27）这一条对两种行都成立：
+
+- **普通回复**：pid 就是那一楼自己的帖子 ID → `floor=3`
+- **楼中楼**：pid 是楼中楼那条的帖子 ID → `floor` 是**它所在的那一楼**（实测 2），
+  同一次返回里 `data.post.content` 还是那一楼的正文——正好用来说明"回的是哪一楼"
+
+一条回复 = 一个请求，所以做成**点了才查**（`src/core/replyFloor.ts`），缓存在
+`tbEztbToolboxReplyFloorV1`。live-test 里有交叉验证（封装读到的楼层与直接调接口一致）
+和"第二次走缓存"的断言。
+
+### 4.6 发帖记录被隐藏：`hidePost` 是唯一能看出来的信号
+
+用户把发帖记录设为私密时，**两路 feed 都返回 `hidePost=1`、`maskType=3`、`postList` 为空**；
+正常用户是 `hidePost=0`、`maskType=1`。实测（2026-09-27 抽样 108 个真实用户）：
+15 个隐藏、93 个正常，`hidePost` 与 `maskType=3` 完全对应，且**没有一个反例**
+（说了隐藏还给内容的）。
+
+结论：**被隐藏的帖子拿不到**（服务端根本不返回内容，脚本没有绕过的办法），
+但可以把"对方隐藏了"和"对方没有公开的帖子"区分开——面板现在会说前者。
+断言在 live-test：`hidePost=1 的返回里列表必为空（没有反例）`。
+
+> 顺带：`hidePost` 是 protobuf 里的 `uint32`（字段号 2），所以 `{data:{hidePost:1}}`
+> 的字节就是 `12 02 10 01`。click-test 用它把某个用户的 userpost 响应顶掉，
+> 从而**不依赖某个真实账号的隐私设置**来验证这条路径。
 
 ---
 
@@ -258,6 +298,10 @@ SDK 内部生成的编解码器通过别名引入（`tieba.js/generated/UserPost
 | 15 | 想复现 #14，但快照里量出来"没有重叠"，差点得出"不存在这个问题"的结论 | MHTML 只保存页面**内联** `<style>`（`cid:css-…@mhtml.blink`），**外部** CSS 只剩链接；而 `.head-line{display:flex}`、`.image-text .user-info{height:40px}` 全在外部 `pb.*.css` 里 | 新增 `scripts/fetch-sample-css.mjs` 把快照引用的 CSS 抓到 `../test0/_css_cache`，page-test 用本地路由 `/css/<name>` 喂回去，快照这才变成"带样式"的页面，也才量出 #14 |
 | 16 | 在 Node 里调 SDK 的 `getPosts` 报 `Cannot read properties of undefined (reading '0')`，且一个请求都没发出去 | 签名是 `getPosts(tid, page, options)`，我按 `getPosts({tid, page, rn})` 调：`page` 变成 undefined，走进了多页分支里的 `page[0]` | 看签名再调；这类"本地就炸、且没发请求"的错优先怀疑参数形状 |
 | 17 | 想从帖子页读"某人在某吧的等级"，一开始以为拿不到 | `pb/page` 的响应里楼层 `author` 是空的，数据在同级的 `userList[]` 里（按 `authorId` 对应） | 读 `userList`，里面的 `levelId` 就是**该吧**等级（见 §4.2 第三条路） |
+| 18 | 断言"楼中楼被标记为 sub"无故失败；"needForumName 能解析吧名"也失败 | **样本问题**：这两条断言拿"某个吧第一页的前几个作者"当样本，而那几个人恰好没发帖 / 没有楼中楼（2026-09-27 实测正好撞上） | 扩样本：多取两个吧的作者凑候选名单，在名单里**找符合条件的那一个**，而不是赌第一个；另外单个用户取数失败要 `try/catch` 跳过（有个 id 会回 `errno 300000`，不接住会把整轮测试带崩） |
+| 19 | click-test 里"隐藏了发帖记录"的桩一次都没命中 | 请求体里找 user id 用了 ASCII 字符串，但 proto 里 **`userId` 是 int64，走 varint 编码** | 按 varint 字节匹配（`varintBytes(uid)`）。另外 protobuf 请求是 **multipart/form-data**（字段名 `data`、filename `file`），不是裸二进制——抓包/写桩时别按裸 protobuf 想 |
+| 20 | 断言"点查楼层后换成了 N楼"，报"没有换成楼层标记"，但功能其实正常 | 我读的是 `floorBtn.parentNode`，而 `button.replaceWith(span)` 之后**原按钮的 `parentNode` 变成 null** | 点击前先记住所在行（`closest('.tb-eztb-row')`），断言去行里找；顺带发现"等 `!isConnected`"本身就会在替换的那一刻成立，不能当"被重建"的证据 |
+| 21 | 新加的「检测签到号」按钮复用 `.tb-eztb-levelbtn` 类，导致老断言点错按钮 | 测试按类名找「查等级」按钮（`querySelectorAll('.tb-eztb-levelbtn')[0]`），我的按钮排在列表前面被当成目标 | 每种小按钮用**自己的类名**（`tb-eztb-levelbtn` / `tb-eztb-floorbtn` / `tb-eztb-minibtn`），样式用逗号选择器共享 |
 
 ### 排查方法论（有效，建议沿用）
 
@@ -277,9 +321,9 @@ cd <本项目目录>
 node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 要求）
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
-node scripts/keyword-test.mjs # 成分规则解析/匹配（纯离线，29 项断言）
-node scripts/live-test.mjs    # 真实接口链路（19 项断言）
-node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（94 项断言）
+node scripts/keyword-test.mjs # 规则解析/匹配 + 占比统计 + 签到判定（纯离线，52 项断言）
+node scripts/live-test.mjs    # 真实接口链路（27 项断言）
+node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（125 项断言）
 node scripts/fetch-sample-css.mjs  # 首次/换快照后跑一次：抓快照引用的外部 CSS
 node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项断言）
 
@@ -298,7 +342,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | 脚本 | 机制 | 能抓到什么 |
 |---|---|---|
 | `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 和浏览器 shim 跑一遍，逐字符比对；另外把 Greasy Fork 的硬性要求（未压缩、≤2 MB、元数据必填项、内嵌库来源）写成 V7 一组断言 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项 |
-| `keyword-test.mjs` | 打包真实的 `src/core/composition.ts`，对规则解析、匹配、排除词、证据强弱、高亮转义做断言 | 成分规则逻辑改坏（离线就能发现，不用等浏览器） |
+| `keyword-test.mjs` | 打包真实的 `src/core/composition.ts`、`postStats.ts`、`activityRule.ts`（三个纯逻辑模块），对规则解析、匹配、排除词、证据强弱、高亮转义、占比/饼图几何、签到号判定做断言 | 成分规则、饼图算法、签到判定改坏（离线就能发现，不用等浏览器） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页（`pn` 第 2 页与第 1 页不同）、真实发帖数据跑关键词匹配、隐藏关注贴吧的恢复、**"点了才查"的等级与面板交叉验证** |
 | `click-test.mjs` | 本地起同源服务：托管页面 + 转发请求到贴吧（绕开 CORS）+ 收集结果；用无头 Edge 打开，注入脚本+GM 桩，做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签切换、子页签独立翻页、刷新、成分标记、关注的吧「查等级」按钮、菜单里的重新检测 |
 | `page-test.mjs` | 把用户保存的 mhtml 解码、再把快照引用的外部 CSS 用本地路由补回去，然后注入脚本在无头浏览器里跑 | 只有真实页面才暴露的问题（如#6 标记撞名）、默认不带规则时不得注入成分标记、新版头部行里按钮/标记的排版约束（#14） |
@@ -326,10 +370,18 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | 关注的人 | `getFollow`，分页加载（每页 20） |
 | 关注的吧 | `getLikeForum`（带 Lv.N 与等级称号），空则回退 `getHiddenLikeForum`（**等级取自 grade 的键**）；拿不到等级的行带「查等级」按钮（点了才查，见 §4.2） |
 | 粉丝 | `getFans` |
-| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼** |
+| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼**，回复与楼中楼显示**回复正文**、带 **「查楼层」** 按钮（点了才查，见 §4.5）；页签顶部是**占比饼图**（`core/postStats.ts`） |
 
 其他：
 
+- **「发帖」页签顶部的占比饼图**：按已加载的记录统计主题帖 / 回复 / 楼中楼的数量与占比，
+  翻页时跟着更新。用 SVG 的 `stroke-dasharray` 画（不用 path 弧线：只有一个分类占 100%
+  时弧线起终点重合会算出 NaN），纯字符串生成，离线可测。
+- **「关注的吧」里的「检测签到号」**：点它才取数（发帖 feed 各一页），按吧统计他最近在哪儿发言，
+  标出「吧内等级 ≥ 门槛、最近这批帖子里该吧 0 条发言」的吧，并给每行补上「近期发言 N 条」。
+  结论里必须同时写明判定条件与样本大小（`core/activityRule.ts` 的 `signInSummary`）——
+  样本只有最近一页，不能写成"他从来不发言"。门槛在设置里（`signInLevelThreshold`，默认 6）。
+- **隐藏发帖记录时说明原因**（§4.6）：不再显示"没有公开的主题帖"，而是"对方隐藏了发帖记录。
 - 面板底部 **「刷新当前页签」**（重新解析用户 + 重建当前页签，其它页签保留；
   在「发帖」页签里刷新后会回到刷新前选中的那个子页签）
 - **页面成分标注**：配好规则后，命中的用户会在「查询」按钮旁多出一个彩色标记，
@@ -365,6 +417,20 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.5.0 · 回复正文与楼层 + 占比饼图 + 签到号 + 隐藏发帖 + 成分第 6 段**（按用户给的 5 条需求做的）：
+
+| 需求 | 做法 | 验证 |
+|---|---|---|
+| 回复、楼中楼显示楼层和回复内容 | 回复正文本来就在 `preview` 里，只是**没渲染**——现在显示出来了；楼层用 `getComments` 的 `data.post.floor`（§4.5），一行一个「查楼层」按钮，点了才查、查过缓存 | live-test：读到楼层=3 且与直接调接口一致、第二次走缓存；click-test：正文 6/6 行可见、点按钮后换成「N楼」并带上那一楼的内容 |
+| 发帖、回复按占比画饼图 | `core/postStats.ts`：计数 + 占比 + SVG 环形图（纯逻辑）；「发帖」页签顶部渲染，翻页时更新 | keyword-test 8 项（占比、合计 100%、空数据不 NaN、单分类只画一段、弧长合计等于整圈）；click-test：图例三段、占比合计 100%、扇段数与有数据的分类一致 |
+| 能否查被隐藏的主题帖 | **不能**（服务端只返回空列表），但能识别出来——`hidePost != 0` 就是"隐藏了"（§4.6）；界面改说辞，不再说"没有公开的主题帖" | live-test：不变量（hidePost=1 必为空，108 个用户里 15 个隐藏，无反例）；click-test：本地代理把该用户的 userpost 顶成 `hidePost=1` 后断言提示与空列表（不依赖真实账号的隐私设置） |
+| 查成分加入"在某个吧发言"的检测 | 规则第 6 段 `postForumKeywords`：打在他**实际发过帖**的吧名上（主题帖=强证据，回复=弱证据）。放在末尾是为了不动老规则的列序 | keyword-test 8 项（新列解析、老规则不受影响、末尾多一个 `|` 也不误读、强/弱证据、排除词、指纹变化）；live-test 现有断言回归通过 |
+| 查签到号（等级与活跃度不符） | `core/forumActivity.ts` 取"主题帖一页 + 回复一页"按吧统计；`core/activityRule.ts` 纯逻辑判定「等级 ≥ 门槛 且 该吧 0 条」 | keyword-test 6 项（统计、只挑达标且零发言、无等级不参与、门槛、措辞含样本与条件）；live-test 2 项（样本取得到、统计数不超过样本）；click-test：点按钮出结论、每行补「近期发言 N 条」 |
+
+顺带修掉的两处**测试自身**的脆弱（不是产品 bug，但让套件在真实数据前变红）：
+`needForumName` 与"楼中楼标记"两条断言原来赌"某个吧第一页的前几个作者"，改成扩样本后在名单里找符合条件的那个；
+单个用户取数失败（实测有个 id 回 `errno 300000`）要 `try/catch` 跳过。详见 §5 的 #18～#21。
 
 **1.4.0 · 「查等级」（点了才查）** —— 隐藏关注贴吧 + 没有用户名的用户本来拿不到吧内等级，
 现在面板「关注的吧」里没等级的行带一个小按钮，点了才去他在该吧的帖子里读
