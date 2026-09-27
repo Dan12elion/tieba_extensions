@@ -308,7 +308,11 @@ async function resolveForumNames(ids: string[]): Promise<Map<string, string>> {
 		while (cursor < wanted.length) {
 			const id = wanted[cursor];
 			cursor += 1;
+			// `wanted` 是开始时算的：等到轮到自己的时候，另一条路径（面板 / 成分检测）
+			// 可能已经把这个吧名取回来了——那就别再问一次。
+			if (isFresh(forumNames.get(id))) continue;
 			await waitForumNameSlot();
+			if (isFresh(forumNames.get(id))) continue;
 			// 试两次：反查失败时那一行的吧名是空的，空吧名在按吧统计里会变成「未知贴吧」
 			// （至少不丢条数，但能重试回来更好——第一次失败多半只是抽风）
 			let name = "";
