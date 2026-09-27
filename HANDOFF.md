@@ -256,6 +256,13 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 - **楼中楼**：pid 是楼中楼那条的帖子 ID → `floor` 是**它所在的那一楼**（实测 2），
   同一次返回里 `data.post.content` 还是那一楼的正文——正好用来说明"回的是哪一楼"
 
+**pid 必须取正文级（`UserPost.cid`），不能取记录级（`PostInfoList.postId`）**：
+一条 feed 记录可以带多条正文（他在同一个帖子里连发几楼），记录级 pid 是这几行**共用**的，
+拿它去查楼层会让同一帖的每一行都查回同一个楼层。实测（uid 874540992 第 1 页）：
+一条记录含 3 条正文，记录级 pid 是 112 楼，而第二、三条正文分别在 111 楼等位置；
+抽样 24 个用户 187 条记录里 32 条（17.1%）是这种"一记录多正文"。live-test 有断言：
+同一帖子里两行回复必须查到**各自**的楼层（不是同一个）。
+
 一条回复 = 一个请求，所以做成**点了才查**（`src/core/replyFloor.ts`），缓存在
 `tbEztbToolboxReplyFloorV1`。live-test 里有交叉验证（封装读到的楼层与直接调接口一致）
 和"第二次走缓存"的断言。
@@ -302,7 +309,9 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 | 19 | click-test 里"隐藏了发帖记录"的桩一次都没命中 | 请求体里找 user id 用了 ASCII 字符串，但 proto 里 **`userId` 是 int64，走 varint 编码** | 按 varint 字节匹配（`varintBytes(uid)`）。另外 protobuf 请求是 **multipart/form-data**（字段名 `data`、filename `file`），不是裸二进制——抓包/写桩时别按裸 protobuf 想 |
 | 20 | 断言"点查楼层后换成了 N楼"，报"没有换成楼层标记"，但功能其实正常 | 我读的是 `floorBtn.parentNode`，而 `button.replaceWith(span)` 之后**原按钮的 `parentNode` 变成 null** | 点击前先记住所在行（`closest('.tb-eztb-row')`），断言去行里找；顺带发现"等 `!isConnected`"本身就会在替换的那一刻成立，不能当"被重建"的证据 |
 | 21 | 新加的「检测签到号」按钮复用 `.tb-eztb-levelbtn` 类，导致老断言点错按钮 | 测试按类名找「查等级」按钮（`querySelectorAll('.tb-eztb-levelbtn')[0]`），我的按钮排在列表前面被当成目标 | 每种小按钮用**自己的类名**（`tb-eztb-levelbtn` / `tb-eztb-floorbtn` / `tb-eztb-minibtn`），样式用逗号选择器共享 |
-| 22 | 「复制的吧名缓存第二次不再请求」这条断言一直通过，其实**什么都没测** | 同一个进程里前面已经取过那个用户的回复页，`forumNames` 是热的，量出来「第一次 +0、第二次 +0」——两边相等，断言恒真 | 打断言前先 `clearForumNameCache()`；并且要断言「第一次 > 0 **且** 第二次 == 0」，只写「两次相等」是不够的 |
+| 22 | 「查楼层」对同一帖子里的多行回复都显示同一个楼层 | 行上的 pid 取了记录级 `PostInfoList.postId`，而**一条记录可以带多条正文**（同帖连发几楼），记录级 pid 是共用的 | 取正文级 `UserPost.cid`（`postId: String(post.cid \|\| post.postId)`）。实测抽样 187 条记录里 32 条是多正文（17.1%）；live-test 加了"同帖两行必须查到各自楼层"的断言 |
+| 23 | 「检测签到号」实际发了 11 个请求，代码/文档都以为只有 2 个 | 回复 feed **不返回吧名**（只有 forumId），要按吧反查 `getForumName`；而 SDK 自己的 names 缓存是**每次 `Effect.runPromise` 都重建**的（模块级存的是 Effect 而不是解析后的 Cache），所以每取一页回复都要重发一遍 | 在 `core/userPost.ts` 里加跨调用的吧名缓存（`forumNames`，上限 500）。实测第二条同页回复的请求数从 11 降到 2；live-test 有断言"第二次不再重复反查"。**注意**：全新会话里第一次仍是 2 + 该页不同吧数 |
+| 24 | 「复制的吧名缓存第二次不再请求」这条断言一直通过，其实**什么都没测** | 同一个进程里前面已经取过那个用户的回复页，`forumNames` 是热的，量出来「第一次 +0、第二次 +0」——两边相等，断言恒真 | 打断言前先 `clearForumNameCache()`；并且要断言「第一次 > 0 **且** 第二次 == 0」，只写「两次相等」是不够的 |
 
 ### 排查方法论（有效，建议沿用）
 
@@ -323,8 +332,8 @@ node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
 node scripts/keyword-test.mjs # 规则解析/匹配 + 占比统计 + 签到判定 + 发帖行副标题（纯离线，59 项断言）
-node scripts/live-test.mjs    # 真实接口链路（29 项断言）
-node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（127 项断言）
+node scripts/live-test.mjs    # 真实接口链路（31 项断言）
+node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（128 项断言）
 node scripts/fetch-sample-css.mjs  # 首次/换快照后跑一次：抓快照引用的外部 CSS
 node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项断言）
 
@@ -379,7 +388,8 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 - **「发帖」页签顶部的占比饼图**：按已加载的记录统计主题帖 / 回复 / 楼中楼的数量与占比，
   翻页时跟着更新。用 SVG 的 `stroke-dasharray` 画（不用 path 弧线：只有一个分类占 100%
   时弧线起终点重合会算出 NaN），纯字符串生成，离线可测。
-- **「关注的吧」里的「检测签到号」**：点它才取数（发帖 feed 各一页），按吧统计他最近在哪儿发言，
+- **「关注的吧」里的「检测签到号」**：点它才取数（发帖 feed 各一页；回复里的吧名要按吧反查一次，
+  见 §5 #23——首次约 11 个请求，之后命中吧名缓存只剩 2 个），按吧统计他最近在哪儿发言，
   标出「吧内等级 ≥ 门槛、最近这批帖子里该吧 0 条发言」的吧，并给每行补上「近期发言 N 条」。
   结论里必须同时写明判定条件与样本大小（`core/activityRule.ts` 的 `signInSummary`）——
   样本只有最近一页，不能写成"他从来不发言"。门槛在设置里（`signInLevelThreshold`，默认 6）。
@@ -427,6 +437,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 | 楼中楼只显示正文，看不出他在回谁 | 渲染 `PostRow.replyTo`（显示成「↩ 名字」）。这段渲染抽成纯函数 `core/postStats.ts` 的 `postRowSubParts`，离线就能测 | keyword-test 7 项（有/无 replyTo、主题帖与普通回复不标、HTML 转义）；click-test 复核面板确实走这一份渲染 |
 | 「检测签到号」的请求数被 SDK 的吧名反查放大 | 回复 feed 只有 `forumId`。SDK 的 `processUserPosts(..., true)` 每次 `Effect.runPromise` 都会**重建**它的内部缓存，于是每取一页回复都按吧重发一遍 `getforumdetail`——实测一条 12 行的回复页多发 9 个请求，「检测签到号」因此从 2 个请求涨到 11 个。现在 `loadReplyPage` 自己按 forumId 缓存吧名（成功的长期有效，失败的 5 分钟后允许重试） | live-test：冷启动第一次 +9、第二次 +0；「回复行能解析出吧名」12/12 |
 | 这条缓存的旧断言是**恒真**的 | 旧断言直接在热缓存上量出「第一次 +0、第二次 +0」，等于没测。现在先 `clearForumNameCache()` 清空再量 | live-test 改成「第一次会请求、第二次不重复」 |
+| **「查楼层」对同一帖子的多行回复会显示同一个楼层**（独立子代理用真实数据证伪时发现的） | 行上的 pid 原来取了记录级 `PostInfoList.postId`，而一条记录可以带多条正文（同帖连发几楼），记录级 pid 是共用的。改成正文级 `UserPost.cid`（见 §4.5 与坑 #22） | live-test 新增两条：同帖多行的 postId 互不相同；同帖两行普通回复查到的是**各自**楼层（实测 4 vs 2） |
 
 > 排查顺手补的：`scripts/probe-user.mjs` 现在会把**展平后的发帖行**（kind / 吧名 / 回复对象 / 能不能查楼层）打出来——
 > 「这个字段为什么拿不到」类问题先用它看真实数据，别再猜。
@@ -552,7 +563,7 @@ raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试**（`verify` / `keyword-test` / `live-test` / `click-test` / `page-test`），
-   当前基线（1.5.1 实测）：verify 39 / keyword-test 59 / live-test 29 / click-test 127 项全绿；
+当前基线（1.5.1 实测）：verify 39 / keyword-test 59 / live-test 31 / click-test 128 项全绿；
    page-test 66 项需要快照目录（默认同级 `../test0`），本机没有快照时跳过并注明。
 3. 涉及 DOM 或布局的改动，**加反向验证**：把修复改回去，确认断言会失败。
 4. 涉及协议或数据模型的疑问，**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs`

@@ -84,7 +84,8 @@ export function postRowSubParts(post: {
 			`<span class="tb-eztb-row-replyto">↩ ${escapeHtml(post.replyTo)}</span>`,
 		);
 	}
-	// 主题帖的正文不在 preview 里（在 firstPostContent，SDK 已经映射掉了），这里只补回复
+	// 主题帖的副标题只放吧名：用户要的是"回复内容"，而主题帖的正文摘要与标题
+	// 往往是同一段话，再显示一遍没有信息量
 	if (post.kind !== "topic" && post.preview) {
 		parts.push(escapeHtml(post.preview));
 	}

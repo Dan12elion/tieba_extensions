@@ -29311,8 +29311,12 @@ ${endStackCall}`;
       rows: (posts ?? []).map((post) => ({
         kind: post.affiliated ? "sub" : "reply",
         threadId: String(post.threadId ?? ""),
-        // 楼中楼的 pid 指向那条楼中楼本身，/c/f/pb/floor 会回它所在的那一楼
-        postId: String(post.postId ?? ""),
+        // 必须用**正文级**的 pid（cid），不能用 PostInfoList.postId：
+        // 一条 feed 记录可以带多条正文（他在同一个帖子里连发几楼），
+        // 记录级 pid 是这几行共用的，用它去查楼层会让同一帖的每一行都查回同一个楼层。
+        // 实测（2026-09-27，uid 874540992）：一条记录含 3 条正文，
+        // 记录级 pid 对应 112 楼，而第二、三条正文其实在 111 / 其它楼。
+        postId: String(post.cid || post.postId || ""),
         title: post.title || post.content || "",
         preview: post.content || "",
         forumName: names.get(String(post.forumId ?? "")) || post.forumName || "",
