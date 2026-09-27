@@ -709,6 +709,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	 * 就是这个中间态被当成了结果，所以**没到齐必须在图上写明**（见 buildPieNotes）。
 	 */
 	const pending = new Set<PostSubTab>(POST_SUBTABS.map((item) => item.id));
+	/** 这一路已经取到过行了（用来把"整路没取到"和"后面某一页没取到"分开说） */
+	const loadedAny = new Set<PostSubTab>();
 	/** 哪一路 feed 取数失败（失败要写进饼图旁边，不能只留在被隐藏的子页签里） */
 	const failures = new Map<PostSubTab, string>();
 	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
@@ -719,6 +721,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 				label: item.label,
 				loading: pending.has(item.id),
 				error: failures.get(item.id),
+				hasRows: loadedAny.has(item.id),
 			})),
 		);
 		pieEl.innerHTML =
@@ -750,6 +753,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 					// 首批数据到齐，撤掉「还在加载」；重试成功后失败提示也要一起消失
 					pending.delete(id);
 					failures.delete(id);
+					loadedAny.add(id);
 					counts = mergeForumCounts(counts, countPostsByForum(rows));
 					updatePie();
 				},

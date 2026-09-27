@@ -29358,12 +29358,25 @@ ${endStackCall}`;
     );
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   }
+  var forumNameInFlight = /* @__PURE__ */ new Map();
   async function lookupForumName(id) {
+    const inFlight = forumNameInFlight.get(id);
+    if (inFlight) return inFlight;
     ensureClient();
+    const task = (async () => {
+      try {
+        return String(
+          await Effect_exports.runPromise(getForumName(Number(id))) ?? ""
+        ).trim();
+      } catch {
+        return "";
+      }
+    })();
+    forumNameInFlight.set(id, task);
     try {
-      return String(await Effect_exports.runPromise(getForumName(Number(id))) ?? "").trim();
-    } catch {
-      return "";
+      return await task;
+    } finally {
+      forumNameInFlight.delete(id);
     }
   }
   async function resolveForumNames(ids3) {
@@ -30557,10 +30570,9 @@ ${endStackCall}`;
       );
     }
     for (const state of failed) {
+      const reason = escapeHtml(state.error ?? "");
       parts2.push(
-        `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
-          state.error ?? ""
-        )}</div>`
+        state.hasRows ? `<div class="tb-eztb-warn">「${state.label}」的后续页没取到（饼图只统计到已经加载出来的那部分）：${reason}</div>` : `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${reason}</div>`
       );
     }
     return parts2.join("");
@@ -31020,6 +31032,7 @@ ${endStackCall}`;
     let counts = {};
     let listOpen = false;
     const pending4 = new Set(POST_SUBTABS.map((item) => item.id));
+    const loadedAny = /* @__PURE__ */ new Set();
     const failures2 = /* @__PURE__ */ new Map();
     const pieEl = body.querySelector(".tb-eztb-piestat");
     const updatePie = () => {
@@ -31028,7 +31041,8 @@ ${endStackCall}`;
         POST_SUBTABS.map((item) => ({
           label: item.label,
           loading: pending4.has(item.id),
-          error: failures2.get(item.id)
+          error: failures2.get(item.id),
+          hasRows: loadedAny.has(item.id)
         }))
       );
       pieEl.innerHTML = buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
@@ -31053,6 +31067,7 @@ ${endStackCall}`;
           (rows) => {
             pending4.delete(id);
             failures2.delete(id);
+            loadedAny.add(id);
             counts = mergeForumCounts(counts, countPostsByForum(rows));
             updatePie();
           },

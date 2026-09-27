@@ -361,6 +361,46 @@ try {
 	}
 }
 
+// ── 同一页回复被两条路径同时要：吧名反查要按 id 去重 ──────────────────
+// 面板与「成分 / 签到号检测」可能同时请求同一个用户的回复页；缓存是共享的，
+// 但两边的 wanted 各自算，缓存还没写进去时就会各发一遍同样的 getforumdetail。
+// 断言「并发两路的总反查次数 ≤ 该页唯一吧数」——不去重时会是它的两倍。
+{
+	let target = null;
+	let unique = 0;
+	for (const uid of sampleIds.slice(0, 16)) {
+		try {
+			sdk.clearForumNameCache();
+			const replies = await sdk.loadReplyRows(Number(uid), 1);
+			const names = new Set(replies.map((row) => row.forumName).filter(Boolean));
+			if (names.size < 2) continue;
+			target = uid;
+			unique = names.size;
+			break;
+		} catch {
+			/* 单个用户取不到就换下一个 */
+		}
+	}
+	if (!target) {
+		report("两条路径并发取同一页回复时吧名反查按 id 去重", false, "没找到合适的样本");
+	} else {
+		const countLookups = () =>
+			seenUrls.filter((url) => url.includes("getforumdetail")).length;
+		sdk.clearForumNameCache();
+		const before = countLookups();
+		await Promise.all([
+			sdk.loadReplyRows(Number(target), 1),
+			sdk.loadReplyRows(Number(target), 1),
+		]);
+		const lookups = countLookups() - before;
+		report(
+			"两条路径并发取同一页回复时吧名反查按 id 去重",
+			lookups > 0 && lookups <= unique,
+			`uid=${target} 两路并发 / 该页 ${unique} 个吧，反查 ${lookups} 次（不去重会是 ${unique * 2} 次）`,
+		);
+	}
+}
+
 // ── 分页：两个子页签各自翻页，前提是 pn 真能翻到不同的下一页 ──────────
 {
 	let found = null;

@@ -612,11 +612,29 @@ console.log("按吧统计的占比饼图");
 			return (
 				html.includes("tb-eztb-warn") &&
 				html.includes("主题帖") &&
+				html.includes("饼图里缺这一路的条数") &&
 				html.includes("&lt;b&gt;") &&
 				!html.includes("<b>炸了</b>")
 			);
 		})(),
 		buildPieNotes([{ label: "主题帖", error: "<b>炸了</b>" }]),
+	);
+	// 复查时发现的措辞问题：某一路"第一页成功、翻后面某页失败"时，
+	// 饼图里**已经有**它前面那几页的条数，再说"饼图里缺这一路的条数"就是错的。
+	check(
+		"已经取到过这一路的行、只是后续页失败：措辞要改成「后续页没取到」，不能说成整路都缺",
+		(function () {
+			const html = buildPieNotes([
+				{ label: "主题帖" },
+				{ label: "回复", error: "网络错误", hasRows: true },
+			]);
+			return (
+				html.includes("后续页没取到") &&
+				html.includes("只统计到已经加载出来的那部分") &&
+				!html.includes("饼图里缺这一路的条数")
+			);
+		})(),
+		buildPieNotes([{ label: "回复", error: "网络错误", hasRows: true }]),
 	);
 	check(
 		"同一路同时标着 loading 与 error 时只报「还在加载」（不叠两条自相矛盾的提示）",

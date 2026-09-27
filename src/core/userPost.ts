@@ -223,6 +223,7 @@ function isFresh(entry: CachedForumName | undefined): entry is CachedForumName {
 /** 测试用：清掉吧名缓存，让「第二次不再重复请求」的断言能从冷启动开始量。 */
 export function clearForumNameCache(): void {
 	forumNames.clear();
+	forumNameInFlight.clear();
 }
 
 /**
@@ -264,13 +265,34 @@ async function waitForumNameSlot(): Promise<void> {
 	if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
 }
 
+/**
+ * 正在飞的反查：同一个吧 id 只发一个请求。
+
+ * 面板与「成分 / 签到号检测」可能**同时**要同一页回复的吧名（缓存是共享的，
+ * 但两边的 `wanted` 各自算：都还没写进缓存时就会各发一遍）。
+ * 这里按 id 去重，后来的调用直接 await 同一个 promise。
+ */
+const forumNameInFlight = new Map<string, Promise<string>>();
+
 /** 一次吧名反查；失败返回空串（由调用方决定要不要重试）。 */
 async function lookupForumName(id: string): Promise<string> {
+	const inFlight = forumNameInFlight.get(id);
+	if (inFlight) return inFlight;
 	ensureClient();
+	const task = (async () => {
+		try {
+			return String(
+				(await Effect.runPromise(getForumName(Number(id)))) ?? "",
+			).trim();
+		} catch {
+			return "";
+		}
+	})();
+	forumNameInFlight.set(id, task);
 	try {
-		return String((await Effect.runPromise(getForumName(Number(id)))) ?? "").trim();
-	} catch {
-		return "";
+		return await task;
+	} finally {
+		forumNameInFlight.delete(id);
 	}
 }
 

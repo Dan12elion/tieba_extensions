@@ -162,6 +162,14 @@ export interface PieFeedState {
 	loading?: boolean;
 	/** 这一路取数失败的原因（有值就说明饼图里缺了这一路的条数） */
 	error?: string;
+	/**
+	 * 失败之前这一路**已经取到过**行。
+
+	 * 用来把两种失败分开说：第一页就没取到（饼图里整路都缺）vs 翻后面某一页失败
+	 * （饼图里已经有它前面那几页的条数，只是少了后面的）。两者都写"饼图里缺这一路"
+	 * 是错的——后者会让用户以为整路都没算进去。
+	 */
+	hasRows?: boolean;
 }
 
 /**
@@ -187,10 +195,11 @@ export function buildPieNotes(states: PieFeedState[]): string {
 		);
 	}
 	for (const state of failed) {
+		const reason = escapeHtml(state.error ?? "");
 		parts.push(
-			`<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
-				state.error ?? "",
-			)}</div>`,
+			state.hasRows
+				? `<div class="tb-eztb-warn">「${state.label}」的后续页没取到（饼图只统计到已经加载出来的那部分）：${reason}</div>`
+				: `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${reason}</div>`,
 		);
 	}
 	return parts.join("");
