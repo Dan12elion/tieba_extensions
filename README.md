@@ -292,9 +292,9 @@ node scripts/verify.mjs
 | 命令 | 验证内容 |
 | --- | --- |
 | `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；以及 Greasy Fork 的发布要求（39 项） |
-| `node scripts/keyword-test.mjs` | 「成分」规则解析、匹配、排除词、证据强弱、高亮转义（29 项，纯离线） |
-| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配、"隐藏关注贴吧"的恢复，以及"点了才查"的等级（与面板交叉验证）（19 项） |
-| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、关注吧的「查等级」按钮与菜单命令（94 项） |
+| `node scripts/keyword-test.mjs` | 「成分」规则解析、匹配、排除词、证据强弱、高亮转义，以及发帖占比/饼图几何、「疑似只签到」判定与发帖行副标题（楼中楼的「回复了谁」）（59 项，纯离线） |
+| `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点），验证签名、protobuf、multipart、HTTPS 升级、翻页、关键词匹配、"隐藏关注贴吧"的恢复、"点了才查"的等级（与面板交叉验证）、「查楼层」楼层号（与直接调接口交叉验证）、隐藏发帖记录的不变量、按吧统计的样本、回复页吧名反查的缓存（29 项） |
+| `node scripts/click-test.mjs` | 无头 Edge/Chrome 里验证按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、关注吧的「查等级」/「检测签到号」按钮与菜单命令、发帖占比饼图、回复正文与「查楼层」、隐藏发帖时的说辞（127 项） |
 | `node scripts/page-test.mjs` | 用真实页面快照（mhtml + 抓下来的 CSS）离线回归：按钮注入、新版头部行的排版约束（66 项） |
 
 > 快照本身不带外部 CSS（MHTML 只存内联样式）。先跑一次

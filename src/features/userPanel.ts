@@ -26,6 +26,7 @@ import {
 	countPosts,
 	emptyCounts,
 	mergeCounts,
+	postRowSubParts,
 } from "../core/postStats.ts";
 import { type ForumActivity, loadForumActivity } from "../core/forumActivity.ts";
 import { findSignInForums, signInSummary } from "../core/activityRule.ts";
@@ -548,16 +549,8 @@ function renderFloorSlot(post: PostRow): string {
 
 function renderPostRow(post: PostRow): string {
 	const isReply = post.kind !== "topic";
-	// 回复与楼中楼要能看到"他到底回了什么"：正文在 preview 里，之前没显示出来
-	const subParts: string[] = [];
-	if (post.forumName) {
-		subParts.push(
-			`<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`,
-		);
-	}
-	if (isReply && post.preview) {
-		subParts.push(escapeHtml(post.preview));
-	}
+	// 副标题由纯函数拼（吧名标签 / 楼中楼的回复对象 / 回复正文），见 core/postStats.ts
+	const subParts = postRowSubParts(post);
 	return (
 		`<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
 		`<span class="tb-eztb-row-main">` +

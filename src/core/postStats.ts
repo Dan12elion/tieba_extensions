@@ -10,6 +10,7 @@
  */
 
 import type { PostKind } from "./userPost.ts";
+import { escapeHtml } from "./util.ts";
 
 export interface PostCounts {
 	topic: number;
@@ -56,6 +57,38 @@ export function mergeCounts(a: PostCounts, b: PostCounts): PostCounts {
 
 export function totalCount(counts: PostCounts): number {
 	return counts.topic + counts.reply + counts.sub;
+}
+
+/**
+ * 一行发帖记录的「副标题」片段：吧名标签 / 楼中楼的回复对象 / 正文。
+ *
+ * 抽成纯函数是为了能离线断言「楼中楼有没有标出回复了谁」——这段以前只存在于
+ * userPanel 的渲染字符串里，改坏了没有测试会红。返回的是 HTML 片段
+ * （调用方 join 后塞进面板），所以内部统一走 escapeHtml，不信任任何字段。
+ */
+export function postRowSubParts(post: {
+	kind: PostKind;
+	forumName?: string;
+	replyTo?: string;
+	preview?: string;
+}): string[] {
+	const parts: string[] = [];
+	if (post.forumName) {
+		parts.push(
+			`<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`,
+		);
+	}
+	// 楼中楼是在回复某个人：只显示正文的话不知道他在回谁，把对象也带上
+	if (post.kind === "sub" && post.replyTo) {
+		parts.push(
+			`<span class="tb-eztb-row-replyto">↩ ${escapeHtml(post.replyTo)}</span>`,
+		);
+	}
+	// 主题帖的正文不在 preview 里（在 firstPostContent，SDK 已经映射掉了），这里只补回复
+	if (post.kind !== "topic" && post.preview) {
+		parts.push(escapeHtml(post.preview));
+	}
+	return parts;
 }
 
 export interface PieSlice {

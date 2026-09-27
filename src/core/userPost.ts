@@ -15,9 +15,15 @@
  */
 
 import { Effect } from "effect";
-import { TiebaServerError, getClient, processUserPosts } from "tieba.js";
+import {
+	TiebaServerError,
+	getClient,
+	getForumName,
+	processUserPosts,
+} from "tieba.js";
 import { UserPostReqIdl } from "tieba.js/generated/UserPostReqIdl";
 import { UserPostResIdl } from "tieba.js/generated/UserPostResIdl";
+import { callSdkLoose } from "./identity.ts";
 import { requestQueue } from "./queue.ts";
 import { ensureClient } from "./sdk.ts";
 import { toNumber } from "./util.ts";
@@ -132,23 +138,99 @@ export async function loadReplyPage(
 ): Promise<PostFeedPage> {
 	const raw = await fetchRaw(uid, 0, page);
 	const posts = await requestQueue.run(async () => {
-		const result = processUserPosts(raw.postList as never, true);
+		// 这里传 false：把"展平"和"反查吧名"拆开。SDK 那边的 names 缓存是**每次
+		// Effect.runPromise 都重建**的（模块级存的是 Effect 而不是解析后的 Cache），
+		// 于是每取一页回复都要按吧再发一遍 getForumName。实测一条 12 条的回复页会额外发 9 个
+		// 请求，"检测签到号"因此从 2 个变成 11 个。下面用本模块自己的缓存兜住。
+		const result = processUserPosts(raw.postList as never, false);
 		return (await Effect.runPromise(result)) as any[];
 	});
+	const names = await resolveForumNames(
+		raw.postList.map((item) => String(item?.forumId ?? "")),
+	);
 	return {
 		hidden: raw.hidden,
 		rows: (posts ?? []).map((post) => ({
 			kind: post.affiliated ? ("sub" as const) : ("reply" as const),
 			threadId: String(post.threadId ?? ""),
-			// 楼中楼的 pid 指向那条楼中楼本身，/c/f/pb/floor 会回它所在的那一楼
-			postId: String(post.postId ?? ""),
+			// 必须用**正文级**的 pid（cid），不能用 PostInfoList.postId：
+			// 一条 feed 记录可以带多条正文（他在同一个帖子里连发几楼），
+			// 记录级 pid 是这几行共用的，用它去查楼层会让同一帖的每一行都查回同一个楼层。
+			// 实测（2026-09-27，uid 874540992）：一条记录含 3 条正文，
+			// 记录级 pid 对应 112 楼，而第二、三条正文其实在 111 / 其它楼。
+			postId: String(post.cid || post.postId || ""),
 			title: post.title || post.content || "",
 			preview: post.content || "",
-			forumName: post.forumName || "",
+			forumName:
+				names.get(String(post.forumId ?? "")) || post.forumName || "",
 			createTime: toNumber(post.createTime),
 			replyTo: post.replyTo || undefined,
 		})),
 	};
+}
+
+/**
+ * 吧名缓存：回复 feed 不返回吧名（只有 forumId），要按吧反查。
+
+ * 同一个吧在面板、成分检测、签到检测里会被反复问到，所以缓存必须跨调用活下来——
+ * 这与 §4.2 的"点了才查"缓存是两回事，这里缓存的是**几乎不会变的吧名**。
+ */
+interface CachedForumName {
+	name: string;
+	ts: number;
+}
+
+const forumNames = new Map<string, CachedForumName>();
+const FORUM_NAME_CACHE_MAX = 500;
+
+/**
+ * 解析失败（空吧名）只保留这么久，之后允许重新请求。
+ *
+ * 成功的吧名几乎不变，一直有效；失败的若不设期限，一次网络抖动就会让那个吧
+ * 在本次页面会话里永远显示「未知贴吧」（缓存只在页面刷新时重建）。
+ */
+const FORUM_NAME_EMPTY_TTL_MS = 5 * 60 * 1000;
+
+function isFresh(entry: CachedForumName | undefined): entry is CachedForumName {
+	if (!entry) return false;
+	if (entry.name) return true;
+	return Date.now() - entry.ts < FORUM_NAME_EMPTY_TTL_MS;
+}
+
+/** 测试用：清掉吧名缓存，让「第二次不再重复请求」的断言能从冷启动开始量。 */
+export function clearForumNameCache(): void {
+	forumNames.clear();
+}
+
+async function resolveForumNames(ids: string[]): Promise<Map<string, string>> {
+	const wanted = Array.from(
+		new Set(ids.filter((id) => id && id !== "0")),
+	).filter((id) => !isFresh(forumNames.get(id)));
+
+	// 串行解析（requestQueue 本身是串行的，这里不并发，避免一次点出好几个请求）
+	for (const id of wanted) {
+		try {
+			const name = String(
+				(await callSdkLoose(() => getForumName(Number(id)))) ?? "",
+			);
+			forumNames.set(id, { name, ts: Date.now() });
+		} catch {
+			// 单个吧解析失败不影响其它行：留空（界面上显示「未知贴吧」），并允许稍后重试
+			forumNames.set(id, { name: "", ts: Date.now() });
+		}
+	}
+	if (forumNames.size > FORUM_NAME_CACHE_MAX) {
+		const stale = Array.from(forumNames.entries())
+			.sort((a, b) => a[1].ts - b[1].ts)
+			.slice(0, forumNames.size - FORUM_NAME_CACHE_MAX);
+		for (const [key] of stale) forumNames.delete(key);
+	}
+	const out = new Map<string, string>();
+	for (const id of ids) {
+		const entry = forumNames.get(id);
+		if (entry) out.set(id, entry.name);
+	}
+	return out;
 }
 
 /** 只要行的版本（面板、成分检测用）。 */

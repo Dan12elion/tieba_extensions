@@ -370,6 +370,24 @@ const PAGE = `<!doctype html>
           withContent.length > 0 && withContent.length === rows.length,
           withContent.length + ' 行有正文');
 
+      // 副标题由纯函数 postRowSubParts（core/postStats.ts）统一产出——吧名标签、
+      // 楼中楼的「回复了谁」、回复正文都在那里拼。这里确认面板确实走的是这一份：
+      // 吧名标签与离线单测里的标记完全一致。
+      var withForumTag = rows.filter(function (row) {
+        return !!row.querySelector('.tb-eztb-row-sub .tb-eztb-row-forum');
+      });
+      add('回复行的吧名标签由共享渲染函数产出',
+          withForumTag.length > 0,
+          withForumTag.length + '/' + rows.length + ' 行带吧名标签');
+      add('「回复了谁」标记只可能出现在楼中楼行上',
+          Array.prototype.every.call(
+            subPane('reply').querySelectorAll('.tb-eztb-row-replyto'),
+            function (el) {
+              var row = el.closest ? el.closest('.tb-eztb-row') : null;
+              return !!row && !!row.querySelector('.tb-eztb-tag-sub');
+            }),
+          '共 ' + subPane('reply').querySelectorAll('.tb-eztb-row-replyto').length + ' 个');
+
       var floorBtn = subPane('reply').querySelector('.tb-eztb-floorbtn');
       add('回复行带「查楼层」按钮', !!floorBtn, floorBtn ? floorBtn.textContent : '没找到');
       add('没点之前不显示楼层（不会自动批量发请求）',

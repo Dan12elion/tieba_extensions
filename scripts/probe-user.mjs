@@ -248,3 +248,45 @@ if (rawPosts) {
 		);
 	}
 }
+
+// ── 6. 展平后的行：面板真正渲染的就是这一份 ─────────────────────────────
+// 「回复/楼中楼 显示正文与楼层」「发帖占比饼图」「签到号按吧统计」都吃这里的字段，
+// 所以"某个字段为什么拿不到 / 楼中楼有没有回复对象"先用这一段看，不要靠猜。
+console.log("\n【本项目 loadTopicRows / loadReplyRows 的展平行】（面板据此渲染）");
+for (const [label, loader] of [
+	["主题帖", sdk.loadTopicRows],
+	["回复", sdk.loadReplyRows],
+]) {
+	let rows = [];
+	try {
+		rows = await loader(user.id, 1);
+	} catch (error) {
+		console.log(`  ${label}：取数失败 ${error?.message ?? error}`);
+		continue;
+	}
+	const withForum = rows.filter((row) => row.forumName).length;
+	const withPostId = rows.filter((row) => row.postId).length;
+	const subs = rows.filter((row) => row.kind === "sub");
+	const withReplyTo = rows.filter((row) => row.replyTo);
+	console.log(
+		`  ${label}：${rows.length} 行；有吧名 ${withForum}；带 postId（可查楼层）${withPostId}`,
+	);
+	// 楼中楼只可能出现在回复 feed 里，主题帖那边不用重复打一行
+	if (label === "回复") {
+		console.log(
+			`    楼中楼 ${subs.length} 条；其中带「回复了谁」${withReplyTo.length} 条`,
+		);
+	}
+	for (const row of rows.slice(0, 3)) {
+		console.log(
+			`    · [${row.kind}] ${row.forumName || "(无吧名)"}` +
+				`${row.replyTo ? ` ↩ ${row.replyTo}` : ""} ` +
+				`${String(row.preview || row.title || "").slice(0, 24)}`,
+		);
+	}
+	for (const row of withReplyTo.slice(0, 3)) {
+		console.log(
+			`    ↩ [${row.kind}] 回复 ${row.replyTo}：${String(row.preview ?? "").slice(0, 30)}`,
+		);
+	}
+}

@@ -529,6 +529,60 @@ console.log("发帖 / 回复占比");
 	);
 }
 
+// ── 发帖行的副标题：楼中楼必须标出「回复了谁」 ────────────────────────
+console.log("发帖行副标题（回复正文与楼中楼的回复对象）");
+{
+	const { postRowSubParts } = postStats;
+	const hasReplyTo = (parts) =>
+		parts.some((part) => part.includes('class="tb-eztb-row-replyto"'));
+
+	const subWithTo = postRowSubParts({
+		kind: "sub",
+		forumName: "小红书",
+		replyTo: "张三",
+		preview: "好的",
+	});
+	check(
+		"楼中楼标出了回复对象",
+		hasReplyTo(subWithTo) && subWithTo.join(" ").includes("张三"),
+		subWithTo.join(" "),
+	);
+	check(
+		"楼中楼仍然显示自己的正文",
+		subWithTo.some((part) => part.includes("好的")),
+	);
+	check(
+		"副标题里带了吧名标签",
+		subWithTo.some((part) => part.includes('class="tb-eztb-row-forum"')),
+	);
+	check(
+		"普通回复不标「回复对象」（发帖 feed 里没有这个字段）",
+		!hasReplyTo(
+			postRowSubParts({ kind: "reply", forumName: "百度", preview: "嗯" }),
+		),
+	);
+	check(
+		"主题帖不标「回复对象」",
+		!hasReplyTo(
+			postRowSubParts({ kind: "topic", forumName: "百度", preview: "正文" }),
+		),
+	);
+	check(
+		"楼中楼没给回复对象时就不标（可能在回楼主，接口不给 replyTo）",
+		!hasReplyTo(
+			postRowSubParts({ kind: "sub", forumName: "百度", preview: "在回楼主" }),
+		),
+	);
+	check(
+		"回复对象按文本转义，不会注入 HTML",
+		hasReplyTo(postRowSubParts({ kind: "sub", replyTo: "<b>&</b>" })) &&
+			postRowSubParts({ kind: "sub", replyTo: "<b>&</b>" })[0].includes(
+				"&lt;b&gt;&amp;&lt;/b&gt;",
+			),
+		postRowSubParts({ kind: "sub", replyTo: "<b>&</b>" })[0],
+	);
+}
+
 // ── 签到号判定（等级高但几乎不发言） ──────────────────────────────────
 console.log("签到号判定");
 {

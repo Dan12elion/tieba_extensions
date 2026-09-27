@@ -21,6 +21,7 @@ export { UserPostResIdl } from "eztb-internal/userpost-res";
 
 // 本工程自己的取数模块，用于在 Node 里复现问题
 export {
+	clearForumNameCache,
 	loadPostPage,
 	loadReplyPage,
 	loadReplyRows,

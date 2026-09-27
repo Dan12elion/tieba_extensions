@@ -2,7 +2,7 @@
 
 > 用途：在新对话中继续这个项目时，先读这份文档即可恢复全部上下文。
 > 最后更新：2026-09-27
-> 当前版本：**1.5.0**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
+> 当前版本：**1.5.1**；仓库已公开在 <https://github.com/Dan12elion/tieba_extensions>
 > （装在油猴里的那条对应 `dist/tieba-eztb-toolbox.user.js`）
 
 ---
@@ -302,6 +302,7 @@ getComments({tid, pid})  →  /c/f/pb/floor?cmd=303002  →  data.post.floor
 | 19 | click-test 里"隐藏了发帖记录"的桩一次都没命中 | 请求体里找 user id 用了 ASCII 字符串，但 proto 里 **`userId` 是 int64，走 varint 编码** | 按 varint 字节匹配（`varintBytes(uid)`）。另外 protobuf 请求是 **multipart/form-data**（字段名 `data`、filename `file`），不是裸二进制——抓包/写桩时别按裸 protobuf 想 |
 | 20 | 断言"点查楼层后换成了 N楼"，报"没有换成楼层标记"，但功能其实正常 | 我读的是 `floorBtn.parentNode`，而 `button.replaceWith(span)` 之后**原按钮的 `parentNode` 变成 null** | 点击前先记住所在行（`closest('.tb-eztb-row')`），断言去行里找；顺带发现"等 `!isConnected`"本身就会在替换的那一刻成立，不能当"被重建"的证据 |
 | 21 | 新加的「检测签到号」按钮复用 `.tb-eztb-levelbtn` 类，导致老断言点错按钮 | 测试按类名找「查等级」按钮（`querySelectorAll('.tb-eztb-levelbtn')[0]`），我的按钮排在列表前面被当成目标 | 每种小按钮用**自己的类名**（`tb-eztb-levelbtn` / `tb-eztb-floorbtn` / `tb-eztb-minibtn`），样式用逗号选择器共享 |
+| 22 | 「复制的吧名缓存第二次不再请求」这条断言一直通过，其实**什么都没测** | 同一个进程里前面已经取过那个用户的回复页，`forumNames` 是热的，量出来「第一次 +0、第二次 +0」——两边相等，断言恒真 | 打断言前先 `clearForumNameCache()`；并且要断言「第一次 > 0 **且** 第二次 == 0」，只写「两次相等」是不够的 |
 
 ### 排查方法论（有效，建议沿用）
 
@@ -321,16 +322,17 @@ cd <本项目目录>
 node build.mjs                # 默认产出未压缩的可读版（Greasy Fork 要求）
 node build.mjs --minify       # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/verify.mjs       # 签名比对 + 产物检查 + Greasy Fork 要求（39 项断言）
-node scripts/keyword-test.mjs # 规则解析/匹配 + 占比统计 + 签到判定（纯离线，52 项断言）
-node scripts/live-test.mjs    # 真实接口链路（27 项断言）
-node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（125 项断言）
+node scripts/keyword-test.mjs # 规则解析/匹配 + 占比统计 + 签到判定 + 发帖行副标题（纯离线，59 项断言）
+node scripts/live-test.mjs    # 真实接口链路（29 项断言）
+node scripts/click-test.mjs   # 无头浏览器 + 真实数据交互（127 项断言）
 node scripts/fetch-sample-css.mjs  # 首次/换快照后跑一次：抓快照引用的外部 CSS
 node scripts/page-test.mjs    # 真实页面快照回归（4 份页面，66 项断言）
 
 # 工具：把 mhtml 解码成可加载的 html（输出目录可用 EZTB_EXTRACT_OUT 指定）
 node scripts/extract-mhtml.mjs "某个.mhtml"
 
-# 工具：把一个用户在四个接口下的原始返回打出来（回答"为什么这个字段拿不到"）
+# 工具：把一个用户在四个接口下的原始返回打出来，并列出展平后的发帖行
+#       （kind / 吧名 / 回复对象 / 能不能查楼层）——回答"为什么这个字段拿不到"
 node scripts/probe-user.mjs <portrait串|数字ID> [吧名]
 
 # 探查模式：打印原始 feed 结构、is_thread 对比、loadPostPage 分组统计
@@ -417,6 +419,17 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.5.1 · 楼中楼标出「回复了谁」+ 回复页吧名反查的请求数修复**（对 1.5.0 那五条需求的复审）：
+
+| 事项 | 做法 | 验证 |
+|---|---|---|
+| 楼中楼只显示正文，看不出他在回谁 | 渲染 `PostRow.replyTo`（显示成「↩ 名字」）。这段渲染抽成纯函数 `core/postStats.ts` 的 `postRowSubParts`，离线就能测 | keyword-test 7 项（有/无 replyTo、主题帖与普通回复不标、HTML 转义）；click-test 复核面板确实走这一份渲染 |
+| 「检测签到号」的请求数被 SDK 的吧名反查放大 | 回复 feed 只有 `forumId`。SDK 的 `processUserPosts(..., true)` 每次 `Effect.runPromise` 都会**重建**它的内部缓存，于是每取一页回复都按吧重发一遍 `getforumdetail`——实测一条 12 行的回复页多发 9 个请求，「检测签到号」因此从 2 个请求涨到 11 个。现在 `loadReplyPage` 自己按 forumId 缓存吧名（成功的长期有效，失败的 5 分钟后允许重试） | live-test：冷启动第一次 +9、第二次 +0；「回复行能解析出吧名」12/12 |
+| 这条缓存的旧断言是**恒真**的 | 旧断言直接在热缓存上量出「第一次 +0、第二次 +0」，等于没测。现在先 `clearForumNameCache()` 清空再量 | live-test 改成「第一次会请求、第二次不重复」 |
+
+> 排查顺手补的：`scripts/probe-user.mjs` 现在会把**展平后的发帖行**（kind / 吧名 / 回复对象 / 能不能查楼层）打出来——
+> 「这个字段为什么拿不到」类问题先用它看真实数据，别再猜。
 
 **1.5.0 · 回复正文与楼层 + 占比饼图 + 签到号 + 隐藏发帖 + 成分第 6 段**（按用户给的 5 条需求做的）：
 
@@ -539,7 +552,8 @@ raw 安装链接；把仓库里所有本机绝对路径改成"同级目录 + 环
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试**（`verify` / `keyword-test` / `live-test` / `click-test` / `page-test`），
-   当前基线：39 / 29 / 19 / 94 / 66 项断言全绿。
+   当前基线（1.5.1 实测）：verify 39 / keyword-test 59 / live-test 29 / click-test 127 项全绿；
+   page-test 66 项需要快照目录（默认同级 `../test0`），本机没有快照时跳过并注明。
 3. 涉及 DOM 或布局的改动，**加反向验证**：把修复改回去，确认断言会失败。
 4. 涉及协议或数据模型的疑问，**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs`
    或 `node scripts/probe-user.mjs <portrait|ID> [吧名]`，不要凭推测改。

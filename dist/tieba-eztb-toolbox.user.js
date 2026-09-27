@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.5.0
+// @version             1.5.1
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -29300,9 +29300,12 @@ ${endStackCall}`;
   async function loadReplyPage(uid, page) {
     const raw = await fetchRaw(uid, 0, page);
     const posts = await requestQueue.run(async () => {
-      const result = processUserPosts(raw.postList, true);
+      const result = processUserPosts(raw.postList, false);
       return await Effect_exports.runPromise(result);
     });
+    const names = await resolveForumNames(
+      raw.postList.map((item) => String(item?.forumId ?? ""))
+    );
     return {
       hidden: raw.hidden,
       rows: (posts ?? []).map((post) => ({
@@ -29312,11 +29315,44 @@ ${endStackCall}`;
         postId: String(post.postId ?? ""),
         title: post.title || post.content || "",
         preview: post.content || "",
-        forumName: post.forumName || "",
+        forumName: names.get(String(post.forumId ?? "")) || post.forumName || "",
         createTime: toNumber(post.createTime),
         replyTo: post.replyTo || void 0
       }))
     };
+  }
+  var forumNames = /* @__PURE__ */ new Map();
+  var FORUM_NAME_CACHE_MAX = 500;
+  var FORUM_NAME_EMPTY_TTL_MS = 5 * 60 * 1e3;
+  function isFresh2(entry) {
+    if (!entry) return false;
+    if (entry.name) return true;
+    return Date.now() - entry.ts < FORUM_NAME_EMPTY_TTL_MS;
+  }
+  async function resolveForumNames(ids3) {
+    const wanted = Array.from(
+      new Set(ids3.filter((id) => id && id !== "0"))
+    ).filter((id) => !isFresh2(forumNames.get(id)));
+    for (const id of wanted) {
+      try {
+        const name = String(
+          await callSdkLoose(() => getForumName(Number(id))) ?? ""
+        );
+        forumNames.set(id, { name, ts: Date.now() });
+      } catch {
+        forumNames.set(id, { name: "", ts: Date.now() });
+      }
+    }
+    if (forumNames.size > FORUM_NAME_CACHE_MAX) {
+      const stale = Array.from(forumNames.entries()).sort((a, b) => a[1].ts - b[1].ts).slice(0, forumNames.size - FORUM_NAME_CACHE_MAX);
+      for (const [key] of stale) forumNames.delete(key);
+    }
+    const out = /* @__PURE__ */ new Map();
+    for (const id of ids3) {
+      const entry = forumNames.get(id);
+      if (entry) out.set(id, entry.name);
+    }
+    return out;
   }
   async function loadTopicRows(uid, page) {
     return (await loadTopicPage(uid, page)).rows;
@@ -30440,6 +30476,23 @@ ${endStackCall}`;
   function totalCount(counts) {
     return counts.topic + counts.reply + counts.sub;
   }
+  function postRowSubParts(post) {
+    const parts2 = [];
+    if (post.forumName) {
+      parts2.push(
+        `<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`
+      );
+    }
+    if (post.kind === "sub" && post.replyTo) {
+      parts2.push(
+        `<span class="tb-eztb-row-replyto">↩ ${escapeHtml(post.replyTo)}</span>`
+      );
+    }
+    if (post.kind !== "topic" && post.preview) {
+      parts2.push(escapeHtml(post.preview));
+    }
+    return parts2;
+  }
   function buildPieSlices(counts) {
     const total = totalCount(counts);
     return POST_KIND_ORDER.map((key) => {
@@ -30801,15 +30854,7 @@ ${endStackCall}`;
   }
   function renderPostRow(post) {
     const isReply = post.kind !== "topic";
-    const subParts = [];
-    if (post.forumName) {
-      subParts.push(
-        `<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`
-      );
-    }
-    if (isReply && post.preview) {
-      subParts.push(escapeHtml(post.preview));
-    }
+    const subParts = postRowSubParts(post);
     return `<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">未知贴吧</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`;
   }
   function bindFloorButtons(root) {
@@ -31238,6 +31283,8 @@ ${endStackCall}`;
 }
 /* 「检测签到号」之后补上的"近期发言 N 条" */
 .tb-eztb-row-extra{color:#8a8f99 !important;}
+/* 楼中楼回复的对象：淡一点，别抢正文 */
+.tb-eztb-row-replyto{color:#8a8f99 !important;margin-right:4px;}
 /* 楼层号（查到了就换成它） */
 .tb-eztb-floor{
   padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
@@ -31376,7 +31423,7 @@ ${endStackCall}`;
 }
 .tb-eztb-textarea{min-height:76px;resize:vertical;word-break:break-all;}
 .tb-eztb-hint{font-size:12px;color:#8a8f99 !important;}
-.tb-eztb-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px;}
+.tb-eztb-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap;}
 .tb-eztb-actions button{
   border:1px solid #d0d7de;background:#f6f8fa !important;color:#24292f !important;
   border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;

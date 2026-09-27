@@ -135,6 +135,8 @@ export const STYLE_TEXT = `
 }
 /* 「检测签到号」之后补上的"近期发言 N 条" */
 .tb-eztb-row-extra{color:#8a8f99 !important;}
+/* 楼中楼回复的对象：淡一点，别抢正文 */
+.tb-eztb-row-replyto{color:#8a8f99 !important;margin-right:4px;}
 /* 楼层号（查到了就换成它） */
 .tb-eztb-floor{
   padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
@@ -273,7 +275,7 @@ export const STYLE_TEXT = `
 }
 .tb-eztb-textarea{min-height:76px;resize:vertical;word-break:break-all;}
 .tb-eztb-hint{font-size:12px;color:#8a8f99 !important;}
-.tb-eztb-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px;}
+.tb-eztb-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap;}
 .tb-eztb-actions button{
   border:1px solid #d0d7de;background:#f6f8fa !important;color:#24292f !important;
   border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;

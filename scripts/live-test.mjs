@@ -264,6 +264,50 @@ try {
 	report("发帖分类取数", false, error?.message ?? String(error));
 }
 
+// ── 回复 feed 不返回吧名：按吧反查要缓存起来 ─────────────────────────
+// SDK 自己的 names 缓存每次 Effect.runPromise 都会重建（模块级存的是 Effect），
+// 于是每取一页回复都会按吧重新发一遍 getForumName；实测一条 12 条的回复页要多发 9 个请求。
+//
+// 量这条缓存必须**从冷启动开始**：本进程前面已经取过一些用户的回复页，缓存是热的，
+// 直接量会得到"第一次 +0、第二次 +0"——断言恒真，等于没测（踩过一次）。
+// 所以先用 clearForumNameCache() 清空，再断言"第一次会请求、第二次不再请求"。
+{
+	let target = null;
+	let targetRows = 0;
+	for (const uid of sampleIds.slice(0, 12)) {
+		try {
+			sdk.clearForumNameCache();
+			const page = await sdk.loadReplyPage(Number(uid), 1);
+			if (!page.rows.length) continue;
+			if (page.rows.every((row) => row.forumName)) {
+				target = uid;
+				targetRows = page.rows.length;
+				break;
+			}
+		} catch {
+			/* 单个用户取不到就换下一个 */
+		}
+	}
+	report(
+		"回复行能解析出吧名（不是「未知贴吧」）",
+		Boolean(target),
+		target ? `uid=${target} ${targetRows} 行` : `扫了 ${sampleIds.slice(0, 12).length} 个用户都没找到`,
+	);
+	if (target) {
+		sdk.clearForumNameCache();
+		const before = seenUrls.filter((url) => url.includes("getforumdetail")).length;
+		await sdk.loadReplyRows(Number(target), 1);
+		const afterFirst = seenUrls.filter((url) => url.includes("getforumdetail")).length;
+		await sdk.loadReplyRows(Number(target), 1);
+		const afterSecond = seenUrls.filter((url) => url.includes("getforumdetail")).length;
+		report(
+			"回复页的吧名反查有缓存：第一次会请求、第二次不再重复",
+			afterFirst > before && afterSecond === afterFirst,
+			`第一次 +${afterFirst - before}，第二次 +${afterSecond - afterFirst}`,
+		);
+	}
+}
+
 // ── 分页：两个子页签各自翻页，前提是 pn 真能翻到不同的下一页 ──────────
 {
 	let found = null;
@@ -455,6 +499,59 @@ try {
 			"第二次查走缓存，且结果一致",
 			again.via === "cache" && again.floor === floorCase.result.floor,
 			`via=${again.via}`,
+		);
+	}
+}
+
+// ── 一条 feed 记录可能含多条正文：每一行必须是**自己的** pid ──────────
+// 用记录级 pid（PostInfoList.postId）会让同一帖子里的几行查回同一个楼层
+// （实测 uid 874540992 的第一页：一条记录含 3 条正文，记录级 pid 是 112 楼，
+// 而第二、三条正文在别的楼层）。所以行的 postId 取正文级 cid。
+{
+	let multi = null;
+	for (const uid of sampleIds.slice(0, 12)) {
+		try {
+			const rows = await sdk.loadReplyRows(Number(uid), 1);
+			const byThread = new Map();
+			for (const row of rows) {
+				if (!row.threadId || !row.postId) continue;
+				const list = byThread.get(row.threadId) ?? [];
+				list.push(row);
+				byThread.set(row.threadId, list);
+			}
+			for (const [threadId, list] of byThread) {
+				const plain = list.filter((row) => row.kind === "reply");
+				// 要两行普通回复（楼中楼查到的是它所在的那一楼，可能与之相同）
+				if (plain.length < 2) continue;
+				if (new Set(list.map((row) => row.postId)).size !== list.length) {
+					multi = { uid, threadId, list, duplicated: true };
+					break;
+				}
+				multi = { uid, threadId, list, plain };
+				break;
+			}
+			if (multi) break;
+		} catch {
+			/* 单个用户取不到就换下一个 */
+		}
+	}
+
+	report(
+		"同一帖子里的多行回复，postId 互不相同（记录级 pid 会重复）",
+		Boolean(multi) && !multi?.duplicated,
+		multi
+			? `uid=${multi.uid} tid=${multi.threadId} ${multi.list.length} 行 / 不同 pid ${new Set(multi.list.map((r) => r.postId)).size} 个`
+			: `扫了 ${sampleIds.slice(0, 12).length} 个用户，没找到"同一帖子里有多行回复"的样本`,
+	);
+
+	if (multi?.plain?.length >= 2) {
+		const [first, second] = multi.plain;
+		const a = await sdk.fetchReplyFloor(multi.threadId, first.postId);
+		const b = await sdk.fetchReplyFloor(multi.threadId, second.postId);
+		report(
+			"同一帖子里两行回复查到的是各自楼层（不是同一个）",
+			Boolean(a.floor && b.floor) && a.floor !== b.floor,
+			`${a.floor} vs ${b.floor}（pid ${first.postId} / ${second.postId}）`,
 		);
 	}
 }
