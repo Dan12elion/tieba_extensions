@@ -173,6 +173,29 @@ export const STYLE_TEXT = `
 .tb-eztb-pie-percent{color:#8a8f99 !important;}
 .tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
 .tb-eztb-pie-empty{color:#8a8f99 !important;}
+/* 「查看全部 N 个吧」按钮与展开后的完整列表 */
+.tb-eztb-pielistwrap{margin-top:8px;}
+.tb-eztb-pielistbtn{
+  padding:2px 10px;border:1px solid #d0d7de;border-radius:6px;cursor:pointer;
+  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+}
+.tb-eztb-pielistbtn:hover{background:#e8f3ff !important;border-color:#bcd8ff;}
+.tb-eztb-pielist{
+  margin-top:8px;max-height:240px;overflow:auto;
+  border:1px solid #e8e8e8;border-radius:8px;background:#fff !important;padding:6px 8px;
+}
+.tb-eztb-pielist-head{font-size:12px;color:#8a8f99 !important;margin:2px 0 6px;}
+.tb-eztb-pieitem{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;}
+.tb-eztb-pieitem-name{
+  flex:0 0 auto;width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:#24292f !important;
+}
+.tb-eztb-pieitem-bar{
+  flex:1 1 auto;min-width:40px;height:8px;border-radius:4px;background:#eef1f4 !important;overflow:hidden;
+}
+.tb-eztb-pieitem-bar > i{display:block;height:100%;background:#1677ff !important;border-radius:4px;}
+.tb-eztb-pieitem-count{flex:0 0 auto;min-width:34px;text-align:right;color:#24292f !important;}
+.tb-eztb-pieitem-percent{flex:0 0 auto;min-width:48px;text-align:right;color:#8a8f99 !important;}
 /* 三种行内小按钮共用一套样式：「查等级」「查楼层」「检测签到号」。
    注意别互相复用类名——测试和排查都按类名找按钮，混用会点错目标。 */
 .tb-eztb-levelbtn,.tb-eztb-floorbtn,.tb-eztb-minibtn{

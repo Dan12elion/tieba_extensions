@@ -387,7 +387,45 @@ const PAGE = `<!doctype html>
     var totalText = String((panePosts ? panePosts.querySelector('.tb-eztb-pie-total') : {}).textContent || '');
     add('主题帖与回复都算进了饼图（两路 feed 一起加载）', /已加载 (2[0-9]|[3-9][0-9]) 条/.test(totalText),
         totalText);
+    // 最要紧的不变量：饼里的条数 = 两路子页签里已经加载出来的行数（一条不多、一条不少）。
+    // 早先吧名解析失败的行会被静默丢掉，饼图就只剩主题帖（用户报的"有时只统计了发帖的数据"）。
+    var loadedRows = rowsIn(subPane('topic')).length + rowsIn(subPane('reply')).length;
+    var pieTotalMatch = totalText.match(/已加载 (\d+) 条/);
+    add('饼图条数 = 两路 feed 已加载的行数（吧名认不出来的行也不许丢）',
+        !!pieTotalMatch && Number(pieTotalMatch[1]) === loadedRows,
+        '饼图 ' + (pieTotalMatch ? pieTotalMatch[1] : '?') + ' 条 / 列表 ' +
+          rowsIn(subPane('topic')).length + '+' + rowsIn(subPane('reply')).length +
+          '=' + loadedRows + ' 条');
     add('饼图没有画出 NaN', String(pie && pie.textContent).indexOf('NaN') < 0, '');
+
+    // 「查看全部 N 个吧的占比」：有些用户"其它"占比大，需要摊开看每一个吧
+    var listBtn = panePosts ? panePosts.querySelector('[data-act="pie-all"]') : null;
+    add('有「查看全部 N 个吧的占比」按钮', !!listBtn, listBtn ? listBtn.textContent : '没找到');
+    if (listBtn) {
+      var listRowsBefore = panePosts.querySelectorAll('.tb-eztb-pieitem').length;
+      listBtn.click();
+      var listRowsAfter = panePosts.querySelectorAll('.tb-eztb-pieitem').length;
+      var listBtnAfter = panePosts.querySelector('[data-act="pie-all"]');
+      add('点按钮会展开全部吧的列表（每个吧一行）',
+          listRowsAfter >= 2 && listRowsAfter > listRowsBefore,
+          listRowsBefore + ' → ' + listRowsAfter + ' 行');
+      add('列表里每一行都有吧名 / 条数 / 占比',
+          (function () {
+            var rows = panePosts.querySelectorAll('.tb-eztb-pieitem');
+            return rows.length > 0 && Array.prototype.every.call(rows, function (row) {
+              return !!row.querySelector('.tb-eztb-pieitem-name') &&
+                !!row.querySelector('.tb-eztb-pieitem-count') &&
+                !!row.querySelector('.tb-eztb-pieitem-percent');
+            });
+          })(), '');
+      add('展开后按钮变成「收起」', !!listBtnAfter && listBtnAfter.textContent === '收起',
+          listBtnAfter ? listBtnAfter.textContent : '没找到');
+      if (listBtnAfter) {
+        listBtnAfter.click();
+        add('再点一次会收起', panePosts.querySelectorAll('.tb-eztb-pieitem').length === 0,
+            panePosts.querySelectorAll('.tb-eztb-pieitem').length + ' 行');
+      }
+    }
   }
 
   /** 回复正文 + 「查楼层」：正文要直接显示，楼层点了才查 */

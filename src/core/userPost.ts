@@ -209,15 +209,20 @@ async function resolveForumNames(ids: string[]): Promise<Map<string, string>> {
 
 	// 串行解析（requestQueue 本身是串行的，这里不并发，避免一次点出好几个请求）
 	for (const id of wanted) {
-		try {
-			const name = String(
-				(await callSdkLoose(() => getForumName(Number(id)))) ?? "",
-			);
-			forumNames.set(id, { name, ts: Date.now() });
-		} catch {
-			// 单个吧解析失败不影响其它行：留空（界面上显示「未知贴吧」），并允许稍后重试
-			forumNames.set(id, { name: "", ts: Date.now() });
+		// 试两次：反查失败时那一行的吧名是空的，空吧名在按吧统计里会变成「未知贴吧」
+		// （至少不丢条数，但能重试回来更好——第一次失败多半只是抽风）
+		let name = "";
+		for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
+			try {
+				name = String(
+					(await callSdkLoose(() => getForumName(Number(id)))) ?? "",
+				);
+			} catch {
+				name = "";
+			}
 		}
+		// 失败结果也记下来，但带 5 分钟过期（见 isFresh），别一次抽风就记一整个会话
+		forumNames.set(id, { name, ts: Date.now() });
 	}
 	if (forumNames.size > FORUM_NAME_CACHE_MAX) {
 		const stale = Array.from(forumNames.entries())

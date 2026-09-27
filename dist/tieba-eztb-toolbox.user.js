@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.6.0
+// @version             1.7.0
 // @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -29338,14 +29338,17 @@ ${endStackCall}`;
       new Set(ids3.filter((id) => id && id !== "0"))
     ).filter((id) => !isFresh2(forumNames.get(id)));
     for (const id of wanted) {
-      try {
-        const name = String(
-          await callSdkLoose(() => getForumName(Number(id))) ?? ""
-        );
-        forumNames.set(id, { name, ts: Date.now() });
-      } catch {
-        forumNames.set(id, { name: "", ts: Date.now() });
+      let name = "";
+      for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
+        try {
+          name = String(
+            await callSdkLoose(() => getForumName(Number(id))) ?? ""
+          );
+        } catch {
+          name = "";
+        }
       }
+      forumNames.set(id, { name, ts: Date.now() });
     }
     if (forumNames.size > FORUM_NAME_CACHE_MAX) {
       const stale = Array.from(forumNames.entries()).sort((a, b) => a[1].ts - b[1].ts).slice(0, forumNames.size - FORUM_NAME_CACHE_MAX);
@@ -29840,11 +29843,11 @@ ${endStackCall}`;
   }
 
   // src/core/activityRule.ts
+  var UNKNOWN_FORUM = "未知贴吧";
   function countPostsByForum(rows) {
     const out = {};
     for (const row of rows) {
-      const name = String(row.forumName ?? "").trim();
-      if (!name) continue;
+      const name = String(row.forumName ?? "").trim() || UNKNOWN_FORUM;
       out[name] = (out[name] ?? 0) + 1;
     }
     return out;
@@ -30483,6 +30486,27 @@ ${endStackCall}`;
     "#1f9ea8"
   ];
   var PIE_OTHER_COLOR = "#b6bcc6";
+  function buildForumStats(counts) {
+    const total = totalForumCount(counts);
+    if (!total) return [];
+    return Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([forum, count3]) => ({
+      forum,
+      count: count3,
+      fraction: count3 / total,
+      percentText: `${(count3 / total * 100).toFixed(1)}%`
+    }));
+  }
+  function buildForumListHtml(counts, open) {
+    const stats = buildForumStats(counts);
+    if (stats.length < 2) return "";
+    const total = totalForumCount(counts);
+    const button = `<button type="button" class="tb-eztb-pielistbtn" data-act="pie-all">${open ? "收起" : `查看全部 ${stats.length} 个吧的占比`}</button>`;
+    if (!open) return `<div class="tb-eztb-pielistwrap">${button}</div>`;
+    const rows = stats.map(
+      (stat) => `<div class="tb-eztb-pieitem" data-forum="${escapeHtml(stat.forum)}"><span class="tb-eztb-pieitem-name" title="${escapeHtml(stat.forum)}">${escapeHtml(stat.forum)}</span><span class="tb-eztb-pieitem-bar"><i style="width:${(stat.fraction * 100).toFixed(1)}%"></i></span><b class="tb-eztb-pieitem-count">${stat.count}</b><span class="tb-eztb-pieitem-percent">${stat.percentText}</span></div>`
+    ).join("");
+    return `<div class="tb-eztb-pielistwrap">${button}<div class="tb-eztb-pielist"><div class="tb-eztb-pielist-head">共 ${stats.length} 个吧 · ${total} 条发言</div>` + rows + `</div></div>`;
+  }
   function buildForumSlices(counts, maxSlices = 5) {
     const total = totalForumCount(counts);
     if (!total) return [];
@@ -30590,6 +30614,7 @@ ${endStackCall}`;
         moreBtn.textContent = exhausted ? "没有更多了" : "加载更多";
       } catch (error) {
         const message = errorMessage(error);
+        options.onError?.(error);
         listEl.insertAdjacentHTML(
           "beforeend",
           `<div class="tb-eztb-error">${escapeHtml(message)}</div>`
@@ -30905,7 +30930,7 @@ ${endStackCall}`;
       summaryText: (loaded) => `已加载 ${loaded} 条回复`
     }
   ];
-  function mountPostsSubList(pane, identity4, subTab, onRows) {
+  function mountPostsSubList(pane, identity4, subTab, onRows, onError3) {
     const spec = POST_SUBTABS.find((item) => item.id === subTab);
     mountPagedList({
       body: pane,
@@ -30919,6 +30944,7 @@ ${endStackCall}`;
         return { items: feed.rows, hidden: feed.hidden };
       },
       renderRow: renderPostRow,
+      onError: (error) => onError3(errorMessage(error)),
       onPage: (result) => {
         bindFloorButtons(pane);
         onRows(result.items);
@@ -30934,9 +30960,21 @@ ${endStackCall}`;
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
     ).join("");
     let counts = {};
+    let listOpen = false;
+    const failures2 = /* @__PURE__ */ new Map();
     const pieEl = body.querySelector(".tb-eztb-piestat");
     const updatePie = () => {
-      if (pieEl) pieEl.innerHTML = buildForumPieSvg(counts);
+      if (!pieEl) return;
+      const notes = POST_SUBTABS.filter((item) => failures2.has(item.id)).map(
+        (item) => `<div class="tb-eztb-warn">${item.label}的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
+          failures2.get(item.id) ?? ""
+        )}</div>`
+      ).join("");
+      pieEl.innerHTML = buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
+      pieEl.querySelector('[data-act="pie-all"]')?.addEventListener("click", () => {
+        listOpen = !listOpen;
+        updatePie();
+      });
     };
     updatePie();
     const mounted = /* @__PURE__ */ new Set();
@@ -30947,10 +30985,19 @@ ${endStackCall}`;
         `.tb-eztb-subpane[data-subpane="${id}"]`
       );
       if (pane) {
-        mountPostsSubList(pane, identity4, id, (rows) => {
-          counts = mergeForumCounts(counts, countPostsByForum(rows));
-          updatePie();
-        });
+        mountPostsSubList(
+          pane,
+          identity4,
+          id,
+          (rows) => {
+            counts = mergeForumCounts(counts, countPostsByForum(rows));
+            updatePie();
+          },
+          (message) => {
+            failures2.set(id, message);
+            updatePie();
+          }
+        );
       }
     };
     const activate = (id) => {
@@ -31327,6 +31374,29 @@ ${endStackCall}`;
 .tb-eztb-pie-percent{color:#8a8f99 !important;}
 .tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
 .tb-eztb-pie-empty{color:#8a8f99 !important;}
+/* 「查看全部 N 个吧」按钮与展开后的完整列表 */
+.tb-eztb-pielistwrap{margin-top:8px;}
+.tb-eztb-pielistbtn{
+  padding:2px 10px;border:1px solid #d0d7de;border-radius:6px;cursor:pointer;
+  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+}
+.tb-eztb-pielistbtn:hover{background:#e8f3ff !important;border-color:#bcd8ff;}
+.tb-eztb-pielist{
+  margin-top:8px;max-height:240px;overflow:auto;
+  border:1px solid #e8e8e8;border-radius:8px;background:#fff !important;padding:6px 8px;
+}
+.tb-eztb-pielist-head{font-size:12px;color:#8a8f99 !important;margin:2px 0 6px;}
+.tb-eztb-pieitem{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;}
+.tb-eztb-pieitem-name{
+  flex:0 0 auto;width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:#24292f !important;
+}
+.tb-eztb-pieitem-bar{
+  flex:1 1 auto;min-width:40px;height:8px;border-radius:4px;background:#eef1f4 !important;overflow:hidden;
+}
+.tb-eztb-pieitem-bar > i{display:block;height:100%;background:#1677ff !important;border-radius:4px;}
+.tb-eztb-pieitem-count{flex:0 0 auto;min-width:34px;text-align:right;color:#24292f !important;}
+.tb-eztb-pieitem-percent{flex:0 0 auto;min-width:48px;text-align:right;color:#8a8f99 !important;}
 /* 三种行内小按钮共用一套样式：「查等级」「查楼层」「检测签到号」。
    注意别互相复用类名——测试和排查都按类名找按钮，混用会点错目标。 */
 .tb-eztb-levelbtn,.tb-eztb-floorbtn,.tb-eztb-minibtn{

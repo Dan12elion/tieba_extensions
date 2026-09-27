@@ -22,6 +22,7 @@ import {
 } from "../core/replyFloor.ts";
 import {
 	type ForumCounts,
+	buildForumListHtml,
 	buildForumPieSvg,
 	countPostsByForum,
 	mergeForumCounts,
@@ -74,6 +75,8 @@ interface PagedListOptions<T> {
 	/** 数据被隐藏时的说明文字（不传就用 emptyText） */
 	hiddenText?: string;
 	summaryText?: (loaded: number, totalPages: number) => string;
+	/** 取数失败时回调（面板用它把"这一路没取到"写进页面，而不是只在隐藏的子页签里报错） */
+	onError?: (error: unknown) => void;
 	/**
 	 * 每加载完一页调用一次：新插入的行才需要绑定各自的按钮（「查楼层」这类），
 	 * 也是更新占比饼图的时机。
@@ -156,6 +159,7 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 			moreBtn.textContent = exhausted ? "没有更多了" : "加载更多";
 		} catch (error) {
 			const message = errorMessage(error);
+			options.onError?.(error);
 			listEl.insertAdjacentHTML(
 				"beforeend",
 				`<div class="tb-eztb-error">${escapeHtml(message)}</div>`,
@@ -640,6 +644,8 @@ function mountPostsSubList(
 	subTab: PostSubTab,
 	/** 每加载出一页就把这些行交给「发帖」页签，用来更新占比饼图 */
 	onRows: (rows: PostRow[]) => void,
+	/** 这一路取数失败时通知「发帖」页签（否则错误只在被隐藏的子页签里，用户看不见） */
+	onError: (message: string) => void,
 ): void {
 	const spec = POST_SUBTABS.find((item) => item.id === subTab)!;
 	mountPagedList<PostRow>({
@@ -658,6 +664,7 @@ function mountPostsSubList(
 			return { items: feed.rows, hidden: feed.hidden };
 		},
 		renderRow: renderPostRow,
+		onError: (error) => onError(errorMessage(error)),
 		onPage: (result) => {
 			bindFloorButtons(pane);
 			onRows(result.items);
@@ -691,9 +698,29 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 		).join("");
 
 	let counts: ForumCounts = {};
+	/** 展开"全部吧"列表的状态：面板重渲染会重建 DOM，状态得存在这里 */
+	let listOpen = false;
+	/** 哪一路 feed 取数失败（失败要写进饼图旁边，不能只留在被隐藏的子页签里） */
+	const failures = new Map<PostSubTab, string>();
 	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
 	const updatePie = () => {
-		if (pieEl) pieEl.innerHTML = buildForumPieSvg(counts);
+		if (!pieEl) return;
+		const notes = POST_SUBTABS.filter((item) => failures.has(item.id))
+			.map(
+				(item) =>
+					`<div class="tb-eztb-warn">${item.label}的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
+						failures.get(item.id) ?? "",
+					)}</div>`,
+			)
+			.join("");
+		pieEl.innerHTML =
+			buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
+		pieEl
+			.querySelector('[data-act="pie-all"]')
+			?.addEventListener("click", () => {
+				listOpen = !listOpen;
+				updatePie();
+			});
 	};
 	updatePie();
 
@@ -707,10 +734,19 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 			`.tb-eztb-subpane[data-subpane="${id}"]`,
 		);
 		if (pane) {
-			mountPostsSubList(pane, identity, id, (rows) => {
-				counts = mergeForumCounts(counts, countPostsByForum(rows));
-				updatePie();
-			});
+			mountPostsSubList(
+				pane,
+				identity,
+				id,
+				(rows) => {
+					counts = mergeForumCounts(counts, countPostsByForum(rows));
+					updatePie();
+				},
+				(message) => {
+					failures.set(id, message);
+					updatePie();
+				},
+			);
 		}
 	};
 

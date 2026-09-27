@@ -469,9 +469,9 @@ console.log("按吧统计的占比饼图");
 		{ forumName: "" },
 	]);
 	check(
-		"按吧计数，空吧名不计入",
+		"按吧计数；空吧名归到「未知贴吧」（不丢条数）",
 		counts["百度"] === 2 && counts["小红书"] === 1 &&
-			Object.keys(counts).length === 2,
+			counts["未知贴吧"] === 1 && Object.keys(counts).length === 3,
 		JSON.stringify(counts),
 	);
 	check(
@@ -545,6 +545,43 @@ console.log("按吧统计的占比饼图");
 		"吧名会被转义（吧名里可能带引号/尖括号）",
 		buildForumPieSvg({ '"><img src=x>吧': 1 }).includes("&quot;&gt;&lt;img"),
 	);
+
+	// 用户 2026-09-27：有些用户"其它"占比很大，需要能展开看每一个吧
+	const { buildForumStats, buildForumListHtml } = postStats;
+	const stats = buildForumStats({ 百度: 6, 小红书: 3, 未知贴吧: 1 });
+	check(
+		"全部吧的列表：按条数排序、占比按总条数算",
+		stats.length === 3 && stats[0].forum === "百度" &&
+			stats[0].percentText === "60.0%" && stats[2].percentText === "10.0%",
+		stats.map((item) => `${item.forum}=${item.percentText}`).join(" / "),
+	);
+	check(
+		"列表里包含「其它 N 个吧」里的那些吧（不聚合、一个不落）",
+		(function () {
+			const many = {};
+			for (let i = 1; i <= 8; i += 1) many[`吧${i}`] = i;
+			const pie = buildForumPieSvg(many, 5);
+			const list = buildForumListHtml(many, true);
+			return pie.includes("其它 3 个吧") &&
+				list.includes("共 8 个吧 · 36 条发言") &&
+				[1, 2, 3, 4, 5, 6, 7, 8].every((i) => list.includes(`吧${i}`));
+		})(),
+		buildForumListHtml({ 吧1: 1, 吧2: 2, 吧3: 3, 吧4: 4, 吧5: 5, 吧6: 6, 吧7: 7, 吧8: 8 }, true).slice(0, 260),
+	);
+	check(
+		"收起状态只给按钮，不给列表",
+		buildForumListHtml({ 百度: 2, 贴吧: 1 }, false).includes("查看全部 2 个吧的占比") &&
+			!buildForumListHtml({ 百度: 2, 贴吧: 1 }, false).includes("tb-eztb-pielist\"") &&
+			buildForumListHtml({ 百度: 2, 贴吧: 1 }, true).includes("收起"),
+	);
+	check(
+		"只有一个吧时不给按钮（图例已经列全了）",
+		buildForumListHtml({ 百度: 5 }, false) === "",
+	);
+	check(
+		"列表里的吧名同样要转义",
+		buildForumListHtml({ "<b>吧": 1, "正常吧": 1 }, true).includes("&lt;b&gt;吧"),
+	);
 }
 
 // ── 发帖行的副标题：楼中楼必须标出「回复了谁」 ────────────────────────
@@ -607,13 +644,13 @@ console.log("签到号判定");
 	const { countPostsByForum, findSignInForums, signInSummary } = activityRule;
 
 	check(
-		"按吧统计发言条数，空吧名不计入",
+		"按吧统计发言条数；吧名没解析出来的行归到「未知贴吧」，不丢条数",
 		JSON.stringify(countPostsByForum([
 			{ forumName: "百度" },
 			{ forumName: "百度" },
 			{ forumName: "" },
 			{ forumName: "贴吧" },
-		])) === JSON.stringify({ 百度: 2, 贴吧: 1 }),
+		])) === JSON.stringify({ 百度: 2, 未知贴吧: 1, 贴吧: 1 }),
 	);
 
 	const forums = [

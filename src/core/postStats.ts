@@ -93,6 +93,67 @@ export interface ForumSlice {
 	percentText: string;
 }
 
+export interface ForumStat {
+	forum: string;
+	count: number;
+	fraction: number;
+	percentText: string;
+}
+
+/** **全部**吧的条数与占比（按条数从多到少，并列按吧名），给"查看全部"列表用。 */
+export function buildForumStats(counts: ForumCounts): ForumStat[] {
+	const total = totalForumCount(counts);
+	if (!total) return [];
+	return Object.entries(counts)
+		.filter(([, count]) => count > 0)
+		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+		.map(([forum, count]) => ({
+			forum,
+			count,
+			fraction: count / total,
+			percentText: `${((count / total) * 100).toFixed(1)}%`,
+		}));
+}
+
+/**
+ * 「查看全部 N 个吧」按钮 + 展开后的完整列表。
+
+ * 饼图只画前几个吧、剩下的拢成「其它 N 个吧」，有些用户的"其它"占比很大，
+ * 光看饼图看不出到底是哪些吧——这个列表把每一个吧的条数、占比和横条都摊开。
+ * `open` 由调用方记住（面板每次重新渲染都会重新生成这段 HTML，状态不能存在 DOM 里）。
+ */
+export function buildForumListHtml(
+	counts: ForumCounts,
+	open: boolean,
+): string {
+	const stats = buildForumStats(counts);
+	if (stats.length < 2) return "";
+	const total = totalForumCount(counts);
+	const button =
+		`<button type="button" class="tb-eztb-pielistbtn" data-act="pie-all">` +
+		`${open ? "收起" : `查看全部 ${stats.length} 个吧的占比`}</button>`;
+	if (!open) return `<div class="tb-eztb-pielistwrap">${button}</div>`;
+
+	const rows = stats
+		.map(
+			(stat) =>
+				`<div class="tb-eztb-pieitem" data-forum="${escapeHtml(stat.forum)}">` +
+				`<span class="tb-eztb-pieitem-name" title="${escapeHtml(stat.forum)}">${escapeHtml(stat.forum)}</span>` +
+				`<span class="tb-eztb-pieitem-bar"><i style="width:${(stat.fraction * 100).toFixed(1)}%"></i></span>` +
+				`<b class="tb-eztb-pieitem-count">${stat.count}</b>` +
+				`<span class="tb-eztb-pieitem-percent">${stat.percentText}</span>` +
+				`</div>`,
+		)
+		.join("");
+	return (
+		`<div class="tb-eztb-pielistwrap">${button}` +
+		`<div class="tb-eztb-pielist">` +
+		`<div class="tb-eztb-pielist-head">共 ${stats.length} 个吧 · ${total} 条发言</div>` +
+		rows +
+		`</div></div>`
+	);
+}
+
 /**
  * 把「吧名 → 条数」变成扇段。
 
