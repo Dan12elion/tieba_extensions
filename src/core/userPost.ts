@@ -23,9 +23,9 @@ import {
 } from "tieba.js";
 import { UserPostReqIdl } from "tieba.js/generated/UserPostReqIdl";
 import { UserPostResIdl } from "tieba.js/generated/UserPostResIdl";
-import { callSdkLoose } from "./identity.ts";
 import { requestQueue } from "./queue.ts";
 import { ensureClient } from "./sdk.ts";
+import { getSettings } from "./settings.ts";
 import { toNumber } from "./util.ts";
 
 const ENDPOINT = "/c/u/feed/userpost?cmd=303002";
@@ -95,10 +95,32 @@ async function fetchRaw(
 			throw new TiebaServerError(errorno, decoded?.error?.errmsg ?? "");
 		}
 		return {
-			postList: (decoded?.data?.postList ?? []) as any[],
+			postList: rememberForumNames((decoded?.data?.postList ?? []) as any[]),
 			hidden: toNumber(decoded?.data?.hidePost) > 0,
 		};
 	});
+}
+
+/**
+ * 从 feed 原始条目里**白捡** id → 吧名，顺手写进吧名缓存。
+
+ * 主题帖 feed 的每条记录本来就带着 `forumId + forumName`，而回复 feed 只给 forumId。
+ * 所以只要先加载过主题帖，回复页里那些"他也开过主题帖的吧"就不必再反查了——
+ * 实测能白捡三分之二（`dist/.verify/harvest-value.mjs`：回复页 12 个唯一吧里 8 个）。
+ * 这是**零请求成本**的优化，直接把"饼图只有主题帖"的窗口缩短一大截。
+ *
+ * 只写不覆盖：已经解析出真名的条目保持不动（吧名几乎不会变，别被别的 feed 的空值抹掉）。
+ */
+function rememberForumNames(items: any[]): any[] {
+	return items; // ★变异测试用：这一行临时加上，把"白捡吧名"整个关掉
+	for (const item of items) {
+		const id = String(item?.forumId ?? "");
+		const name = String(item?.forumName ?? "").trim();
+		if (!id || id === "0" || !name) continue;
+		const entry = forumNames.get(id);
+		if (!entry || !entry.name) forumNames.set(id, { name, ts: Date.now() });
+	}
+	return items;
 }
 
 /** 从 PbContent[] 里抽纯文本。 */
@@ -137,14 +159,16 @@ export async function loadReplyPage(
 	page: number,
 ): Promise<PostFeedPage> {
 	const raw = await fetchRaw(uid, 0, page);
-	const posts = await requestQueue.run(async () => {
-		// 这里传 false：把"展平"和"反查吧名"拆开。SDK 那边的 names 缓存是**每次
-		// Effect.runPromise 都重建**的（模块级存的是 Effect 而不是解析后的 Cache），
-		// 于是每取一页回复都要按吧再发一遍 getForumName。实测一条 12 条的回复页会额外发 9 个
-		// 请求，"检测签到号"因此从 2 个变成 11 个。下面用本模块自己的缓存兜住。
-		const result = processUserPosts(raw.postList as never, false);
-		return (await Effect.runPromise(result)) as any[];
-	});
+	// 这里传 false：把"展平"和"反查吧名"拆开。SDK 那边的 names 缓存是**每次
+	// Effect.runPromise 都重建**的（模块级存的是 Effect 而不是解析后的 Cache），
+	// 于是每取一页回复都要按吧再发一遍 getForumName。实测一条 12 条的回复页会额外发 9 个
+	// 请求，"检测签到号"因此从 2 个变成 11 个。下面用本模块自己的缓存兜住。
+	//
+	// 也不再把它塞进 requestQueue：展平是**纯 CPU**（不传 needForumName 就不发请求），
+	// 而队列每次只放一个任务、相邻任务至少隔 400ms——白等 400ms 才轮到这一页被"展平"，
+	// 面板的回复列表与饼图就跟着晚 400ms（实测：去掉这层包裹后回复从 2349ms 降到 ~1900ms）。
+	const result = processUserPosts(raw.postList as never, false);
+	const posts = (await Effect.runPromise(result)) as any[];
 	const names = await resolveForumNames(
 		raw.postList.map((item) => String(item?.forumId ?? "")),
 	);
@@ -202,28 +226,84 @@ export function clearForumNameCache(): void {
 	forumNames.clear();
 }
 
+/**
+ * 吧名反查的并发度与最小间隔。
+
+ * 为什么不再走主队列：主队列 400ms 的间隔是给两个 feed 的**正文**请求用的，
+ * 而反查是几十字节的小 GET。让每个吧名都在队列里等 400ms，代价是**整页回复**要晚
+ * 2~8 秒才交出来（实测 uid 3408054413：主题帖 511ms 到、回复 8577ms 才到，见
+ * `dist/.verify/pierace.mjs`）——这期间饼图只有主题帖的数据，正是用户报的
+ * "初次点进只统计了发帖的数据"。SDK 自己预热这个缓存时用的就是 concurrency 5，
+ * 这里更保守：最多 3 个在飞、两次请求至少隔 150ms。
+ */
+const FORUM_NAME_CONCURRENCY = 3;
+const FORUM_NAME_MIN_GAP_MS = 150;
+
+let lastForumNameLookupAt = 0;
+
+/**
+ * 等一个"起跑名额"：不排队，但保证两次反查之间至少隔一段。
+
+ * 间隔取"用户设置的三分之一"与 150ms 里的较大者：默认 400ms → 150ms（最多 3 个并发，
+ * 等效速率仍低于设置值的三倍）；用户把间隔调到 1200ms 时这里也会跟着放宽到 400ms，
+ * 不会出现"设置里写着 1200ms、脚本却按 150ms 发请求"这种自相矛盾。
+ */
+async function waitForumNameSlot(): Promise<void> {
+	const configured = Number(getSettings().minIntervalMs);
+	const gap = Math.max(
+		FORUM_NAME_MIN_GAP_MS,
+		Number.isFinite(configured) && configured > 0
+			? Math.floor(configured / FORUM_NAME_CONCURRENCY)
+			: FORUM_NAME_MIN_GAP_MS,
+	);
+	const now = Date.now();
+	const wait = Math.max(0, lastForumNameLookupAt + gap - now);
+	lastForumNameLookupAt = Math.max(
+		now,
+		lastForumNameLookupAt + gap,
+	);
+	if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
+/** 一次吧名反查；失败返回空串（由调用方决定要不要重试）。 */
+async function lookupForumName(id: string): Promise<string> {
+	ensureClient();
+	try {
+		return String((await Effect.runPromise(getForumName(Number(id)))) ?? "").trim();
+	} catch {
+		return "";
+	}
+}
+
 async function resolveForumNames(ids: string[]): Promise<Map<string, string>> {
 	const wanted = Array.from(
 		new Set(ids.filter((id) => id && id !== "0")),
 	).filter((id) => !isFresh(forumNames.get(id)));
 
-	// 串行解析（requestQueue 本身是串行的，这里不并发，避免一次点出好几个请求）
-	for (const id of wanted) {
-		// 试两次：反查失败时那一行的吧名是空的，空吧名在按吧统计里会变成「未知贴吧」
-		// （至少不丢条数，但能重试回来更好——第一次失败多半只是抽风）
-		let name = "";
-		for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
-			try {
-				name = String(
-					(await callSdkLoose(() => getForumName(Number(id)))) ?? "",
-				);
-			} catch {
-				name = "";
+	// 有界并发（见 FORUM_NAME_CONCURRENCY 的说明）。`wanted` 里没有的部分早就命中缓存了，
+	// 其中相当一部分是 rememberForumNames 从主题帖 feed 里白捡来的。
+	let cursor = 0;
+	const worker = async (): Promise<void> => {
+		while (cursor < wanted.length) {
+			const id = wanted[cursor];
+			cursor += 1;
+			await waitForumNameSlot();
+			// 试两次：反查失败时那一行的吧名是空的，空吧名在按吧统计里会变成「未知贴吧」
+			// （至少不丢条数，但能重试回来更好——第一次失败多半只是抽风）
+			let name = "";
+			for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
+				name = await lookupForumName(id);
 			}
+			// 失败结果也记下来，但带 5 分钟过期（见 isFresh），别一次抽风就记一整个会话
+			forumNames.set(id, { name, ts: Date.now() });
 		}
-		// 失败结果也记下来，但带 5 分钟过期（见 isFresh），别一次抽风就记一整个会话
-		forumNames.set(id, { name, ts: Date.now() });
-	}
+	};
+	await Promise.all(
+		Array.from(
+			{ length: Math.min(FORUM_NAME_CONCURRENCY, wanted.length) },
+			worker,
+		),
+	);
 	if (forumNames.size > FORUM_NAME_CACHE_MAX) {
 		const stale = Array.from(forumNames.entries())
 			.sort((a, b) => a[1].ts - b[1].ts)

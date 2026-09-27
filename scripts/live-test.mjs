@@ -308,6 +308,59 @@ try {
 	}
 }
 
+// ── 主题帖 feed 白捡吧名：回复页的反查次数必须少于"它自己有多少个吧" ────
+// 主题帖 feed 的每条记录自带 forumId + forumName，所以"先加载主题帖、再加载回复页"时，
+// 回复页里那些"他也开过主题帖的吧"应当直接命中缓存、不再发 getforumdetail。
+// 这条断言是**自归一**的：不做白捡时反查次数恰好等于回复页的唯一吧数（每个吧反查一次），
+// 所以"反查次数 < 唯一吧数"只有真白捡到至少一个吧名才可能成立。
+// （为什么值得单独测：回复页要等反查完才把数据交给面板，实测那会让饼图有 8.1 秒
+//  只有主题帖的数据——`dist/.verify/pierace.mjs` 复现，用户报的就是这个。）
+{
+	let target = null;
+	let forums = 0;
+	let rows = 0;
+	for (const uid of sampleIds.slice(0, 16)) {
+		try {
+			sdk.clearForumNameCache();
+			const topics = await sdk.loadTopicRows(Number(uid), 1);
+			if (!topics.length) continue;
+			const replies = await sdk.loadReplyRows(Number(uid), 1);
+			if (!replies.length) continue;
+			const unique = new Set(
+				replies.map((row) => row.forumName).filter(Boolean),
+			);
+			if (unique.size < 2) continue;
+			target = uid;
+			forums = unique.size;
+			rows = replies.length;
+			break;
+		} catch {
+			/* 单个用户取不到就换下一个 */
+		}
+	}
+	if (!target) {
+		report(
+			"主题帖 feed 白捡吧名，回复页少发反查请求",
+			false,
+			`扫了 ${sampleIds.slice(0, 16).length} 个用户都没找到"回复页有 ≥2 个吧"的样本`,
+		);
+	} else {
+		const countLookups = () =>
+			seenUrls.filter((url) => url.includes("getforumdetail")).length;
+		sdk.clearForumNameCache();
+		await sdk.loadTopicRows(Number(target), 1); // 先主题帖：顺手把吧名捡进缓存
+		const before = countLookups();
+		const replies = await sdk.loadReplyRows(Number(target), 1);
+		const lookups = countLookups() - before;
+		const unique = new Set(replies.map((row) => row.forumName).filter(Boolean)).size;
+		report(
+			"主题帖 feed 白捡吧名，回复页少发反查请求",
+			lookups < unique,
+			`uid=${target} 回复页 ${rows} 行 / ${unique} 个吧，反查只有 ${lookups} 次（不白捡要 ${unique} 次）`,
+		);
+	}
+}
+
 // ── 分页：两个子页签各自翻页，前提是 pn 真能翻到不同的下一页 ──────────
 {
 	let found = null;

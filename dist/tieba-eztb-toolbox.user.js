@@ -29273,10 +29273,21 @@ ${endStackCall}`;
         throw new TiebaServerError(errorno, decoded?.error?.errmsg ?? "");
       }
       return {
-        postList: decoded?.data?.postList ?? [],
+        postList: rememberForumNames(decoded?.data?.postList ?? []),
         hidden: toNumber(decoded?.data?.hidePost) > 0
       };
     });
+  }
+  function rememberForumNames(items) {
+    return items;
+    for (const item of items) {
+      const id = String(item?.forumId ?? "");
+      const name = String(item?.forumName ?? "").trim();
+      if (!id || id === "0" || !name) continue;
+      const entry = forumNames.get(id);
+      if (!entry || !entry.name) forumNames.set(id, { name, ts: Date.now() });
+    }
+    return items;
   }
   function textOf(contents) {
     if (!Array.isArray(contents)) return "";
@@ -29299,10 +29310,8 @@ ${endStackCall}`;
   }
   async function loadReplyPage(uid, page) {
     const raw = await fetchRaw(uid, 0, page);
-    const posts = await requestQueue.run(async () => {
-      const result = processUserPosts(raw.postList, false);
-      return await Effect_exports.runPromise(result);
-    });
+    const result = processUserPosts(raw.postList, false);
+    const posts = await Effect_exports.runPromise(result);
     const names = await resolveForumNames(
       raw.postList.map((item) => String(item?.forumId ?? ""))
     );
@@ -29333,23 +29342,54 @@ ${endStackCall}`;
     if (entry.name) return true;
     return Date.now() - entry.ts < FORUM_NAME_EMPTY_TTL_MS;
   }
+  var FORUM_NAME_CONCURRENCY = 3;
+  var FORUM_NAME_MIN_GAP_MS = 150;
+  var lastForumNameLookupAt = 0;
+  async function waitForumNameSlot() {
+    const configured = Number(getSettings().minIntervalMs);
+    const gap = Math.max(
+      FORUM_NAME_MIN_GAP_MS,
+      Number.isFinite(configured) && configured > 0 ? Math.floor(configured / FORUM_NAME_CONCURRENCY) : FORUM_NAME_MIN_GAP_MS
+    );
+    const now = Date.now();
+    const wait = Math.max(0, lastForumNameLookupAt + gap - now);
+    lastForumNameLookupAt = Math.max(
+      now,
+      lastForumNameLookupAt + gap
+    );
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  async function lookupForumName(id) {
+    ensureClient();
+    try {
+      return String(await Effect_exports.runPromise(getForumName(Number(id))) ?? "").trim();
+    } catch {
+      return "";
+    }
+  }
   async function resolveForumNames(ids3) {
     const wanted = Array.from(
       new Set(ids3.filter((id) => id && id !== "0"))
     ).filter((id) => !isFresh2(forumNames.get(id)));
-    for (const id of wanted) {
-      let name = "";
-      for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
-        try {
-          name = String(
-            await callSdkLoose(() => getForumName(Number(id))) ?? ""
-          );
-        } catch {
-          name = "";
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < wanted.length) {
+        const id = wanted[cursor];
+        cursor += 1;
+        await waitForumNameSlot();
+        let name = "";
+        for (let attempt = 0; attempt < 2 && !name; attempt += 1) {
+          name = await lookupForumName(id);
         }
+        forumNames.set(id, { name, ts: Date.now() });
       }
-      forumNames.set(id, { name, ts: Date.now() });
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(FORUM_NAME_CONCURRENCY, wanted.length) },
+        worker
+      )
+    );
     if (forumNames.size > FORUM_NAME_CACHE_MAX) {
       const stale = Array.from(forumNames.entries()).sort((a, b) => a[1].ts - b[1].ts).slice(0, forumNames.size - FORUM_NAME_CACHE_MAX);
       for (const [key] of stale) forumNames.delete(key);
@@ -30071,7 +30111,7 @@ ${endStackCall}`;
       `<input id="tb-eztb-interval" class="tb-eztb-input" type="number" min="0" step="50" value="${current.minIntervalMs}">`
     );
     parts2.push(
-      `<div class="tb-eztb-hint">所有贴吧接口请求都会被这个间隔串行排队，避免请求过密触发风控。建议不低于 300。</div>`
+      `<div class="tb-eztb-hint">所有贴吧接口请求都会被这个间隔串行排队，避免请求过密触发风控。建议不低于 300。<br>例外只有一个：帖子里「按吧反查吧名」那种几十字节的小请求——它最多 3 个并发、间隔取"这个值的三分之一"与 150ms 里的较大者（贴吧自己的 SDK 也是这么预热的）。不这样，进「发帖」页签后回复那一路要等好几秒，饼图会长时间只有主题帖的数据。</div>`
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
@@ -30506,6 +30546,25 @@ ${endStackCall}`;
       (stat) => `<div class="tb-eztb-pieitem" data-forum="${escapeHtml(stat.forum)}"><span class="tb-eztb-pieitem-name" title="${escapeHtml(stat.forum)}">${escapeHtml(stat.forum)}</span><span class="tb-eztb-pieitem-bar"><i style="width:${(stat.fraction * 100).toFixed(1)}%"></i></span><b class="tb-eztb-pieitem-count">${stat.count}</b><span class="tb-eztb-pieitem-percent">${stat.percentText}</span></div>`
     ).join("");
     return `<div class="tb-eztb-pielistwrap">${button}<div class="tb-eztb-pielist"><div class="tb-eztb-pielist-head">共 ${stats.length} 个吧 · ${total} 条发言</div>` + rows + `</div></div>`;
+  }
+  function buildPieNotes(states) {
+    const loading = states.filter((state) => state.loading);
+    const failed = states.filter((state) => !state.loading && state.error);
+    const parts2 = [];
+    if (loading.length) {
+      const labels = loading.map((state) => `「${state.label}」`).join("、");
+      parts2.push(
+        `<div class="tb-eztb-pie-pending">${labels}的数据还在加载，下面的占比<b>还不完整</b>——到齐后会自动补上。</div>`
+      );
+    }
+    for (const state of failed) {
+      parts2.push(
+        `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
+          state.error ?? ""
+        )}</div>`
+      );
+    }
+    return parts2.join("");
   }
   function buildForumSlices(counts, maxSlices = 5) {
     const total = totalForumCount(counts);
@@ -30961,15 +31020,18 @@ ${endStackCall}`;
     ).join("");
     let counts = {};
     let listOpen = false;
+    const pending4 = new Set(POST_SUBTABS.map((item) => item.id));
     const failures2 = /* @__PURE__ */ new Map();
     const pieEl = body.querySelector(".tb-eztb-piestat");
     const updatePie = () => {
       if (!pieEl) return;
-      const notes = POST_SUBTABS.filter((item) => failures2.has(item.id)).map(
-        (item) => `<div class="tb-eztb-warn">${item.label}的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
-          failures2.get(item.id) ?? ""
-        )}</div>`
-      ).join("");
+      const notes = buildPieNotes(
+        POST_SUBTABS.map((item) => ({
+          label: item.label,
+          loading: pending4.has(item.id),
+          error: failures2.get(item.id)
+        }))
+      );
       pieEl.innerHTML = buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
       pieEl.querySelector('[data-act="pie-all"]')?.addEventListener("click", () => {
         listOpen = !listOpen;
@@ -30990,10 +31052,13 @@ ${endStackCall}`;
           identity4,
           id,
           (rows) => {
+            pending4.delete(id);
+            failures2.delete(id);
             counts = mergeForumCounts(counts, countPostsByForum(rows));
             updatePie();
           },
           (message) => {
+            pending4.delete(id);
             failures2.set(id, message);
             updatePie();
           }
@@ -31376,6 +31441,11 @@ ${endStackCall}`;
 .tb-eztb-pie-empty{color:#8a8f99 !important;}
 /* 「查看全部 N 个吧」按钮与展开后的完整列表 */
 .tb-eztb-pielistwrap{margin-top:8px;}
+/* 两路 feed 没到齐时的提示：不能让"只有主题帖"的饼图看起来像完整的 */
+.tb-eztb-pie-pending{
+  margin:6px 0 0;padding:6px 8px;border-radius:6px;font-size:12px;
+  background:#f2f7ff !important;border:1px solid #cfe0ff;color:#1a4d99 !important;
+}
 .tb-eztb-pielistbtn{
   padding:2px 10px;border:1px solid #d0d7de;border-radius:6px;cursor:pointer;
   background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;

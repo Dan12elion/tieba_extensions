@@ -67,7 +67,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 		`<input id="tb-eztb-interval" class="tb-eztb-input" type="number" min="0" step="50" value="${current.minIntervalMs}">`,
 	);
 	parts.push(
-		`<div class="tb-eztb-hint">所有贴吧接口请求都会被这个间隔串行排队，避免请求过密触发风控。建议不低于 300。</div>`,
+		`<div class="tb-eztb-hint">所有贴吧接口请求都会被这个间隔串行排队，避免请求过密触发风控。建议不低于 300。<br>例外只有一个：帖子里「按吧反查吧名」那种几十字节的小请求——它最多 3 个并发、间隔取"这个值的三分之一"与 150ms 里的较大者（贴吧自己的 SDK 也是这么预热的）。不这样，进「发帖」页签后回复那一路要等好几秒，饼图会长时间只有主题帖的数据。</div>`,
 	);
 	parts.push(`</div>`);
 

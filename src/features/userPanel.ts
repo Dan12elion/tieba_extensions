@@ -24,6 +24,7 @@ import {
 	type ForumCounts,
 	buildForumListHtml,
 	buildForumPieSvg,
+	buildPieNotes,
 	countPostsByForum,
 	mergeForumCounts,
 	postRowSubParts,
@@ -700,19 +701,26 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	let counts: ForumCounts = {};
 	/** 展开"全部吧"列表的状态：面板重渲染会重建 DOM，状态得存在这里 */
 	let listOpen = false;
+	/**
+	 * 还没回来的那几路 feed。
+
+	 * 回复那一页要按吧反查吧名（串行限速，一个吧一次请求），冷启动时比主题帖晚好几秒；
+	 * 在它回来之前饼图只有主题帖的段。用户 2026-09-27 报的"有时只统计了发帖的数据"
+	 * 就是这个中间态被当成了结果，所以**没到齐必须在图上写明**（见 buildPieNotes）。
+	 */
+	const pending = new Set<PostSubTab>(POST_SUBTABS.map((item) => item.id));
 	/** 哪一路 feed 取数失败（失败要写进饼图旁边，不能只留在被隐藏的子页签里） */
 	const failures = new Map<PostSubTab, string>();
 	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
 	const updatePie = () => {
 		if (!pieEl) return;
-		const notes = POST_SUBTABS.filter((item) => failures.has(item.id))
-			.map(
-				(item) =>
-					`<div class="tb-eztb-warn">${item.label}的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
-						failures.get(item.id) ?? "",
-					)}</div>`,
-			)
-			.join("");
+		const notes = buildPieNotes(
+			POST_SUBTABS.map((item) => ({
+				label: item.label,
+				loading: pending.has(item.id),
+				error: failures.get(item.id),
+			})),
+		);
 		pieEl.innerHTML =
 			buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
 		pieEl
@@ -739,10 +747,14 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 				identity,
 				id,
 				(rows) => {
+					// 首批数据到齐，撤掉「还在加载」；重试成功后失败提示也要一起消失
+					pending.delete(id);
+					failures.delete(id);
 					counts = mergeForumCounts(counts, countPostsByForum(rows));
 					updatePie();
 				},
 				(message) => {
+					pending.delete(id);
 					failures.set(id, message);
 					updatePie();
 				},

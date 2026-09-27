@@ -154,6 +154,48 @@ export function buildForumListHtml(
 	);
 }
 
+/** 「发帖」页签里每一路 feed 的取数状态（主题帖 / 回复各一路）。 */
+export interface PieFeedState {
+	/** 子页签名字，例如「主题帖」「回复」 */
+	label: string;
+	/** 首批数据还在路上 */
+	loading?: boolean;
+	/** 这一路取数失败的原因（有值就说明饼图里缺了这一路的条数） */
+	error?: string;
+}
+
+/**
+ * 饼图旁边的状态说明：**数据没到齐就别说数据齐了**。
+
+ * 用户 2026-09-27 第二次反馈「初次点进时饼图*有时*只统计了主题帖、有时又会自动统计全部」。
+ * 机制是：回复那一页要靠 `getForumName` **按吧反查吧名**（回复 feed 只给 forumId），
+ * 而所有请求都走 400ms 间隔的串行限速队列——冷启动时回复要比主题帖晚好几秒才到。
+ * 在它回来之前饼图只有主题帖的段，**看起来却和完整的一模一样**，于是"看早了"就变成
+ * 一个看起来像数据错了的现象。
+
+ * 所以：只要还有一路没到齐、或者哪一路取数失败，就必须写在图上（返回 HTML 片段）。
+ * 两路都到齐且都成功时返回空串——提示会自动消失，不会一直挂着。
+ */
+export function buildPieNotes(states: PieFeedState[]): string {
+	const loading = states.filter((state) => state.loading);
+	const failed = states.filter((state) => !state.loading && state.error);
+	const parts: string[] = [];
+	if (loading.length) {
+		const labels = loading.map((state) => `「${state.label}」`).join("、");
+		parts.push(
+			`<div class="tb-eztb-pie-pending">${labels}的数据还在加载，下面的占比<b>还不完整</b>——到齐后会自动补上。</div>`,
+		);
+	}
+	for (const state of failed) {
+		parts.push(
+			`<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${escapeHtml(
+				state.error ?? "",
+			)}</div>`,
+		);
+	}
+	return parts.join("");
+}
+
 /**
  * 把「吧名 → 条数」变成扇段。
 

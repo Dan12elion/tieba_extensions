@@ -582,6 +582,49 @@ console.log("按吧统计的占比饼图");
 		"列表里的吧名同样要转义",
 		buildForumListHtml({ "<b>吧": 1, "正常吧": 1 }, true).includes("&lt;b&gt;吧"),
 	);
+
+	// 用户 2026-09-27 第二次反馈：「初次点进时饼图有时只统计了主题帖」。
+	// 回复那一页要按吧反查吧名（串行限速），冷启动时比主题帖晚好几秒才到；
+	// 在它回来之前饼图只有主题帖的段，看起来却和完整的一样。
+	const { buildPieNotes } = postStats;
+	check(
+		"两路都到齐（且都没失败）时不加任何提示",
+		buildPieNotes([{ label: "主题帖" }, { label: "回复" }]) === "",
+		buildPieNotes([{ label: "主题帖" }, { label: "回复" }]),
+	);
+	check(
+		"回复还没回来时，图上要写明「还在加载 / 还不完整」（不能说成完整结果）",
+		(function () {
+			const html = buildPieNotes([{ label: "主题帖" }, { label: "回复", loading: true }]);
+			return (
+				html.includes("tb-eztb-pie-pending") &&
+				html.includes("回复") &&
+				html.includes("还不完整") &&
+				!html.includes("主题帖」的数据还在加载")
+			);
+		})(),
+		buildPieNotes([{ label: "主题帖" }, { label: "回复", loading: true }]),
+	);
+	check(
+		"某一路取数失败：写明缺的是哪一路，且错误文本要转义",
+		(function () {
+			const html = buildPieNotes([{ label: "主题帖", error: "<b>炸了</b>" }]);
+			return (
+				html.includes("tb-eztb-warn") &&
+				html.includes("主题帖") &&
+				html.includes("&lt;b&gt;") &&
+				!html.includes("<b>炸了</b>")
+			);
+		})(),
+		buildPieNotes([{ label: "主题帖", error: "<b>炸了</b>" }]),
+	);
+	check(
+		"同一路同时标着 loading 与 error 时只报「还在加载」（不叠两条自相矛盾的提示）",
+		(function () {
+			const html = buildPieNotes([{ label: "回复", loading: true, error: "boom" }]);
+			return html.includes("tb-eztb-pie-pending") && !html.includes("tb-eztb-warn");
+		})(),
+	);
 }
 
 // ── 发帖行的副标题：楼中楼必须标出「回复了谁」 ────────────────────────

@@ -175,6 +175,11 @@ export const STYLE_TEXT = `
 .tb-eztb-pie-empty{color:#8a8f99 !important;}
 /* 「查看全部 N 个吧」按钮与展开后的完整列表 */
 .tb-eztb-pielistwrap{margin-top:8px;}
+/* 两路 feed 没到齐时的提示：不能让"只有主题帖"的饼图看起来像完整的 */
+.tb-eztb-pie-pending{
+  margin:6px 0 0;padding:6px 8px;border-radius:6px;font-size:12px;
+  background:#f2f7ff !important;border:1px solid #cfe0ff;color:#1a4d99 !important;
+}
 .tb-eztb-pielistbtn{
   padding:2px 10px;border:1px solid #d0d7de;border-radius:6px;cursor:pointer;
   background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;

@@ -195,6 +195,20 @@ const PAGE = `<!doctype html>
     var root = postsPane();
     return root ? root.querySelector('.tb-eztb-subpane[data-subpane="' + name + '"]') : null;
   }
+  /**
+   * 这一路 feed 的第一批数据到齐了吗（还是页脚写着「正在加载…」）。
+
+   * 回复那一路比主题帖慢（要先按吧反查吧名），所以「翻页只影响主题帖子页签」这类
+   * 断言必须先等两路都停稳再记基线：否则"回复正在陆续到"会被误判成"翻页影响了回复区"。
+   * （2026-09-27：把回复那一路的耗时从 8.5 秒压到 1.8 秒之后，这条断言立刻变红——
+   *  它以前一直是靠"回复还没到"才通过的。）
+   */
+  function subPaneSettled(name) {
+    var pane = subPane(name);
+    if (!pane) return true;
+    var hint = pane.querySelector('.tb-eztb-hint');
+    return !hint || String(hint.textContent).indexOf('正在加载') < 0;
+  }
   function rowsIn(el) { return el ? el.querySelectorAll('.tb-eztb-row') : []; }
   function moreIn(el) { return el ? el.querySelector('.tb-eztb-more') : null; }
   function kindCounts(el) {
@@ -289,15 +303,26 @@ const PAGE = `<!doctype html>
       return !!document.querySelector('.tb-eztb-kv') && !!document.querySelector('.tb-eztb-tab[data-tab="posts"]');
     }, function (ready) {
       add('翻页用用户的面板已打开并解析出资料', ready, '');
-      var pagerPostsTab = document.querySelector('.tb-eztb-tab[data-tab="posts"]');
+      // 用 inPanel 取**最新那个**面板里的页签（页面上可能残留旧面板的 DOM）
+      var pagerPostsTab = inPanel('.tb-eztb-tab[data-tab="posts"]');
       if (!ready || !pagerPostsTab) {
         add('运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
         finish();
         return;
       }
       pagerPostsTab.click();
+      // 点开的这一瞬间两路 feed 都还在路上（loadNext 是异步的），饼图必须写明
+      // 「数据还在加载」——用户 2026-09-27 报的"有时只统计了发帖的数据"就是这个
+      // 中间态被当成了结果。这一条是**同步**断言，不依赖网速，所以不会 flaky。
+      var pendingOnEntry = inPanel('.tb-eztb-pie-pending');
+      add('初次点进时饼图标注「数据还在加载 / 还不完整」（不把只有主题帖的图画成完整的）',
+          !!pendingOnEntry, pendingOnEntry ? String(pendingOnEntry.textContent).slice(0, 46) : '没找到');
       until(function () {
-        return rowsIn(subPane('topic')).length >= ${PAGER_FIRST_PAGE};
+        // 两路都要停稳：下面要拿"回复区的行数"当基线，回复那一路还在加载的话基线就是错的
+        // 判据用饼图旁边那条"数据还在加载"提示：它只在两路首批都到齐（或失败）后消失。
+        // （不要用 subPaneSettled：还没开始加载的子页签也满足"没有正在加载"，会取到 0 行当基线）
+        return rowsIn(subPane('topic')).length >= ${PAGER_FIRST_PAGE} &&
+          !inPanel('.tb-eztb-pie-pending');
       }, function (ok) {
         var before = rowsIn(subPane('topic')).length;
         add('翻页用用户的第一页主题帖已加载', ok, before + ' 行');
@@ -339,22 +364,32 @@ const PAGE = `<!doctype html>
     postsTab.click();
     until(function () { return rowsIn(subPane('topic')).length > 0; }, function (ok) {
       add('阶段 8：主题帖重新加载出来了', ok, ok ? '' : '超时');
-      extrasPie();
-      extrasReplies();
+      // 饼图断言必须等**两路 feed 都到齐**之后再跑，而且要放在主链上：
+      //   1. 回复那一路要按吧反查吧名（回复 feed 只给 forumId），还要排在串行限速队列里，
+      //      实测比主题帖晚好几秒甚至更久才到 —— 这正是用户报的"有时只统计了发帖的数据"；
+      //   2. 以前这里用 until 等 30 秒，超时回调落在 finish() 之后，
+      //      结果**整段饼图断言一条都没进结果**（排查时会误以为"饼图都测过了"）。
+      // 现在把等待放在主链上、有上限、且把超时如实报出来。
+      until(function () {
+        return rowsIn(subPane('reply')).length > 0 && !inPanel('.tb-eztb-pie-pending');
+      }, function (settled) {
+        add('两路 feed 都进了饼图（回复那一路最多等 12 秒）', settled,
+            '主题帖 ' + rowsIn(subPane('topic')).length + ' 行 / 回复 ' + rowsIn(subPane('reply')).length +
+            ' 行 / ' + (inPanel('.tb-eztb-pie-pending') ? '饼图还标着"数据还在加载"' : '饼图没有"还在加载"标记'));
+        extrasPie();
+        extrasReplies();
+      }, 60);
     }, 200);
   }
 
   /** 占比饼图：现在是「发帖都发在哪些吧」，各段百分比必须合成 100%，图例要有吧名与条数 */
   function extrasPie() {
-    // 两路 feed 都算进饼图才叫"统计完整"：只在主题帖那一页（19 条）时会明显偏少。
-    // 串行限速下回复会晚一点到，所以这里等它到齐（超时就按现状断言，让断言红出来）。
-    until(function () {
-      var total = String((inPanel('.tb-eztb-pie-total') || {}).textContent || '');
-      var matched = total.match(/已加载 (\d+) 条/);
-      return !!matched && Number(matched[1]) > 19;
-    }, function () {
+    var pieTotalEl = inPanel('.tb-eztb-pie-total');
+    add('发帖页签的饼图已渲染', !!pieTotalEl,
+        'pie-total=' + (pieTotalEl ? String(pieTotalEl.textContent) : '(没有这个元素)') +
+        ' / 主题帖行=' + rowsIn(subPane('topic')).length +
+        ' / 回复行=' + rowsIn(subPane('reply')).length);
     extrasPieAssert();
-    }, 150);
   }
 
   function extrasPieAssert() {
@@ -383,20 +418,35 @@ const PAGE = `<!doctype html>
         }), labels.join(' / '));
     add('画出来的扇段数与图例条数一致', arcs.length > 0 &&
         arcs.length === percents.length, arcs.length + ' 段');
-    // 两路 feed 都算进图里：这位用户主题帖 19 条、回复 6 条，合计应当远大于 19
+    // 两路 feed 都算进图里 / 饼图条数 = 两路已加载行数。
+    // 判据**不用魔数**（以前写的是「已加载 2x~9x 条」这种区间，29 条也能蒙混过关），
+    // 而是直接和两路子页签的行数比。
+    // 注意：这段跑在页面的模板字符串里，正则里的 \\d 要写两个反斜杠——
+    // 只写一个的话浏览器拿到的是 /(d+)/，永远匹配不上，断言就成了死代码
+    // （这正是 1.6.0 那次"饼图不变量"的翻车方式，见 HANDOFF §5 #28）。
     var totalText = String((panePosts ? panePosts.querySelector('.tb-eztb-pie-total') : {}).textContent || '');
-    add('主题帖与回复都算进了饼图（两路 feed 一起加载）', /已加载 (2[0-9]|[3-9][0-9]) 条/.test(totalText),
-        totalText);
+    var topicRows = rowsIn(subPane('topic')).length;
+    var replyRows = rowsIn(subPane('reply')).length;
+    var pieTotalMatch = totalText.match(/已加载 (\\d+) 条/);
+    var pieTotal = pieTotalMatch ? Number(pieTotalMatch[1]) : NaN;
+    add('主题帖与回复都算进了饼图（饼图条数 > 只有主题帖时的条数）',
+        isFinite(pieTotal) && replyRows > 0 && pieTotal > topicRows,
+        totalText + '（主题帖 ' + topicRows + ' + 回复 ' + replyRows + '）');
     // 最要紧的不变量：饼里的条数 = 两路子页签里已经加载出来的行数（一条不多、一条不少）。
     // 早先吧名解析失败的行会被静默丢掉，饼图就只剩主题帖（用户报的"有时只统计了发帖的数据"）。
-    var loadedRows = rowsIn(subPane('topic')).length + rowsIn(subPane('reply')).length;
-    var pieTotalMatch = totalText.match(/已加载 (\d+) 条/);
     add('饼图条数 = 两路 feed 已加载的行数（吧名认不出来的行也不许丢）',
-        !!pieTotalMatch && Number(pieTotalMatch[1]) === loadedRows,
+        pieTotal === topicRows + replyRows,
         '饼图 ' + (pieTotalMatch ? pieTotalMatch[1] : '?') + ' 条 / 列表 ' +
-          rowsIn(subPane('topic')).length + '+' + rowsIn(subPane('reply')).length +
-          '=' + loadedRows + ' 条');
+          topicRows + '+' + replyRows + '=' + (topicRows + replyRows) + ' 条');
     add('饼图没有画出 NaN', String(pie && pie.textContent).indexOf('NaN') < 0, '');
+
+    // 「还不完整」的提示只在数据没到齐时挂着；两路都到齐后必须消失（否则它会变成噪音）
+    var pendingNote = panePosts ? panePosts.querySelector('.tb-eztb-piestat .tb-eztb-pie-pending') : null;
+    add('两路到齐后「数据还在加载」的提示要消失', !pendingNote,
+        pendingNote ? String(pendingNote.textContent).slice(0, 50) : '没有残留');
+    var failNotes = panePosts ? panePosts.querySelectorAll('.tb-eztb-piestat .tb-eztb-warn') : [];
+    add('两路都取到了就不该留「哪一路没取到」的警告', failNotes.length === 0,
+        failNotes.length + ' 条');
 
     // 「查看全部 N 个吧的占比」：有些用户"其它"占比大，需要摊开看每一个吧
     var listBtn = panePosts ? panePosts.querySelector('[data-act="pie-all"]') : null;
