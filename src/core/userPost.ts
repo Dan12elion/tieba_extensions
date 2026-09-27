@@ -112,7 +112,6 @@ async function fetchRaw(
  * 只写不覆盖：已经解析出真名的条目保持不动（吧名几乎不会变，别被别的 feed 的空值抹掉）。
  */
 function rememberForumNames(items: any[]): any[] {
-	return items; // ★变异测试用：这一行临时加上，把"白捡吧名"整个关掉
 	for (const item of items) {
 		const id = String(item?.forumId ?? "");
 		const name = String(item?.forumName ?? "").trim();

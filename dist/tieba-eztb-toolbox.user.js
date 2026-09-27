@@ -29279,7 +29279,6 @@ ${endStackCall}`;
     });
   }
   function rememberForumNames(items) {
-    return items;
     for (const item of items) {
       const id = String(item?.forumId ?? "");
       const name = String(item?.forumName ?? "").trim();
