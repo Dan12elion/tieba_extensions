@@ -524,7 +524,8 @@ try {
 				// 要两行普通回复（楼中楼查到的是它所在的那一楼，可能与之相同）
 				if (plain.length < 2) continue;
 				if (new Set(list.map((row) => row.postId)).size !== list.length) {
-					multi = { uid, threadId, list, duplicated: true };
+					// 变异/回归时会走到这里：仍然带上 plain，让下面的"各自楼层"断言也红
+					multi = { uid, threadId, list, plain, duplicated: true };
 					break;
 				}
 				multi = { uid, threadId, list, plain };

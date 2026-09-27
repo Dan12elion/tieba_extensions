@@ -211,6 +211,21 @@ const PAGE = `<!doctype html>
     );
   }
 
+  /**
+   * 回复行的"正文"：副标题里扣掉吧名小标签与楼中楼的「↩ 谁」之后剩下的文字。
+   * 直接量整段 textContent 会把标签也算进正文，断言就变得很宽。
+   */
+  function rowBodyText(row) {
+    var sub = row.querySelector('.tb-eztb-row-sub');
+    if (!sub) return '';
+    var text = String(sub.textContent);
+    Array.prototype.forEach.call(
+      sub.querySelectorAll('.tb-eztb-row-forum,.tb-eztb-row-replyto'),
+      function (chip) { text = text.split(chip.textContent).join(''); }
+    );
+    return text.replace(/\\s+/g, '');
+  }
+
   /** 对某个子页签的列表做排版断言（只看这一个子页签，避免串台） */
   function checkLayout(scope, label) {
     var rows = rowsIn(scope);
@@ -361,8 +376,10 @@ const PAGE = `<!doctype html>
       var withContent = rows.filter(function (row) {
         var sub = row.querySelector('.tb-eztb-row-sub');
         if (!sub) return false;
-        // 副标题里带了吧名小标签，去掉空白后还应当有正文
-        return String(sub.textContent).replace(/\\s+/g, '').length > 3;
+        // 副标题里除了正文，还有吧名小标签与楼中楼的「↩ 谁」——把这两块剔除后再看还有没有正文。
+        // 判据是"非空"而不是"够长"：真实数据里有人只回了一个"有"或"1"（实测）。
+        // （早先判断的是整段 textContent 的长度，光靠吧名标签就能满足，等于没测；变异测试时发现的。）
+        return rowBodyText(row).length > 0;
       });
       add('回复行显示了回复正文（不再只有标题）', withContent.length > 0,
           withContent.length + '/' + rows.length + ' 行有正文');
