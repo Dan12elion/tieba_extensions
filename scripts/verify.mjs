@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createShimPlugin, DEFAULT_EZTB_ROOT } from "./shims-plugin.mjs";
+import { collectEmbeddedDeps } from "./deps-info.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -213,15 +214,36 @@ function verifyGreasyForkRules() {
 		meta.find((e) => e.key === "license")?.value ?? "(无)",
 	);
 
-	// 「如果一个库被内嵌入了脚本，那么您必须一并提供库的来源」
-	for (const source of [
-		"github.com/Dilettante258/tieba-toolbox",
-		"github.com/Effect-TS/effect",
-		"github.com/bufbuild/protobuf-es",
-		"github.com/dcodeIO/long.js",
-	]) {
+	/*
+	 * 「如果一个库被内嵌入了脚本，那么您必须一并提供库的来源」
+	 * 期望值不是写死的字符串，而是从磁盘上真实的 package.json / git 读出来的
+	 * ——写死的旧清单里，SDK 的来源 URL 与许可都是错的（见 scripts/deps-info.mjs 的说明）。
+	 */
+	const deps = collectEmbeddedDeps({ projectRoot, eztbRoot });
+	for (const problem of deps.problems) {
+		check(`内嵌依赖自检：${problem}`, false);
+	}
+	for (const source of [deps.sdk.url, ...deps.libs.map((lib) => lib.url)]) {
 		check(`内嵌库来源已写明：${source}`, code.includes(source));
 	}
+	check(
+		`内嵌库许可已写明：${deps.sdk.license}`,
+		code.includes(deps.sdk.license),
+	);
+	check(
+		"NOTICE 记下了锁定的 SDK 提交号",
+		!deps.sdk.commit || code.includes(deps.sdk.commit),
+		deps.sdk.commit ?? "(读不到提交号)",
+	);
+	// 上游 eztb 的检出也要写进产物：只写 SDK 的提交号，说不清"这份产物是在哪份上游上构建的"
+	check(`上游 eztb 检出已写明：${deps.eztb.url}`, code.includes(deps.eztb.url));
+	check(
+		"NOTICE 记下了上游 eztb 的锁定提交号",
+		!deps.eztb.commit || code.includes(deps.eztb.commit),
+		deps.eztb.commit ?? "(读不到提交号)",
+	);
+	// 回归保护：旧的 NOTICE 把手写的来源写成了 tieba-toolbox（该仓库已改名）
+	check("产物里没有过期的 SDK 来源写法", !code.includes("tieba-toolbox"));
 }
 
 async function main() {

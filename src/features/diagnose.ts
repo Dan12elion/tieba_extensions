@@ -6,6 +6,9 @@
  */
 
 import { escapeHtml } from "../core/util.ts";
+import { abortAllInFlight, inFlightCount } from "../core/gmhttp.ts";
+import { getStorageIssues } from "../core/kvCache.ts";
+import { recentLogs } from "../core/log.ts";
 import { BUTTON_CLASS } from "../page/scanner.ts";
 import { openDialog } from "../ui/modal.ts";
 
@@ -56,10 +59,30 @@ export function buildDiagnoseReport(): string {
 		"",
 		"页面上的用户主页链接（按 class 统计）：",
 		...userLinkClasses().map((item) => `  ${item.count} × ${item.className}`),
+			"",
+			`在飞请求: ${inFlightCount()}`,
+			"",
+		"存储写入失败记录（空 = 一切正常）：",
+		...storageIssueLines(),
+		"",
+		"最近的日志（最多 20 条）：",
+		...recentLogs()
+			.slice(-20)
+			.map((line) => `  ${line}`),
 		"",
 		`UA: ${navigator.userAgent}`,
 	];
 	return lines.join("\n");
+}
+
+/** 存储写失败以前是静默的，现在把它摆到诊断报告里 */
+function storageIssueLines(): string[] {
+	const issues = getStorageIssues();
+	if (!issues.length) return ["  （无）"];
+	return issues.map(
+		(issue) =>
+			`  ${new Date(issue.at).toISOString()} ${issue.storageKey}: ${issue.message}`,
+	);
 }
 
 export function openDiagnoseDialog(): void {
@@ -73,7 +96,17 @@ export function openDiagnoseDialog(): void {
 		`<pre class="tb-eztb-report">${escapeHtml(report)}</pre>` +
 		`<div class="tb-eztb-actions">` +
 		`<button data-act="copy" class="primary">复制报告</button>` +
+		`<button data-act="abort">中断在飞请求</button>` +
 		`</div>`;
+
+	dialog.body
+		.querySelector('[data-act="abort"]')
+		?.addEventListener("click", (event) => {
+			const button = event.currentTarget as HTMLButtonElement;
+			const count = abortAllInFlight();
+			button.textContent =
+				count > 0 ? `已中断 ${count} 个` : "当前没有在飞请求";
+		});
 
 	dialog.body
 		.querySelector('[data-act="copy"]')

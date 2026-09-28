@@ -1,0 +1,125 @@
+name: CI
+
+# 离线校验随每次 push / PR 跑；依赖网络与真实浏览器的三套测试只在手动触发时跑
+# （它们会打真实贴吧接口，不该卡 PR）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 本工程刻意不重复安装依赖：esbuild / effect / @bufbuild/protobuf / long / typescript
+  # 都从上游 eztb 仓库借。本地默认取同级的 ../eztb，CI 里用环境变量指过去。
+  EZTB_ROOT: ${{ github.workspace }}/eztb
+
+jobs:
+  offline:
+    name: 离线校验
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取出本仓库
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      # 上游 eztb 必须钉在 sdk.lock.json 记的那个提交上，**不能**图省事 clone v3 的尖端：
+      # v3 一直在动，它的 packages/sdk 子模块指针也跟着动，拿尖端构建出来的产物与仓库里
+      # 提交的那份对不上，下面的「产物与源码同步」会失败——但那不是"忘了重建产物"。
+      # 这个提交里 packages/sdk = 338a81e，就是产物 NOTICE 里写的那一个。
+      - name: 取出上游 eztb（钉在锁文件记的提交）
+        shell: bash
+        run: |
+          set -euo pipefail
+          EZTB_COMMIT=$(node -p "require('./repo/sdk.lock.json').eztb.commit")
+          git init eztb
+          git -C eztb remote add origin https://github.com/Dilettante258/eazy-tieba.git
+          git -C eztb fetch --depth 1 origin "$EZTB_COMMIT"
+          git -C eztb checkout --detach FETCH_HEAD
+          # apps/api 也在上游 bun.lock 的 workspace 集合里，缺了它 --frozen-lockfile 会
+          # 报 "lockfile had changes"；两个子模块都是公开仓库，一起取。
+          git -C eztb submodule update --init --recursive
+
+      # 上游用 bun。本地开发不需要装 bun，CI 里装一次是必要的。
+      - name: 准备 bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: 安装上游依赖
+        working-directory: eztb
+        run: bun install --frozen-lockfile
+
+      - name: 类型检查
+        working-directory: repo
+        run: node scripts/typecheck.mjs
+
+      - name: 构建产物
+        working-directory: repo
+        run: node build.mjs
+
+      # 本项目的产物是提交进仓库的（README 的 raw 安装链接指着它），
+      # 所以要校验的是"产物与源码一致"，而不是"不许提交产物"。
+      - name: 产物与源码同步
+        working-directory: repo
+        run: git diff --exit-code -- dist
+
+      - name: 签名比对 + 产物检查 + Greasy Fork 规则
+        working-directory: repo
+        run: node scripts/verify.mjs
+
+      - name: 规则 / 饼图 / 签到的离线断言
+        working-directory: repo
+        run: node scripts/keyword-test.mjs
+
+  browser-suites:
+    name: 真机测试（手动触发）
+    # click-test / page-test 走无头 Edge，脚本里的路径是 Windows 的；
+    # GitHub 的 windows runner 自带 Edge，与本机环境最接近。
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    env:
+      EZTB_ROOT: ${{ github.workspace }}\eztb
+    steps:
+      - name: 取出本仓库
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: 取出上游 eztb（钉在锁文件记的提交）
+        shell: bash
+        run: |
+          set -euo pipefail
+          EZTB_COMMIT=$(node -p "require('./repo/sdk.lock.json').eztb.commit")
+          git init eztb
+          git -C eztb remote add origin https://github.com/Dilettante258/eazy-tieba.git
+          git -C eztb fetch --depth 1 origin "$EZTB_COMMIT"
+          git -C eztb checkout --detach FETCH_HEAD
+          git -C eztb submodule update --init --recursive
+
+      - name: 准备 bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: 安装上游依赖
+        working-directory: eztb
+        run: bun install --frozen-lockfile
+
+      - name: 构建产物
+        working-directory: repo
+        run: node build.mjs
+
+      # 这三套里：live-test 打真实贴吧接口；click-test 起本地代理 + 无头 Edge；
+      # page-test 需要页面快照（快照含真实帖子内容，不进仓库，所以这台上会显示"跳过"）。
+      - name: 真实接口链路
+        working-directory: repo
+        run: node scripts/live-test.mjs
+
+      - name: 无头浏览器交互
+        working-directory: repo
+        run: node scripts/click-test.mjs
+
+      - name: 真实页面快照回归
+        working-directory: repo
+        run: node scripts/page-test.mjs

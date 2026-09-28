@@ -12,6 +12,7 @@
  */
 
 import { countPostsByForum } from "./activityRule.ts";
+import { type KvEntry, createKvCache } from "./kvCache.ts";
 import { loadReplyPage, loadTopicPage } from "./userPost.ts";
 import { errorMessage } from "./util.ts";
 
@@ -19,7 +20,7 @@ const CACHE_KEY = "tbEztbToolboxForumActivityV1";
 const CACHE_MAX = 300;
 const TTL_MS = 24 * 60 * 60 * 1000;
 
-export interface ForumActivity {
+export interface ForumActivity extends KvEntry {
 	/** 吧名 → 最近一页发帖里他在该吧的发言条数 */
 	byForum: Record<string, number>;
 	/** 样本大小 */
@@ -29,61 +30,27 @@ export interface ForumActivity {
 	hidden: boolean;
 	/** 取数失败的部分（局部失败不影响其余） */
 	failed: string[];
-	ts: number;
 }
 
-const memory = new Map<string, ForumActivity>();
-let disk: Record<string, ForumActivity> = loadDisk();
-
-function loadDisk(): Record<string, ForumActivity> {
-	try {
-		const stored = GM_getValue<Record<string, ForumActivity>>(CACHE_KEY, {});
-		return stored && typeof stored === "object" ? stored : {};
-	} catch {
-		return {};
-	}
-}
+const cache = createKvCache<ForumActivity>({
+	storageKey: CACHE_KEY,
+	max: CACHE_MAX,
+	ttlMs: TTL_MS,
+	// 对方的发帖记录被隐藏时活跃度无从判断，这种结果不算数
+	validate: (entry) => !entry.hidden,
+});
 
 /** 同步读缓存（面板渲染时就地补上，不用等请求）。过期或隐藏的结果不返回。 */
-export function readForumActivityCache(
-	uid: number,
-	maxAgeMs = TTL_MS,
-): ForumActivity | null {
-	const key = String(uid);
-	const hit = memory.get(key) ?? disk[key];
-	if (!hit) return null;
-	if (Date.now() - (hit.ts ?? 0) > maxAgeMs) return null;
-	if (hit.hidden) return null;
-	return hit;
+export function readForumActivityCache(uid: number): ForumActivity | null {
+	return cache.read(String(uid));
 }
 
 function writeForumActivityCache(uid: number, value: ForumActivity): void {
-	const key = String(uid);
-	memory.set(key, value);
-	disk[key] = value;
-
-	const keys = Object.keys(disk);
-	if (keys.length > CACHE_MAX) {
-		keys.sort((a, b) => (disk[a].ts ?? 0) - (disk[b].ts ?? 0));
-		for (const stale of keys.slice(0, keys.length - CACHE_MAX)) {
-			delete disk[stale];
-		}
-	}
-	try {
-		GM_setValue(CACHE_KEY, disk);
-	} catch {
-		/* 存储失败时至少内存里有效 */
-	}
+	cache.write(String(uid), value);
 }
 
 export function clearForumActivityCache(): void {
-	memory.clear();
-	disk = {};
-	try {
-		GM_setValue(CACHE_KEY, {});
-	} catch {
-		/* 忽略 */
-	}
+	cache.clear();
 }
 
 /**

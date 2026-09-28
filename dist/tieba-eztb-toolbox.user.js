@@ -3,9 +3,9 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.7.4
-// @description         在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
-// @description:zh-CN   在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
+// @version             1.8.0
+// @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
+// @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
 // @match               *://*.tieba.baidu.com/*
 // @run-at              document-idle
@@ -55,20 +55,119 @@
   var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
   var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 
+  // src/core/kvCache.ts
+  var issues = [];
+  function getStorageIssues() {
+    return issues.slice();
+  }
+  function noteStorageIssue(storageKey, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (issues.some(
+      (issue) => issue.storageKey === storageKey && issue.message === message
+    )) {
+      return;
+    }
+    issues.push({ storageKey, message, at: Date.now() });
+    console.warn(
+      `[eztb] 写入油猴存储失败（${storageKey}）：${message}。通常是存储配额已满，本次结果可能不会保留。`
+    );
+  }
+  function createKvCache(options) {
+    const { storageKey, max: max6 } = options;
+    const memory = /* @__PURE__ */ new Map();
+    let disk = null;
+    const load = () => {
+      if (disk) return disk;
+      try {
+        const stored = GM_getValue(storageKey, {});
+        disk = stored && typeof stored === "object" ? stored : {};
+      } catch {
+        disk = {};
+      }
+      return disk;
+    };
+    const ttlMs2 = () => {
+      const raw = typeof options.ttlMs === "function" ? options.ttlMs() : options.ttlMs;
+      return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+    };
+    const isUsable = (entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const limit = ttlMs2();
+      if (limit > 0 && Date.now() - (entry.ts ?? 0) > limit) return false;
+      if (options.validate && !options.validate(entry)) return false;
+      return true;
+    };
+    const drop3 = (key) => {
+      memory.delete(key);
+      const store = load();
+      if (key in store) delete store[key];
+    };
+    const persist2 = (store) => {
+      try {
+        GM_setValue(storageKey, store);
+        return true;
+      } catch (error) {
+        noteStorageIssue(storageKey, error);
+        return false;
+      }
+    };
+    const trim = (store, limit) => {
+      const keys5 = Object.keys(store);
+      if (keys5.length <= limit) return;
+      keys5.sort((a, b) => (store[a]?.ts ?? 0) - (store[b]?.ts ?? 0));
+      for (const stale of keys5.slice(0, keys5.length - limit)) {
+        delete store[stale];
+      }
+    };
+    return {
+      read(key) {
+        const hit = memory.get(key) ?? load()[key];
+        if (!hit) return null;
+        if (!isUsable(hit)) {
+          drop3(key);
+          return null;
+        }
+        memory.set(key, hit);
+        return hit;
+      },
+      write(key, value) {
+        const entry = { ...value, ts: Date.now() };
+        const store = load();
+        memory.set(key, entry);
+        store[key] = entry;
+        trim(store, max6);
+        if (!persist2(store)) {
+          trim(store, Math.max(1, Math.floor(max6 / 2)));
+          persist2(store);
+        }
+        return entry;
+      },
+      delete(key) {
+        drop3(key);
+      },
+      clear() {
+        memory.clear();
+        disk = {};
+        persist2({});
+      },
+      clearMemory() {
+        memory.clear();
+      },
+      count() {
+        return Object.keys(load()).length;
+      }
+    };
+  }
+
   // src/core/cached.ts
   var CACHE_KEY = "tbEztbToolboxProfileCacheV1";
   var CACHE_TTL = 7 * 24 * 60 * 60 * 1e3;
   var CACHE_MAX = 500;
-  var memory = /* @__PURE__ */ new Map();
-  var disk = loadDisk();
-  function loadDisk() {
-    try {
-      const stored = GM_getValue(CACHE_KEY, {});
-      return stored && typeof stored === "object" ? stored : {};
-    } catch {
-      return {};
-    }
-  }
+  var cache = createKvCache({
+    storageKey: CACHE_KEY,
+    max: CACHE_MAX,
+    ttlMs: CACHE_TTL
+  });
   function stripQuery(value) {
     return value.split("?")[0];
   }
@@ -80,39 +179,166 @@
   }
   function readProfileCache(key) {
     if (!key) return null;
-    const hit = memory.get(key) ?? disk[key];
-    if (!hit) return null;
-    if (Date.now() - (hit.ts ?? 0) > CACHE_TTL) {
-      memory.delete(key);
-      delete disk[key];
-      return null;
-    }
-    return hit;
+    return cache.read(key);
   }
   function writeProfileCache(key, value) {
     if (!key) return;
-    const entry = { ...value, ts: Date.now() };
-    memory.set(key, entry);
-    disk[key] = entry;
-    const keys5 = Object.keys(disk);
-    if (keys5.length > CACHE_MAX) {
-      keys5.sort((a, b) => (disk[a].ts ?? 0) - (disk[b].ts ?? 0));
-      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX)) {
-        delete disk[stale];
-      }
-    }
-    try {
-      GM_setValue(CACHE_KEY, disk);
-    } catch {
-    }
+    cache.write(key, value);
   }
   function clearProfileCache() {
-    memory.clear();
-    disk = {};
-    try {
-      GM_setValue(CACHE_KEY, {});
-    } catch {
+    cache.clear();
+  }
+
+  // src/core/gmhttp.ts
+  var GmHttpError = class extends Error {
+    constructor(kind, message) {
+      super(message);
+      this.name = "GmHttpError";
+      this.kind = kind;
     }
+  };
+  var DEFAULT_TIMEOUT = 3e4;
+  var inFlight = /* @__PURE__ */ new Set();
+  function inFlightCount() {
+    return inFlight.size;
+  }
+  function abortAllInFlight() {
+    const count3 = inFlight.size;
+    for (const handle of Array.from(inFlight)) {
+      try {
+        handle.abort();
+      } catch {
+      }
+    }
+    inFlight.clear();
+    return count3;
+  }
+  function gmRequestHandle(options) {
+    let handle = null;
+    let settled = false;
+    const done7 = () => {
+      settled = true;
+      if (handle) inFlight.delete(handle);
+    };
+    const promise3 = new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(
+          new GmHttpError(
+            "unavailable",
+            "当前环境不支持 GM_xmlhttpRequest，请检查脚本管理器"
+          )
+        );
+        return;
+      }
+      try {
+        handle = GM_xmlhttpRequest({
+          method: options.method ?? "GET",
+          url: options.url,
+          headers: options.headers,
+          data: options.data ?? void 0,
+          responseType: options.responseType ?? "text",
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+          onload: (response) => {
+            done7();
+            resolve(response);
+          },
+          onerror: () => {
+            done7();
+            reject(new GmHttpError("network", "网络错误：无法连接贴吧接口"));
+          },
+          ontimeout: () => {
+            done7();
+            reject(new GmHttpError("timeout", "请求超时，请稍后重试"));
+          },
+          onabort: () => {
+            done7();
+            reject(new GmHttpError("abort", "请求已取消"));
+          }
+        });
+        if (handle && !settled) inFlight.add(handle);
+      } catch (error) {
+        done7();
+        reject(
+          new GmHttpError(
+            "unavailable",
+            `发起请求失败：${error instanceof Error ? error.message : String(error)}`
+          )
+        );
+      }
+    });
+    return {
+      promise: promise3,
+      abort: () => {
+        if (settled) return;
+        try {
+          handle?.abort();
+        } catch {
+        }
+        done7();
+      }
+    };
+  }
+  function gmRequest(options) {
+    return gmRequestHandle(options).promise;
+  }
+
+  // src/core/log.ts
+  var ORDER = {
+    debug: 10,
+    info: 20,
+    warn: 30,
+    error: 40
+  };
+  var RING_MAX = 200;
+  var MAX_ARG_CHARS = 300;
+  var threshold = "info";
+  var ring = [];
+  function recentLogs() {
+    return ring.slice();
+  }
+  function mask(value) {
+    if (value.length <= 8) return value;
+    return `${value.slice(0, 4)}…${value.slice(-2)}`;
+  }
+  function format(value) {
+    let text;
+    if (typeof value === "string") text = value;
+    else if (value instanceof Error) text = `${value.name}: ${value.message}`;
+    else if (value === void 0) text = "undefined";
+    else {
+      try {
+        text = JSON.stringify(value);
+      } catch {
+        text = String(value);
+      }
+    }
+    if (text === void 0) text = String(value);
+    return text.length > MAX_ARG_CHARS ? `${text.slice(0, MAX_ARG_CHARS)}…` : text;
+  }
+  function emit(level, args2) {
+    if (ORDER[level] < ORDER[threshold]) return;
+    const body = args2.map(format).join(" ");
+    ring.push(`[${(/* @__PURE__ */ new Date()).toISOString()}] ${level}: ${body}`);
+    if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
+    const out = `[eztb] ${body}`;
+    if (level === "error") console.error(out);
+    else if (level === "warn") console.warn(out);
+    else console.log(out);
+  }
+  var log = {
+    debug: (...args2) => emit("debug", args2),
+    info: (...args2) => emit("info", args2),
+    warn: (...args2) => emit("warn", args2),
+    error: (...args2) => emit("error", args2)
+  };
+  function describeUser(user) {
+    if (!user) return "未识别";
+    const parts2 = [];
+    if (user.userId) parts2.push(`id=${user.userId}`);
+    if (user.uid) parts2.push(`uid=${mask(String(user.uid))}`);
+    if (user.un) parts2.push(`un=${user.un}`);
+    if (user.portrait) parts2.push(`portrait=${mask(String(user.portrait))}`);
+    return parts2.join(" ") || "无标识";
   }
 
   // src/core/queue.ts
@@ -147,6 +373,7 @@
   var requestQueue = new SerialQueue(400);
 
   // src/core/settings.ts
+  var SETTINGS_SCHEMA_VERSION = 2;
   var STORAGE_KEY = "tbEztbToolboxSettingsV1";
   var DEFAULT_SETTINGS = {
     bduss: "",
@@ -159,7 +386,58 @@
     compositionCacheDays: 3,
     signInLevelThreshold: 6
   };
-  var cache = null;
+  var cache2 = null;
+  function clampNumber(value, fallback, min4, max6 = Number.POSITIVE_INFINITY) {
+    const num = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(num) || num < min4) return fallback;
+    return Math.min(num, max6);
+  }
+  function readString(value, fallback) {
+    return typeof value === "string" ? value : fallback;
+  }
+  function normalizeSettings(input) {
+    const raw = input && typeof input === "object" ? input : {};
+    return {
+      bduss: readString(raw.bduss, DEFAULT_SETTINGS.bduss).trim(),
+      bdussHelpUrl: readString(raw.bdussHelpUrl, DEFAULT_SETTINGS.bdussHelpUrl),
+      minIntervalMs: clampNumber(
+        raw.minIntervalMs,
+        DEFAULT_SETTINGS.minIntervalMs,
+        0
+      ),
+      maxPagesPerList: clampNumber(
+        raw.maxPagesPerList,
+        DEFAULT_SETTINGS.maxPagesPerList,
+        1
+      ),
+      compositionRules: readString(
+        raw.compositionRules,
+        DEFAULT_SETTINGS.compositionRules
+      ),
+      compositionAuto: raw.compositionAuto !== false,
+      compositionMaxPerPage: clampNumber(
+        raw.compositionMaxPerPage,
+        DEFAULT_SETTINGS.compositionMaxPerPage,
+        1,
+        200
+      ),
+      compositionCacheDays: clampNumber(
+        raw.compositionCacheDays,
+        DEFAULT_SETTINGS.compositionCacheDays,
+        1,
+        365
+      ),
+      signInLevelThreshold: clampNumber(
+        raw.signInLevelThreshold,
+        DEFAULT_SETTINGS.signInLevelThreshold,
+        1,
+        18
+      )
+    };
+  }
+  var MIGRATIONS = {
+    1: (raw) => raw
+  };
   function readRaw() {
     try {
       const stored = GM_getValue(STORAGE_KEY, {});
@@ -168,42 +446,88 @@
       return {};
     }
   }
-  function getSettings() {
-    if (!cache) {
-      cache = { ...DEFAULT_SETTINGS, ...readRaw() };
+  function migrate(raw) {
+    const startVersion = typeof raw.schemaVersion === "number" && raw.schemaVersion >= 1 ? raw.schemaVersion : 1;
+    let current = raw;
+    let version = startVersion;
+    while (version < SETTINGS_SCHEMA_VERSION) {
+      const step4 = MIGRATIONS[version];
+      current = step4 ? step4(current) : current;
+      version += 1;
     }
-    return cache;
+    return {
+      settings: normalizeSettings(current),
+      changed: startVersion !== SETTINGS_SCHEMA_VERSION
+    };
+  }
+  function persist(settings) {
+    try {
+      GM_setValue(STORAGE_KEY, {
+        ...settings,
+        schemaVersion: SETTINGS_SCHEMA_VERSION
+      });
+    } catch (error) {
+      console.warn("[eztb] 设置写入油猴存储失败：", error);
+    }
+  }
+  function getSettings() {
+    if (!cache2) {
+      const { settings, changed } = migrate(readRaw());
+      cache2 = settings;
+      if (changed) persist(settings);
+    }
+    return cache2;
   }
   function updateSettings(patch9) {
-    const next4 = { ...getSettings(), ...patch9 };
-    if (!Number.isFinite(next4.minIntervalMs) || next4.minIntervalMs < 0) {
-      next4.minIntervalMs = DEFAULT_SETTINGS.minIntervalMs;
-    }
-    if (!Number.isFinite(next4.maxPagesPerList) || next4.maxPagesPerList < 1) {
-      next4.maxPagesPerList = DEFAULT_SETTINGS.maxPagesPerList;
-    }
-    if (!Number.isFinite(next4.compositionMaxPerPage) || next4.compositionMaxPerPage < 1) {
-      next4.compositionMaxPerPage = DEFAULT_SETTINGS.compositionMaxPerPage;
-    }
-    if (next4.compositionMaxPerPage > 200) next4.compositionMaxPerPage = 200;
-    if (!Number.isFinite(next4.compositionCacheDays) || next4.compositionCacheDays < 1) {
-      next4.compositionCacheDays = DEFAULT_SETTINGS.compositionCacheDays;
-    }
-    if (next4.compositionCacheDays > 365) next4.compositionCacheDays = 365;
-    if (!Number.isFinite(next4.signInLevelThreshold) || next4.signInLevelThreshold < 1) {
-      next4.signInLevelThreshold = DEFAULT_SETTINGS.signInLevelThreshold;
-    }
-    if (next4.signInLevelThreshold > 18) next4.signInLevelThreshold = 18;
-    next4.compositionAuto = next4.compositionAuto !== false;
-    cache = next4;
-    try {
-      GM_setValue(STORAGE_KEY, next4);
-    } catch {
-    }
+    const next4 = normalizeSettings({ ...getSettings(), ...patch9 });
+    cache2 = next4;
+    persist(next4);
     return next4;
   }
   function hasBduss() {
     return getSettings().bduss.trim().length > 0;
+  }
+  var SETTINGS_EXPORT_FORMAT = "eztb-toolbox-settings";
+  function toPortable(settings) {
+    const { bduss: _bduss, ...rest } = settings;
+    return rest;
+  }
+  function exportSettingsJson(now = /* @__PURE__ */ new Date()) {
+    const payload = {
+      _format: SETTINGS_EXPORT_FORMAT,
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      exportedAt: now.toISOString(),
+      settings: toPortable(getSettings())
+    };
+    return JSON.stringify(payload, null, 2);
+  }
+  function importSettingsJson(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return { ok: false, reason: "内容是空的" };
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: `不是合法的 JSON：${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, reason: "顶层必须是一个对象" };
+    }
+    const holder = parsed;
+    const format5 = holder._format;
+    if (typeof format5 === "string" && format5 !== SETTINGS_EXPORT_FORMAT) {
+      return { ok: false, reason: `不是本脚本导出的设置（_format = ${format5}）` };
+    }
+    const body = holder.settings && typeof holder.settings === "object" ? holder.settings : holder;
+    const { bduss: _ignored, ...safe } = body;
+    const merged = normalizeSettings({ ...getSettings(), ...safe });
+    merged.bduss = getSettings().bduss;
+    cache2 = merged;
+    persist(merged);
+    return { ok: true, settings: merged };
   }
 
   // src/core/util.ts
@@ -471,65 +795,37 @@
   // src/core/compositionCache.ts
   var CACHE_KEY2 = "tbEztbToolboxCompositionCacheV1";
   var CACHE_MAX2 = 300;
-  var memory2 = /* @__PURE__ */ new Map();
-  var disk2 = loadDisk2();
-  function loadDisk2() {
-    try {
-      const stored = GM_getValue(
-        CACHE_KEY2,
-        {}
-      );
-      return stored && typeof stored === "object" ? stored : {};
-    } catch {
-      return {};
-    }
-  }
   function ttlMs() {
     const days2 = Number(getSettings().compositionCacheDays);
     const safe = Number.isFinite(days2) && days2 > 0 ? days2 : 3;
     return safe * 24 * 60 * 60 * 1e3;
   }
+  var cache3 = createKvCache({
+    storageKey: CACHE_KEY2,
+    max: CACHE_MAX2,
+    ttlMs
+  });
   function compositionCacheKey(ref) {
     return profileCacheKey(ref);
   }
   function readCompositionCache(key, rulesHash2) {
     if (!key) return null;
-    const hit = memory2.get(key) ?? disk2[key];
-    if (!hit) return null;
-    if (hit.rulesHash !== rulesHash2 || Date.now() - (hit.ts ?? 0) > ttlMs()) {
-      memory2.delete(key);
-      delete disk2[key];
+    const hit = cache3.read(key);
+    if (!hit || hit.rulesHash !== rulesHash2) {
+      if (hit) cache3.delete(key);
       return null;
     }
     return hit;
   }
   function writeCompositionCache(key, entry) {
     if (!key) return;
-    const value = { ...entry, ts: Date.now() };
-    memory2.set(key, value);
-    disk2[key] = value;
-    const keys5 = Object.keys(disk2);
-    if (keys5.length > CACHE_MAX2) {
-      keys5.sort((a, b) => (disk2[a].ts ?? 0) - (disk2[b].ts ?? 0));
-      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX2)) {
-        delete disk2[stale];
-      }
-    }
-    try {
-      GM_setValue(CACHE_KEY2, disk2);
-    } catch {
-    }
+    cache3.write(key, entry);
   }
   function dropCompositionMemory() {
-    memory2.clear();
+    cache3.clearMemory();
   }
   function clearCompositionCache() {
-    memory2.clear();
-    disk2 = {};
-    try {
-      GM_setValue(CACHE_KEY2, {});
-    } catch {
-    }
+    cache3.clear();
   }
 
   // ../eztb/node_modules/effect/dist/esm/Function.js
@@ -1171,7 +1467,7 @@
     }
     return redact(x);
   };
-  var format = (x) => JSON.stringify(x, null, 2);
+  var format2 = (x) => JSON.stringify(x, null, 2);
   var BaseProto = {
     toJSON() {
       return toJSON(this);
@@ -1180,7 +1476,7 @@
       return this.toJSON();
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
   };
   var Class = class {
@@ -1194,7 +1490,7 @@
      * @since 2.0.0
      */
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
   };
   var toStringUnknown = (u, whitespace = 2) => {
@@ -1208,9 +1504,9 @@
     }
   };
   var stringifyCircular = (obj, whitespace) => {
-    let cache2 = [];
-    const retVal = JSON.stringify(obj, (_key, value) => typeof value === "object" && value !== null ? cache2.includes(value) ? void 0 : cache2.push(value) && (redactableState.fiberRefs !== void 0 && isRedactable(value) ? value[symbolRedactable](redactableState.fiberRefs) : value) : value, whitespace);
-    cache2 = void 0;
+    let cache7 = [];
+    const retVal = JSON.stringify(obj, (_key, value) => typeof value === "object" && value !== null ? cache7.includes(value) ? void 0 : cache7.push(value) && (redactableState.fiberRefs !== void 0 && isRedactable(value) ? value[symbolRedactable](redactableState.fiberRefs) : value) : value, whitespace);
+    cache7 = void 0;
     return retVal;
   };
   var symbolRedactable = /* @__PURE__ */ Symbol.for("effect/Inspectable/Redactable");
@@ -1392,7 +1688,7 @@
       return this.toJSON();
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
   };
   var SomeProto = /* @__PURE__ */ Object.assign(/* @__PURE__ */ Object.create(CommonProto), {
@@ -1450,7 +1746,7 @@
       return this.toJSON();
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
   };
   var RightProto = /* @__PURE__ */ Object.assign(/* @__PURE__ */ Object.create(CommonProto2), {
@@ -1882,7 +2178,7 @@
       _Identifier: (_) => _
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -1961,7 +2257,7 @@
       return pipeArguments(this, arguments);
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -2080,7 +2376,7 @@
       _A: (_) => _
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -2412,7 +2708,7 @@
     decodeUnknown: () => decodeUnknown,
     divide: () => divide,
     equals: () => equals2,
-    format: () => format2,
+    format: () => format3,
     formatIso: () => formatIso,
     fromIso: () => fromIso,
     greaterThan: () => greaterThan2,
@@ -2526,7 +2822,7 @@
       return isDuration(that) && equals2(this, that);
     },
     toString() {
-      return `Duration(${format2(this)})`;
+      return `Duration(${format3(this)})`;
     },
     toJSON() {
       switch (this.value._tag) {
@@ -2792,7 +3088,7 @@
       nanos: Number(nanos2 % bigint1e6)
     };
   };
-  var format2 = (self) => {
+  var format3 = (self) => {
     const duration3 = decode(self);
     if (duration3.value._tag === "Infinity") {
       return "Infinity";
@@ -3060,32 +3356,32 @@
     }
   };
   var IndexedNode = class _IndexedNode {
-    constructor(edit, mask, children) {
+    constructor(edit, mask2, children) {
       __publicField(this, "edit");
       __publicField(this, "mask");
       __publicField(this, "children");
       __publicField(this, "_tag", "IndexedNode");
       this.edit = edit;
-      this.mask = mask;
+      this.mask = mask2;
       this.children = children;
     }
     modify(edit, shift2, f, hash2, key, size9) {
-      const mask = this.mask;
+      const mask2 = this.mask;
       const children = this.children;
       const frag = hashFragment(shift2, hash2);
       const bit = toBitmap(frag);
-      const indx = fromBitmap(mask, bit);
-      const exists3 = mask & bit;
+      const indx = fromBitmap(mask2, bit);
+      const exists3 = mask2 & bit;
       const canEdit = canEditNode(this, edit);
       if (!exists3) {
         const _newChild = new EmptyNode().modify(edit, shift2 + SIZE, f, hash2, key, size9);
         if (!_newChild) return this;
-        return children.length >= MAX_INDEX_NODE ? expand(edit, frag, _newChild, mask, children) : new _IndexedNode(edit, mask | bit, arraySpliceIn(canEdit, indx, _newChild, children));
+        return children.length >= MAX_INDEX_NODE ? expand(edit, frag, _newChild, mask2, children) : new _IndexedNode(edit, mask2 | bit, arraySpliceIn(canEdit, indx, _newChild, children));
       }
       const current = children[indx];
       const child = current.modify(edit, shift2 + SIZE, f, hash2, key, size9);
       if (current === child) return this;
-      let bitmap = mask;
+      let bitmap = mask2;
       let newChildren;
       if (isEmptyNode(child)) {
         bitmap &= ~bit;
@@ -3235,7 +3531,7 @@
       return false;
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -3452,7 +3748,7 @@
       return false;
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -3535,7 +3831,7 @@
   var MutableRefProto = {
     [TypeId7]: TypeId7,
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -3590,7 +3886,7 @@
       return isFiberId(that) && that._tag === OP_NONE;
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     toJSON() {
       return {
@@ -3619,7 +3915,7 @@
       return isFiberId(that) && that._tag === OP_RUNTIME && this.id === that.id && this.startTimeMillis === that.startTimeMillis;
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     toJSON() {
       return {
@@ -3651,7 +3947,7 @@
       return isFiberId(that) && that._tag === OP_COMPOSITE && equals(this.left, that.left) && equals(this.right, that.right);
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     toJSON() {
       return {
@@ -3728,7 +4024,7 @@
     [TypeId8]: TypeId8,
     _tag: "Cons",
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -3791,7 +4087,7 @@
     [TypeId8]: TypeId8,
     _tag: "Nil",
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -5189,7 +5485,7 @@ ${prefix}}`;
       };
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     [NodeInspectSymbol]() {
       return this.toJSON();
@@ -5237,7 +5533,7 @@ ${prefix}}`;
       };
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     [NodeInspectSymbol]() {
       return this.toJSON();
@@ -5285,7 +5581,7 @@ ${prefix}}`;
       };
     }
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     }
     [NodeInspectSymbol]() {
       return this.toJSON();
@@ -5979,7 +6275,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   var TimeoutException = /* @__PURE__ */ makeException({
     [TimeoutExceptionTypeId]: TimeoutExceptionTypeId
   }, "TimeoutException");
-  var timeoutExceptionFromDuration = (duration3) => new TimeoutException(`Operation timed out after '${format2(duration3)}'`);
+  var timeoutExceptionFromDuration = (duration3) => new TimeoutException(`Operation timed out after '${format3(duration3)}'`);
   var UnknownExceptionTypeId = /* @__PURE__ */ Symbol.for("effect/Cause/errors/UnknownException");
   var UnknownException = /* @__PURE__ */ (function() {
     class UnknownException2 extends YieldableError {
@@ -6224,7 +6520,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return new MutableHashMapIterator(this);
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -6397,7 +6693,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       };
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -6484,7 +6780,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return Array.from(this.queue)[Symbol.iterator]();
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -7271,18 +7567,18 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     Error.stackTraceLimit = 3;
     const traceError = new Error();
     Error.stackTraceLimit = limit;
-    let cache2 = false;
+    let cache7 = false;
     return {
       ...options,
       captureStackTrace: () => {
-        if (cache2 !== false) {
-          return cache2;
+        if (cache7 !== false) {
+          return cache7;
         }
         if (traceError.stack !== void 0) {
           const stack = traceError.stack.split("\n");
           if (stack[3] !== void 0) {
-            cache2 = stack[3].trim();
-            return cache2;
+            cache7 = stack[3].trim();
+            return cache7;
           }
         }
       }
@@ -7977,7 +8273,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return void_2;
     });
   };
-  var log = /* @__PURE__ */ logWithLevel();
+  var log2 = /* @__PURE__ */ logWithLevel();
   var logTrace = /* @__PURE__ */ logWithLevel(Trace);
   var logDebug = /* @__PURE__ */ logWithLevel(Debug);
   var logInfo = /* @__PURE__ */ logWithLevel(Info);
@@ -8342,15 +8638,15 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       Error.stackTraceLimit = 2;
       const error = new Error();
       Error.stackTraceLimit = limit;
-      let cache2 = false;
+      let cache7 = false;
       captureStackTrace = () => {
-        if (cache2 !== false) {
-          return cache2;
+        if (cache7 !== false) {
+          return cache7;
         }
         if (error.stack) {
           const stack = error.stack.trim().split("\n");
-          cache2 = stack.slice(2).join("\n").trim();
-          return cache2;
+          cache7 = stack.slice(2).join("\n").trim();
+          return cache7;
         }
       };
     }
@@ -8696,10 +8992,10 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       };
     },
     toString() {
-      return format(this);
+      return format2(this);
     },
     [NodeInspectSymbol]() {
-      return format(this);
+      return format2(this);
     }
   };
   function defaultEvaluate(_fiber) {
@@ -9466,9 +9762,9 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     /* c8 ignore next */
     _Output: (_) => _
   };
-  var makeLogger = (log3) => ({
+  var makeLogger = (log4) => ({
     [LoggerTypeId]: loggerVariance,
-    log: log3,
+    log: log4,
     pipe() {
       return pipeArguments(this, arguments);
     }
@@ -9481,7 +9777,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     }
   };
   var textOnly = /^[^\s"=]*$/;
-  var format3 = (quoteValue, whitespace) => ({
+  var format4 = (quoteValue, whitespace) => ({
     annotations,
     cause: cause3,
     date,
@@ -9491,9 +9787,9 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     spans
   }) => {
     const formatValue = (value) => value.match(textOnly) ? value : quoteValue(value);
-    const format4 = (label, value) => `${formatLabel(label)}=${formatValue(value)}`;
-    const append4 = (label, value) => " " + format4(label, value);
-    let out = format4("timestamp", date.toISOString());
+    const format5 = (label, value) => `${formatLabel(label)}=${formatValue(value)}`;
+    const append4 = (label, value) => " " + format5(label, value);
+    let out = format5("timestamp", date.toISOString());
     out += append4("level", logLevel.label);
     out += append4("fiber", threadName(fiberId3));
     const messages = ensure(message);
@@ -9514,7 +9810,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     return out;
   };
   var escapeDoubleQuotes = (s) => `"${s.replace(/\\([\s\S])|(")/g, "\\$1$2")}"`;
-  var stringLogger = /* @__PURE__ */ makeLogger(/* @__PURE__ */ format3(escapeDoubleQuotes));
+  var stringLogger = /* @__PURE__ */ makeLogger(/* @__PURE__ */ format4(escapeDoubleQuotes));
   var colors = {
     bold: "1",
     red: "31",
@@ -10672,7 +10968,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return new RedBlackTreeIterator(this, stack, Direction.Forward);
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -11242,7 +11538,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return keys4(this.keyTree);
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -13998,7 +14294,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     locallyScoped: () => locallyScoped,
     locallyScopedWith: () => locallyScopedWith,
     locallyWith: () => locallyWith,
-    log: () => log2,
+    log: () => log3,
     logAnnotations: () => logAnnotations2,
     logDebug: () => logDebug2,
     logError: () => logError2,
@@ -14526,13 +14822,13 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   var cached2 = /* @__PURE__ */ dual(2, (self, timeToLive) => map9(cachedInvalidateWithTTL(self, timeToLive), (tuple) => tuple[0]));
   var cachedInvalidateWithTTL = /* @__PURE__ */ dual(2, (self, timeToLive) => {
     const duration3 = decode(timeToLive);
-    return flatMap8(context(), (env) => map9(makeSynchronized(none2()), (cache2) => [provideContext(getCachedValue(self, duration3, cache2), env), invalidateCache(cache2)]));
+    return flatMap8(context(), (env) => map9(makeSynchronized(none2()), (cache7) => [provideContext(getCachedValue(self, duration3, cache7), env), invalidateCache(cache7)]));
   });
   var computeCachedValue = (self, timeToLive, start3) => {
     const timeToLiveMillis = toMillis(decode(timeToLive));
     return pipe(deferredMake(), tap((deferred) => intoDeferred(self, deferred)), map9((deferred) => some2([start3 + timeToLiveMillis, deferred])));
   };
-  var getCachedValue = (self, timeToLive, cache2) => uninterruptibleMask((restore) => pipe(clockWith3((clock3) => clock3.currentTimeMillis), flatMap8((time) => updateSomeAndGetEffectSynchronized(cache2, (option3) => {
+  var getCachedValue = (self, timeToLive, cache7) => uninterruptibleMask((restore) => pipe(clockWith3((clock3) => clock3.currentTimeMillis), flatMap8((time) => updateSomeAndGetEffectSynchronized(cache7, (option3) => {
     switch (option3._tag) {
       case "None": {
         return some2(computeCachedValue(self, timeToLive, time));
@@ -14543,7 +14839,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       }
     }
   })), flatMap8((option3) => isNone2(option3) ? dieMessage("BUG: Effect.cachedInvalidate - please report an issue at https://github.com/Effect-TS/effect/issues") : restore(deferredAwait(option3.value[1])))));
-  var invalidateCache = (cache2) => set5(cache2, none2());
+  var invalidateCache = (cache7) => set5(cache7, none2());
   var ensuringChild = /* @__PURE__ */ dual(2, (self, f) => ensuringChildren(self, (children) => f(fiberAll(children))));
   var ensuringChildren = /* @__PURE__ */ dual(2, (self, children) => flatMap8(track, (supervisor) => pipe(supervised(self, supervisor), ensuring(flatMap8(supervisor.value, children)))));
   var forkAll = /* @__PURE__ */ dual((args2) => isIterable(args2[0]), (effects, options) => options?.discard ? forEachSequentialDiscard(effects, fork) : map9(forEachSequential(effects, fork), fiberAll));
@@ -15406,14 +15702,14 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     fractionalSecondDigits: 3,
     hourCycle: "h23"
   };
-  var zoneMakeIntl = (format4) => {
-    const zoneId = format4.resolvedOptions().timeZone;
+  var zoneMakeIntl = (format5) => {
+    const zoneId = format5.resolvedOptions().timeZone;
     if (validZoneCache.has(zoneId)) {
       return validZoneCache.get(zoneId);
     }
     const zone = Object.create(ProtoTimeZoneNamed);
     zone.id = zoneId;
-    zone.format = format4;
+    zone.format = format5;
     validZoneCache.set(zoneId, zone);
     return zone;
   };
@@ -15632,7 +15928,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
       return pipe(hash(this.tz), combine(array2(fromIterable(this.seconds))), combine(array2(fromIterable(this.minutes))), combine(array2(fromIterable(this.hours))), combine(array2(fromIterable(this.days))), combine(array2(fromIterable(this.months))), combine(array2(fromIterable(this.weekdays))), cached(this));
     },
     toString() {
-      return format(this.toJSON());
+      return format2(this.toJSON());
     },
     toJSON() {
       return {
@@ -16737,11 +17033,11 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
     const proxy = new Proxy(request3, {});
     return fiberRefGetWith(currentCacheEnabled, (cacheEnabled) => {
       if (cacheEnabled) {
-        const cached4 = fiberRefGetWith(currentCache, (cache2) => flatMap8(cache2.getEither(proxy), (orNew) => {
+        const cached4 = fiberRefGetWith(currentCache, (cache7) => flatMap8(cache7.getEither(proxy), (orNew) => {
           switch (orNew._tag) {
             case "Left": {
               if (orNew.left.listeners.interrupted) {
-                return flatMap8(cache2.invalidateWhen(proxy, (entry) => entry.handle === orNew.left.handle), () => cached4);
+                return flatMap8(cache7.invalidateWhen(proxy, (entry) => entry.handle === orNew.left.handle), () => cached4);
               }
               orNew.left.listeners.increment();
               return uninterruptibleMask((restore) => flatMap8(exit(blocked(empty15, restore(deferredAwait(orNew.left.handle)))), (exit4) => {
@@ -16784,7 +17080,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   var cacheRequest = (request3, result) => {
     return fiberRefGetWith(currentCacheEnabled, (cacheEnabled) => {
       if (cacheEnabled) {
-        return fiberRefGetWith(currentCache, (cache2) => flatMap8(cache2.getEither(request3), (orNew) => {
+        return fiberRefGetWith(currentCache, (cache7) => flatMap8(cache7.getEither(request3), (orNew) => {
           switch (orNew._tag) {
             case "Left": {
               return void_2;
@@ -16802,7 +17098,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   var withRequestCache = /* @__PURE__ */ dual(
     2,
     // @ts-expect-error
-    (self, cache2) => fiberRefLocally(self, currentCache, cache2)
+    (self, cache7) => fiberRefLocally(self, currentCache, cache7)
   );
 
   // ../eztb/node_modules/effect/dist/esm/Request.js
@@ -17045,7 +17341,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   var matchCause3 = matchCause;
   var matchCauseEffect3 = matchCauseEffect;
   var matchEffect2 = matchEffect;
-  var log2 = log;
+  var log3 = log2;
   var logWithLevel2 = (level, ...message) => logWithLevel(level)(...message);
   var logTrace2 = logTrace;
   var logDebug2 = logDebug;
@@ -17134,21 +17430,21 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
   };
   var transposeMapOption2 = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone2 : map12(f(self.value), some));
   var makeTagProxy = (TagClass) => {
-    const cache2 = /* @__PURE__ */ new Map();
+    const cache7 = /* @__PURE__ */ new Map();
     return new Proxy(TagClass, {
       get(target, prop, receiver) {
         if (prop in target) {
           return Reflect.get(target, prop, receiver);
         }
-        if (cache2.has(prop)) {
-          return cache2.get(prop);
+        if (cache7.has(prop)) {
+          return cache7.get(prop);
         }
         const fn2 = (...args2) => andThen3(target, (s) => {
           if (typeof s[prop] === "function") {
-            cache2.set(prop, (...args3) => andThen3(target, (s2) => s2[prop](...args3)));
+            cache7.set(prop, (...args3) => andThen3(target, (s2) => s2[prop](...args3)));
             return s[prop](...args2);
           }
-          cache2.set(prop, andThen3(target, (s2) => s2[prop]));
+          cache7.set(prop, andThen3(target, (s2) => s2[prop]));
           return s[prop];
         });
         const cn = andThen3(target, (s) => s[prop]);
@@ -17161,7 +17457,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
         proto4.bind = bind5;
         proto4.call = call;
         Object.setPrototypeOf(fn2, proto4);
-        cache2.set(prop, fn2);
+        cache7.set(prop, fn2);
         return fn2;
       }
     });
@@ -17363,10 +17659,10 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
         effect = fnError ? failCause4(sequential(die(fnError), die(error))) : die3(error);
       }
     }
-    let cache2 = false;
+    let cache7 = false;
     const captureStackTrace = () => {
-      if (cache2 !== false) {
-        return cache2;
+      if (cache7 !== false) {
+        return cache7;
       }
       if (options.errorCall.stack) {
         const stackDef = options.errorDef.stack.trim().split("\n");
@@ -17379,9 +17675,9 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
         if (!endStackCall.includes(`(`)) {
           endStackCall = endStackCall.replace(/at (.*)/, "at ($1)");
         }
-        cache2 = `${endStackDef}
+        cache7 = `${endStackDef}
 ${endStackCall}`;
-        return cache2;
+        return cache7;
       }
     };
     const opts = options.spanOptions && "captureStackTrace" in options.spanOptions ? options.spanOptions : {
@@ -17602,7 +17898,7 @@ ${endStackCall}`;
   var zipWith6 = zipWith4;
   var CurrentIterationMetadata2 = CurrentIterationMetadata;
 
-  // ../eztb/packages/sdk/src/core/errors.ts
+  // <eztb>/packages/sdk/src/core/errors.ts
   var TiebaError = class extends Error {
   };
   var FetchError = class extends TiebaError {
@@ -17623,7 +17919,7 @@ ${endStackCall}`;
     }
   };
 
-  // ../eztb/packages/sdk/src/context.ts
+  // <eztb>/packages/sdk/src/context.ts
   var _client = null;
   function getClient() {
     if (!_client) {
@@ -17633,50 +17929,6 @@ ${endStackCall}`;
   }
   function initClient(client) {
     _client = client;
-  }
-
-  // src/core/gmhttp.ts
-  var GmHttpError = class extends Error {
-    constructor(kind, message) {
-      super(message);
-      this.name = "GmHttpError";
-      this.kind = kind;
-    }
-  };
-  var DEFAULT_TIMEOUT = 3e4;
-  function gmRequest(options) {
-    return new Promise((resolve, reject) => {
-      if (typeof GM_xmlhttpRequest !== "function") {
-        reject(
-          new GmHttpError(
-            "unavailable",
-            "当前环境不支持 GM_xmlhttpRequest，请检查脚本管理器"
-          )
-        );
-        return;
-      }
-      try {
-        GM_xmlhttpRequest({
-          method: options.method ?? "GET",
-          url: options.url,
-          headers: options.headers,
-          data: options.data ?? void 0,
-          responseType: options.responseType ?? "text",
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-          onload: (response) => resolve(response),
-          onerror: () => reject(new GmHttpError("network", "网络错误：无法连接贴吧接口")),
-          ontimeout: () => reject(new GmHttpError("timeout", "请求超时，请稍后重试")),
-          onabort: () => reject(new GmHttpError("abort", "请求已取消"))
-        });
-      } catch (error) {
-        reject(
-          new GmHttpError(
-            "unavailable",
-            `发起请求失败：${error instanceof Error ? error.message : String(error)}`
-          )
-        );
-      }
-    });
   }
 
   // src/shims/undici.ts
@@ -17730,7 +17982,7 @@ ${endStackCall}`;
     };
   }
 
-  // ../eztb/packages/sdk/src/core/http.ts
+  // <eztb>/packages/sdk/src/core/http.ts
   var BASE_URL = "http://tiebac.baidu.com";
   var CLIENT_VERSION = "12.64.1.1";
   var CLIENT_VERSION_OLD = "8.9.8.5";
@@ -17811,7 +18063,7 @@ ${endStackCall}`;
     );
   }
 
-  // ../eztb/packages/sdk/src/core/form.ts
+  // <eztb>/packages/sdk/src/core/form.ts
   function createFormApi(config) {
     return (params) => Effect_exports.gen(function* () {
       const client = getClient();
@@ -17836,7 +18088,7 @@ ${endStackCall}`;
     });
   }
 
-  // ../eztb/packages/sdk/src/core/proto.ts
+  // <eztb>/packages/sdk/src/core/proto.ts
   function createProtoApi(config) {
     return (params) => pipe(
       Effect_exports.succeed(
@@ -18573,7 +18825,7 @@ ${endStackCall}`;
       throw new Error("invalid float32: " + arg);
   }
 
-  // ../eztb/packages/sdk/src/generated/CommonReq.ts
+  // <eztb>/packages/sdk/src/generated/CommonReq.ts
   function createBaseCommonReq() {
     return {
       ClientType: 0,
@@ -19881,7 +20133,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/FrsPageReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/FrsPageReqIdl.ts
   function createBaseFrsPageReqIdl() {
     return { data: void 0 };
   }
@@ -20095,7 +20347,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Error.ts
+  // <eztb>/packages/sdk/src/generated/Error.ts
   function createBaseError() {
     return { errorno: 0, errmsg: "", usermsg: "" };
   }
@@ -20183,7 +20435,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/FrsTabInfo.ts
+  // <eztb>/packages/sdk/src/generated/FrsTabInfo.ts
   function createBaseFrsTabInfo() {
     return { tabId: 0, tabName: "" };
   }
@@ -20256,7 +20508,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Page.ts
+  // <eztb>/packages/sdk/src/generated/Page.ts
   function createBasePage() {
     return { pageSize: 0, currentPage: 0, totalCount: 0, totalPage: 0, hasMore: 0, hasPrev: 0 };
   }
@@ -20389,7 +20641,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Agree.ts
+  // <eztb>/packages/sdk/src/generated/Agree.ts
   function createBaseAgree() {
     return { agreeNum: "0", hasAgree: 0, agreeType: 0, disagreeNum: "0", diffAgreeNum: "0", lzAgree: 0 };
   }
@@ -20522,7 +20774,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Media.ts
+  // <eztb>/packages/sdk/src/generated/Media.ts
   function createBaseMedia() {
     return { type: 0, smallPic: "", bigPic: "", waterPic: "", width: 0, height: 0, originPic: "", originSize: 0 };
   }
@@ -20685,7 +20937,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PbContent.ts
+  // <eztb>/packages/sdk/src/generated/PbContent.ts
   function createBasePbContent() {
     return {
       type: 0,
@@ -21269,7 +21521,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PollInfo.ts
+  // <eztb>/packages/sdk/src/generated/PollInfo.ts
   function createBasePollInfo() {
     return { isMulti: 0, totalNum: "0", options: [], totalPoll: "0", title: "" };
   }
@@ -21455,7 +21707,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/User.ts
+  // <eztb>/packages/sdk/src/generated/User.ts
   function createBaseUser() {
     return {
       id: "0",
@@ -22671,7 +22923,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/VideoInfo.ts
+  // <eztb>/packages/sdk/src/generated/VideoInfo.ts
   function createBaseVideoInfo() {
     return { videoUrl: "", videoDuration: 0, videoWidth: 0, videoHeight: 0, thumbnailUrl: "", playCount: 0 };
   }
@@ -22804,7 +23056,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Voice.ts
+  // <eztb>/packages/sdk/src/generated/Voice.ts
   function createBaseVoice() {
     return { type: 0, duringTime: 0, voiceMd5: "", voiceUrl: "", uid: "0" };
   }
@@ -22922,7 +23174,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/ThreadInfo.ts
+  // <eztb>/packages/sdk/src/generated/ThreadInfo.ts
   function createBaseThreadInfo() {
     return {
       id: "0",
@@ -23781,7 +24033,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/FrsPageResIdl.ts
+  // <eztb>/packages/sdk/src/generated/FrsPageResIdl.ts
   function createBaseFrsPageResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -24288,7 +24540,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/GetForumDetailReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/GetForumDetailReqIdl.ts
   function createBaseGetForumDetailReqIdl() {
     return { data: void 0 };
   }
@@ -24412,7 +24664,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/GetForumDetailResIdl.ts
+  // <eztb>/packages/sdk/src/generated/GetForumDetailResIdl.ts
   function createBaseGetForumDetailResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -24773,7 +25025,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/api/forum.ts
+  // <eztb>/packages/sdk/src/api/forum.ts
   var getThreads = createProtoApi({
     endpoint: "/c/f/frs/page?cmd=303002",
     reqCodec: FrsPageReqIdl,
@@ -24835,7 +25087,7 @@ ${endStackCall}`;
     })
   });
 
-  // ../eztb/packages/sdk/src/api/moderation.ts
+  // <eztb>/packages/sdk/src/api/moderation.ts
   var blockUser = createFormApi({
     endpoint: "/c/c/bawu/commitprison",
     buildParams: (params) => ({
@@ -24908,7 +25160,7 @@ ${endStackCall}`;
     })
   });
 
-  // ../eztb/packages/sdk/src/generated/PbFloorReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/PbFloorReqIdl.ts
   function createBasePbFloorReqIdl() {
     return { data: void 0 };
   }
@@ -25077,7 +25329,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/SubPostList.ts
+  // <eztb>/packages/sdk/src/generated/SubPostList.ts
   function createBaseSubPostList() {
     return { id: "0", content: [], time: 0, authorId: "0", title: "", floor: 0, author: void 0, agree: void 0 };
   }
@@ -25240,7 +25492,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/Post.ts
+  // <eztb>/packages/sdk/src/generated/Post.ts
   function createBasePost() {
     return {
       id: "0",
@@ -25908,7 +26160,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/SimpleForum.ts
+  // <eztb>/packages/sdk/src/generated/SimpleForum.ts
   function createBaseSimpleForum() {
     return { id: "0", name: "", firstClass: "", secondClass: "", memberNum: 0, postNum: 0 };
   }
@@ -26041,7 +26293,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PbFloorResIdl.ts
+  // <eztb>/packages/sdk/src/generated/PbFloorResIdl.ts
   function createBasePbFloorResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -26227,7 +26479,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PbPageReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/PbPageReqIdl.ts
   function createBasePbPageReqIdl() {
     return { data: void 0 };
   }
@@ -26482,7 +26734,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PbPageResIdl.ts
+  // <eztb>/packages/sdk/src/generated/PbPageResIdl.ts
   function createBasePbPageResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -26683,7 +26935,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/UserPostReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/UserPostReqIdl.ts
   function createBaseUserPostReqIdl() {
     return { data: void 0 };
   }
@@ -26882,7 +27134,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/PostInfoList.ts
+  // <eztb>/packages/sdk/src/generated/PostInfoList.ts
   function createBasePostInfoList() {
     return {
       forumId: "0",
@@ -27489,7 +27741,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/UserPostResIdl.ts
+  // <eztb>/packages/sdk/src/generated/UserPostResIdl.ts
   function createBaseUserPostResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -27729,7 +27981,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/helpers/cache.ts
+  // <eztb>/packages/sdk/src/helpers/cache.ts
   var forumNameCache = null;
   function createForumNameCache() {
     if (!forumNameCache) {
@@ -27779,7 +28031,7 @@ ${endStackCall}`;
     });
   }
 
-  // ../eztb/packages/sdk/src/api/post.ts
+  // <eztb>/packages/sdk/src/api/post.ts
   var MAX_PAGE = 600;
   function packPostsProto(params) {
     const rn = Math.min(Math.max(params.rn || 30, 1), 30);
@@ -27931,7 +28183,7 @@ ${endStackCall}`;
     })
   });
 
-  // ../eztb/packages/sdk/src/generated/GetUserByUidReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/GetUserByUidReqIdl.ts
   function createBaseGetUserByUidReqIdl() {
     return { data: void 0 };
   }
@@ -28055,7 +28307,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/GetUserByUidResIdl.ts
+  // <eztb>/packages/sdk/src/generated/GetUserByUidResIdl.ts
   function createBaseGetUserByUidResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -28179,7 +28431,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/ProfileReqIdl.ts
+  // <eztb>/packages/sdk/src/generated/ProfileReqIdl.ts
   function createBaseProfileReqIdl() {
     return { data: void 0 };
   }
@@ -28363,7 +28615,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/generated/ProfileResIdl.ts
+  // <eztb>/packages/sdk/src/generated/ProfileResIdl.ts
   function createBaseProfileResIdl() {
     return { error: void 0, data: void 0 };
   }
@@ -28670,7 +28922,7 @@ ${endStackCall}`;
     return value !== null && value !== void 0;
   }
 
-  // ../eztb/packages/sdk/src/api/user.ts
+  // <eztb>/packages/sdk/src/api/user.ts
   function getUserInfo(username) {
     return pipe(
       getData(
@@ -29009,7 +29261,7 @@ ${endStackCall}`;
     return hash2;
   }
 
-  // ../eztb/packages/sdk/src/core/auth.ts
+  // <eztb>/packages/sdk/src/core/auth.ts
   function packRequest(data, bduss) {
     const params = new URLSearchParams(data);
     if (!params.has("BDUSS")) {
@@ -29029,7 +29281,7 @@ ${endStackCall}`;
     return Array.from(params.entries()).map((entry) => entry.join("=")).join("&");
   }
 
-  // ../eztb/packages/sdk/src/client.ts
+  // <eztb>/packages/sdk/src/client.ts
   var defaultOptions = {
     needPlainText: true,
     needTimestamp: false,
@@ -29092,7 +29344,7 @@ ${endStackCall}`;
     }
   };
 
-  // ../eztb/packages/sdk/src/helpers/user-id-resolver.ts
+  // <eztb>/packages/sdk/src/helpers/user-id-resolver.ts
   var CACHE_TTL2 = Duration_exports.hours(24);
 
   // src/core/sdk.ts
@@ -29177,15 +29429,15 @@ ${endStackCall}`;
     if (!user?.id) {
       throw new Error("无法识别该用户（缺少贴吧号 / 用户 ID / 用户名）");
     }
-    const profile = snapshotProfile(user, ref);
-    writeProfileCache(key, profile);
+    const snapshot = snapshotProfile(user, ref);
+    writeProfileCache(key, snapshot);
     return {
       id: Number(user.id),
-      uid: profile.uid,
-      un: profile.un,
-      nickname: profile.nickname,
-      portrait: profile.portrait,
-      profile
+      uid: snapshot.uid,
+      un: snapshot.un,
+      nickname: snapshot.nickname,
+      portrait: snapshot.portrait,
+      profile: snapshot
     };
   }
 
@@ -29360,8 +29612,8 @@ ${endStackCall}`;
   }
   var forumNameInFlight = /* @__PURE__ */ new Map();
   async function lookupForumName(id) {
-    const inFlight = forumNameInFlight.get(id);
-    if (inFlight) return inFlight;
+    const inFlight2 = forumNameInFlight.get(id);
+    if (inFlight2) return inFlight2;
     ensureClient();
     const task = (async () => {
       try {
@@ -29713,48 +29965,21 @@ ${endStackCall}`;
   var CACHE_KEY3 = "tbEztbToolboxForumLevelV1";
   var CACHE_MAX3 = 500;
   var MAX_THREADS = 3;
-  var memory3 = /* @__PURE__ */ new Map();
-  var disk3 = loadDisk3();
-  function loadDisk3() {
-    try {
-      const stored = GM_getValue(
-        CACHE_KEY3,
-        {}
-      );
-      return stored && typeof stored === "object" ? stored : {};
-    } catch {
-      return {};
-    }
-  }
+  var cache4 = createKvCache({
+    storageKey: CACHE_KEY3,
+    max: CACHE_MAX3,
+    validate: (entry) => entry.level > 0
+  });
   var cacheKey = (targetId, forumName) => `${targetId}:${forumName}`;
   function readForumLevelCache(targetId, forumName) {
-    const key = cacheKey(targetId, forumName);
-    const hit = memory3.get(key) ?? disk3[key]?.level;
-    return hit && hit > 0 ? hit : null;
+    const hit = cache4.read(cacheKey(targetId, forumName));
+    return hit ? hit.level : null;
   }
   function writeForumLevelCache(targetId, forumName, level) {
-    const key = cacheKey(targetId, forumName);
-    memory3.set(key, level);
-    disk3[key] = { level, ts: Date.now() };
-    const keys5 = Object.keys(disk3);
-    if (keys5.length > CACHE_MAX3) {
-      keys5.sort((a, b) => (disk3[a].ts ?? 0) - (disk3[b].ts ?? 0));
-      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX3)) {
-        delete disk3[stale];
-      }
-    }
-    try {
-      GM_setValue(CACHE_KEY3, disk3);
-    } catch {
-    }
+    cache4.write(cacheKey(targetId, forumName), { level });
   }
   function clearForumLevelCache() {
-    memory3.clear();
-    disk3 = {};
-    try {
-      GM_setValue(CACHE_KEY3, {});
-    } catch {
-    }
+    cache4.clear();
   }
   async function findThreads(targetId, forumName) {
     const candidates = [];
@@ -29811,50 +30036,20 @@ ${endStackCall}`;
   // src/core/replyFloor.ts
   var CACHE_KEY4 = "tbEztbToolboxReplyFloorV1";
   var CACHE_MAX4 = 800;
-  var memory4 = /* @__PURE__ */ new Map();
-  var disk4 = loadDisk4();
-  function loadDisk4() {
-    try {
-      const stored = GM_getValue(
-        CACHE_KEY4,
-        {}
-      );
-      return stored && typeof stored === "object" ? stored : {};
-    } catch {
-      return {};
-    }
-  }
+  var cache5 = createKvCache({
+    storageKey: CACHE_KEY4,
+    max: CACHE_MAX4,
+    validate: (entry) => entry.floor > 0
+  });
   var cacheKey2 = (threadId, postId) => `${threadId}:${postId}`;
   function readReplyFloorCache(threadId, postId) {
-    const key = cacheKey2(threadId, postId);
-    const hit = memory4.get(key) ?? disk4[key];
-    if (!hit || !(hit.floor > 0)) return null;
-    return hit;
+    return cache5.read(cacheKey2(threadId, postId));
   }
   function writeReplyFloorCache(threadId, postId, floor, excerpt) {
-    const value = { floor, excerpt, ts: Date.now() };
-    memory4.set(cacheKey2(threadId, postId), value);
-    disk4[cacheKey2(threadId, postId)] = value;
-    const keys5 = Object.keys(disk4);
-    if (keys5.length > CACHE_MAX4) {
-      keys5.sort((a, b) => (disk4[a].ts ?? 0) - (disk4[b].ts ?? 0));
-      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX4)) {
-        delete disk4[stale];
-      }
-    }
-    try {
-      GM_setValue(CACHE_KEY4, disk4);
-    } catch {
-    }
-    return value;
+    return cache5.write(cacheKey2(threadId, postId), { floor, excerpt });
   }
   function clearReplyFloorCache() {
-    memory4.clear();
-    disk4 = {};
-    try {
-      GM_setValue(CACHE_KEY4, {});
-    } catch {
-    }
+    cache5.clear();
   }
   function contentText(contents) {
     if (!Array.isArray(contents)) return "";
@@ -29907,11 +30102,11 @@ ${endStackCall}`;
     return out;
   }
   function findSignInForums(forums, byForum, levelThreshold) {
-    const threshold = Number.isFinite(levelThreshold) ? levelThreshold : 6;
+    const threshold2 = Number.isFinite(levelThreshold) ? levelThreshold : 6;
     const out = [];
     for (const forum of forums) {
       const level = Number(forum.level ?? 0);
-      if (!(level >= threshold)) continue;
+      if (!(level >= threshold2)) continue;
       const posts = Number(byForum[forum.name] ?? 0);
       if (posts > 0) continue;
       out.push({ forumName: forum.name, level, posts });
@@ -29931,47 +30126,21 @@ ${endStackCall}`;
   var CACHE_KEY5 = "tbEztbToolboxForumActivityV1";
   var CACHE_MAX5 = 300;
   var TTL_MS = 24 * 60 * 60 * 1e3;
-  var memory5 = /* @__PURE__ */ new Map();
-  var disk5 = loadDisk5();
-  function loadDisk5() {
-    try {
-      const stored = GM_getValue(CACHE_KEY5, {});
-      return stored && typeof stored === "object" ? stored : {};
-    } catch {
-      return {};
-    }
-  }
-  function readForumActivityCache(uid, maxAgeMs = TTL_MS) {
-    const key = String(uid);
-    const hit = memory5.get(key) ?? disk5[key];
-    if (!hit) return null;
-    if (Date.now() - (hit.ts ?? 0) > maxAgeMs) return null;
-    if (hit.hidden) return null;
-    return hit;
+  var cache6 = createKvCache({
+    storageKey: CACHE_KEY5,
+    max: CACHE_MAX5,
+    ttlMs: TTL_MS,
+    // 对方的发帖记录被隐藏时活跃度无从判断，这种结果不算数
+    validate: (entry) => !entry.hidden
+  });
+  function readForumActivityCache(uid) {
+    return cache6.read(String(uid));
   }
   function writeForumActivityCache(uid, value) {
-    const key = String(uid);
-    memory5.set(key, value);
-    disk5[key] = value;
-    const keys5 = Object.keys(disk5);
-    if (keys5.length > CACHE_MAX5) {
-      keys5.sort((a, b) => (disk5[a].ts ?? 0) - (disk5[b].ts ?? 0));
-      for (const stale of keys5.slice(0, keys5.length - CACHE_MAX5)) {
-        delete disk5[stale];
-      }
-    }
-    try {
-      GM_setValue(CACHE_KEY5, disk5);
-    } catch {
-    }
+    cache6.write(String(uid), value);
   }
   function clearForumActivityCache() {
-    memory5.clear();
-    disk5 = {};
-    try {
-      GM_setValue(CACHE_KEY5, {});
-    } catch {
-    }
+    cache6.clear();
   }
   async function loadForumActivity(uid, force = false) {
     if (!force) {
@@ -30012,6 +30181,8 @@ ${endStackCall}`;
   }
 
   // src/ui/modal.ts
+  var FOCUSABLE_SELECTOR = 'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])';
+  var activeClose = null;
   function openDialog(options) {
     closeOpenDialog();
     const root = document.createElement("div");
@@ -30020,27 +30191,55 @@ ${endStackCall}`;
     const tabs = options.tabs?.length ? `<div class="tb-eztb-tabs">${options.tabs.map(
       (tab) => `<button class="tb-eztb-tab" data-tab="${escapeHtml(tab.id)}">${escapeHtml(tab.label)}</button>`
     ).join("")}</div>` : "";
-    root.innerHTML = `<div class="tb-eztb-dialog"><div class="tb-eztb-head">` + avatar + `<div class="tb-eztb-head-main"><div class="tb-eztb-title">${escapeHtml(options.title)}</div><div class="tb-eztb-sub">${options.subtitleHtml ?? ""}</div></div><button class="tb-eztb-close" title="关闭">×</button></div>` + tabs + `<div class="tb-eztb-body"></div><div class="tb-eztb-foot">${options.footerHtml ?? ""}</div></div>`;
+    root.innerHTML = `<div class="tb-eztb-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(options.title)}"><div class="tb-eztb-head">` + avatar + `<div class="tb-eztb-head-main"><div class="tb-eztb-title">${escapeHtml(options.title)}</div><div class="tb-eztb-sub">${options.subtitleHtml ?? ""}</div></div><button class="tb-eztb-close" title="关闭" aria-label="关闭">×</button></div>` + tabs + `<div class="tb-eztb-body"></div><div class="tb-eztb-foot">${options.footerHtml ?? ""}</div></div>`;
     document.body.appendChild(root);
+    const dialogEl = root.querySelector(".tb-eztb-dialog");
     const body = root.querySelector(".tb-eztb-body");
     const footer = root.querySelector(".tb-eztb-foot");
     const titleEl = root.querySelector(".tb-eztb-title");
     const subEl = root.querySelector(".tb-eztb-sub");
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     let disposed = false;
     const close2 = () => {
       if (disposed) return;
       disposed = true;
+      if (activeClose === close2) activeClose = null;
       root.remove();
       document.removeEventListener("keydown", onKeydown, true);
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
       options.onClose?.();
     };
     const onKeydown = (event) => {
       if (event.key === "Escape") {
         event.stopPropagation();
         close2();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = Array.from(
+        dialogEl.querySelectorAll(FOCUSABLE_SELECTOR)
+      ).filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
+      if (!items.length) return;
+      const first2 = items[0];
+      const last3 = items[items.length - 1];
+      const current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const inside = current !== null && items.includes(current);
+      if (event.shiftKey) {
+        if (!inside || current === first2) {
+          event.preventDefault();
+          last3.focus();
+        }
+        return;
+      }
+      if (!inside || current === last3) {
+        event.preventDefault();
+        first2.focus();
       }
     };
     document.addEventListener("keydown", onKeydown, true);
+    activeClose = close2;
+    dialogEl.tabIndex = -1;
+    dialogEl.focus({ preventScroll: true });
     root.querySelector(".tb-eztb-close")?.addEventListener("click", () => close2());
     root.addEventListener("click", (event) => {
       if (event.target === root) close2();
@@ -30069,6 +30268,7 @@ ${endStackCall}`;
       close: close2,
       setTitle: (text) => {
         titleEl.textContent = text;
+        dialogEl.setAttribute("aria-label", text);
       },
       setSubtitle: (html) => {
         subEl.innerHTML = html;
@@ -30081,6 +30281,7 @@ ${endStackCall}`;
     };
   }
   function closeOpenDialog() {
+    activeClose?.();
     document.querySelector(".tb-eztb-mask")?.remove();
   }
 
@@ -30187,6 +30388,19 @@ ${endStackCall}`;
       `<div class="tb-eztb-hint">「关注的吧」里的「检测签到号」用它判定：吧内等级 ≥ 这个值，且最近一页发帖里在该吧 0 条发言，就标成疑似只签到。</div>`
     );
     parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-io">设置导入 / 导出</label>`);
+    parts2.push(
+      `<textarea id="tb-eztb-io" class="tb-eztb-textarea" spellcheck="false" placeholder="点「导出到文本框」把当前设置写进这里；把别处的设置粘进来，再点「从文本框导入」"></textarea>`
+    );
+    parts2.push(
+      `<div class="tb-eztb-hint">导出的内容<b>不包含 BDUSS</b>；导入时也<b>不会读取 BDUSS</b>，你自己的凭据不会被别人的文件覆盖。导入后立即生效，等于替你按了一次保存。</div>`
+    );
+    parts2.push(
+      `<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:0;"><button data-act="export">导出到文本框</button><button data-act="io-copy">复制</button><button data-act="import">从文本框导入</button></div>`
+    );
+    parts2.push(`<div class="tb-eztb-hint" id="tb-eztb-io-status"></div>`);
+    parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-actions">`);
     parts2.push(`<button data-act="help">打开辅助获取网址</button>`);
     parts2.push(`<button data-act="clear">清空资料缓存</button>`);
@@ -30217,6 +30431,66 @@ ${endStackCall}`;
       };
     };
     const textarea = () => dialog.body.querySelector("#tb-eztb-rules");
+    const ioBox = () => dialog.body.querySelector("#tb-eztb-io");
+    const ioStatus = (text) => {
+      const el = dialog.body.querySelector("#tb-eztb-io-status");
+      if (el) el.textContent = text;
+    };
+    const fillForm = (settings) => {
+      const set6 = (id, value) => {
+        const el = dialog.body.querySelector(`#${id}`);
+        if (el) el.value = value;
+      };
+      set6("tb-eztb-bduss", settings.bduss);
+      set6("tb-eztb-help", settings.bdussHelpUrl);
+      set6("tb-eztb-interval", String(settings.minIntervalMs));
+      set6("tb-eztb-maxpages", String(settings.maxPagesPerList));
+      set6("tb-eztb-rules", settings.compositionRules);
+      set6("tb-eztb-composition-auto", settings.compositionAuto ? "1" : "0");
+      set6("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
+      set6("tb-eztb-cachedays", String(settings.compositionCacheDays));
+      set6("tb-eztb-signin-level", String(settings.signInLevelThreshold));
+    };
+    dialog.body.querySelector('[data-act="export"]')?.addEventListener("click", () => {
+      const box = ioBox();
+      if (!box) return;
+      box.value = exportSettingsJson();
+      box.focus();
+      box.select();
+      ioStatus("已填入上面的文本框（不含 BDUSS），可以直接全选复制。");
+    });
+    dialog.body.querySelector('[data-act="io-copy"]')?.addEventListener("click", () => {
+      const box = ioBox();
+      if (!box) return;
+      if (!box.value.trim()) {
+        ioStatus("文本框是空的，先点「导出到文本框」。");
+        return;
+      }
+      box.focus();
+      box.select();
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(box.value);
+          ioStatus("已复制到剪贴板。");
+        } catch {
+          ioStatus("浏览器不允许直接写剪贴板，内容已选中，按 Ctrl+C 复制。");
+        }
+      })();
+    });
+    dialog.body.querySelector('[data-act="import"]')?.addEventListener("click", () => {
+      const box = ioBox();
+      if (!box) return;
+      const result = importSettingsJson(box.value);
+      if (!result.ok) {
+        ioStatus(`导入失败：${result.reason}`);
+        return;
+      }
+      fillForm(result.settings);
+      requestQueue.setMinInterval(result.settings.minIntervalMs);
+      invalidateClient();
+      rescanPage();
+      ioStatus("已导入并保存（BDUSS 未改动）。");
+    });
     dialog.body.querySelector('[data-act="rules-example"]')?.addEventListener("click", () => {
       const el = textarea();
       if (el) el.value = EXAMPLE_RULES;
@@ -30479,9 +30753,24 @@ ${endStackCall}`;
       "页面上的用户主页链接（按 class 统计）：",
       ...userLinkClasses().map((item) => `  ${item.count} × ${item.className}`),
       "",
+      `在飞请求: ${inFlightCount()}`,
+      "",
+      "存储写入失败记录（空 = 一切正常）：",
+      ...storageIssueLines(),
+      "",
+      "最近的日志（最多 20 条）：",
+      ...recentLogs().slice(-20).map((line) => `  ${line}`),
+      "",
       `UA: ${navigator.userAgent}`
     ];
     return lines.join("\n");
+  }
+  function storageIssueLines() {
+    const issues2 = getStorageIssues();
+    if (!issues2.length) return ["  （无）"];
+    return issues2.map(
+      (issue) => `  ${new Date(issue.at).toISOString()} ${issue.storageKey}: ${issue.message}`
+    );
   }
   function openDiagnoseDialog() {
     const report = buildDiagnoseReport();
@@ -30489,7 +30778,12 @@ ${endStackCall}`;
       title: "eztb 页面诊断",
       subtitleHtml: "把下面的内容整段复制发给开发者"
     });
-    dialog.body.innerHTML = `<pre class="tb-eztb-report">${escapeHtml(report)}</pre><div class="tb-eztb-actions"><button data-act="copy" class="primary">复制报告</button></div>`;
+    dialog.body.innerHTML = `<pre class="tb-eztb-report">${escapeHtml(report)}</pre><div class="tb-eztb-actions"><button data-act="copy" class="primary">复制报告</button><button data-act="abort">中断在飞请求</button></div>`;
+    dialog.body.querySelector('[data-act="abort"]')?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      const count3 = abortAllInFlight();
+      button.textContent = count3 > 0 ? `已中断 ${count3} 个` : "当前没有在飞请求";
+    });
     dialog.body.querySelector('[data-act="copy"]')?.addEventListener("click", () => {
       const button = dialog.body.querySelector(
         '[data-act="copy"]'
@@ -31283,11 +31577,102 @@ ${endStackCall}`;
   }
 
   // src/ui/styles.ts
-  var STYLE_TEXT = `
+  var THEME_VARS = `
+:root{
+  --tb-eztb-accent:#1677ff;
+  --tb-eztb-accent-border:#bcd8ff;
+  --tb-eztb-accent-bg:#e8f3ff;
+  --tb-eztb-spinner-track:#d6e4ff;
+  --tb-eztb-info-bg:#f2f7ff;
+  --tb-eztb-info-border:#cfe0ff;
+  --tb-eztb-info-text:#1a4d99;
+  --tb-eztb-danger-bg:#fff5f5;
+  --tb-eztb-danger-border:#ffd8d8;
+  --tb-eztb-danger-text:#c0392b;
+  --tb-eztb-warn-bg:#fffaf0;
+  --tb-eztb-warn-bg-soft:#fff8e6;
+  --tb-eztb-warn-border:#ffe2b8;
+  --tb-eztb-warn-text:#8a5a00;
+  --tb-eztb-warn-text-strong:#9a6700;
+  --tb-eztb-mark-bg:#fff3bf;
+  --tb-eztb-text:#222;
+  --tb-eztb-text-strong:#24292f;
+  --tb-eztb-text-muted:#57606a;
+  --tb-eztb-text-dim:#666;
+  --tb-eztb-text-faint:#8a8f99;
+  --tb-eztb-text-on-soft:#555;
+  --tb-eztb-text-busy:#999;
+  --tb-eztb-surface:#fff;
+  --tb-eztb-surface-alt:#fafbfc;
+  --tb-eztb-surface-soft:#f6f8fa;
+  --tb-eztb-surface-busy:#fafafa;
+  --tb-eztb-surface-hover:#e2e5ea;
+  --tb-eztb-chip:#f2f3f5;
+  --tb-eztb-chip-alt:#eef0f3;
+  --tb-eztb-chip-strong:#eef1f4;
+  --tb-eztb-border:#e8e8e8;
+  --tb-eztb-border-soft:#e4e8ec;
+  --tb-eztb-border-muted:#e0e3e7;
+  --tb-eztb-border-input:#d0d7de;
+  --tb-eztb-border-busy:#ddd;
+  --tb-eztb-overlay:rgba(0,0,0,.45);
+  --tb-eztb-shadow:rgba(0,0,0,.28);
+  /* 成分徽章的色相由 JS 按下标给，这里只切明度 */
+  --tb-eztb-badge-fg:28%;
+  --tb-eztb-badge-bg:94%;
+  --tb-eztb-badge-bd:76%;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --tb-eztb-accent:#4c9aff;
+    --tb-eztb-accent-border:#33507a;
+    --tb-eztb-accent-bg:#1b2a41;
+    --tb-eztb-spinner-track:#33507a;
+    --tb-eztb-info-bg:#1c2a3d;
+    --tb-eztb-info-border:#33507a;
+    --tb-eztb-info-text:#8fbaff;
+    --tb-eztb-danger-bg:#3a2326;
+    --tb-eztb-danger-border:#5c3236;
+    --tb-eztb-danger-text:#ff8b7d;
+    --tb-eztb-warn-bg:#322a1c;
+    --tb-eztb-warn-bg-soft:#322a1c;
+    --tb-eztb-warn-border:#5a4629;
+    --tb-eztb-warn-text:#e0b060;
+    --tb-eztb-warn-text-strong:#e0b060;
+    --tb-eztb-mark-bg:#4a3f1a;
+    --tb-eztb-text:#e6e8eb;
+    --tb-eztb-text-strong:#e6e8eb;
+    --tb-eztb-text-muted:#a8b0ba;
+    --tb-eztb-text-dim:#a8b0ba;
+    --tb-eztb-text-faint:#8b939d;
+    --tb-eztb-text-on-soft:#c2c8d0;
+    --tb-eztb-text-busy:#7d858f;
+    --tb-eztb-surface:#1c1f24;
+    --tb-eztb-surface-alt:#202429;
+    --tb-eztb-surface-soft:#262b31;
+    --tb-eztb-surface-busy:#262b31;
+    --tb-eztb-surface-hover:#333941;
+    --tb-eztb-chip:#2b3036;
+    --tb-eztb-chip-alt:#2b3036;
+    --tb-eztb-chip-strong:#2b3036;
+    --tb-eztb-border:#343a41;
+    --tb-eztb-border-soft:#343a41;
+    --tb-eztb-border-muted:#343a41;
+    --tb-eztb-border-input:#3c434b;
+    --tb-eztb-border-busy:#3c434b;
+    --tb-eztb-overlay:rgba(0,0,0,.6);
+    --tb-eztb-shadow:rgba(0,0,0,.55);
+    --tb-eztb-badge-fg:78%;
+    --tb-eztb-badge-bg:20%;
+    --tb-eztb-badge-bd:34%;
+  }
+}
+`;
+  var STYLE_TEXT = `${THEME_VARS}
 .tb-eztb-btn{
   display:inline-block !important;margin-left:6px;padding:2px 10px;
   font:normal 12px/18px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif !important;
-  color:#1677ff !important;background:#fff !important;border:1px solid #bcd8ff !important;
+  color:var(--tb-eztb-accent) !important;background:var(--tb-eztb-surface) !important;border:1px solid var(--tb-eztb-accent-border) !important;
   border-radius:6px;cursor:pointer;text-decoration:none !important;vertical-align:middle;
   white-space:nowrap;user-select:none;position:relative;
   /* 行被挤时按钮自己不许被压缩（点了才知道还能不能查） */
@@ -31300,18 +31685,18 @@ ${endStackCall}`;
      子元素必须显式恢复，否则按钮看得见、点不动。基线脚本同样用这条覆盖。 */
   pointer-events:auto !important;
 }
-.tb-eztb-btn:hover{background:#e8f3ff !important;border-color:#1677ff !important;}
-.tb-eztb-btn.busy{color:#999 !important;border-color:#ddd !important;background:#fafafa !important;cursor:wait;}
+.tb-eztb-btn:hover{background:var(--tb-eztb-accent-bg) !important;border-color:var(--tb-eztb-accent) !important;}
+.tb-eztb-btn.busy{color:var(--tb-eztb-text-busy) !important;border-color:var(--tb-eztb-border-busy) !important;background:var(--tb-eztb-surface-busy) !important;cursor:wait;}
 
 .tb-eztb-mask{
   position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;
-  background:rgba(0,0,0,.45);
+  background:var(--tb-eztb-overlay);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
 }
 .tb-eztb-dialog{
   display:flex;flex-direction:column;width:min(820px,calc(100vw - 32px));
-  height:min(84vh,760px);background:#fff !important;border-radius:12px;overflow:hidden;
-  box-shadow:0 12px 48px rgba(0,0,0,.28);color:#222 !important;font-size:14px;line-height:1.6;
+  height:min(84vh,760px);background:var(--tb-eztb-surface) !important;border-radius:12px;overflow:hidden;
+  box-shadow:0 12px 48px var(--tb-eztb-shadow);color:var(--tb-eztb-text) !important;font-size:14px;line-height:1.6;
   /* 弹窗会被注入到贴吧页面里，页面样式可能通过继承污染排版，这里逐项复位 */
   text-align:left !important;text-indent:0 !important;letter-spacing:normal !important;
   word-spacing:normal !important;white-space:normal !important;
@@ -31320,66 +31705,66 @@ ${endStackCall}`;
 .tb-eztb-dialog *{box-sizing:border-box;}
 .tb-eztb-head{
   display:flex;align-items:center;gap:10px;padding:12px 16px;
-  border-bottom:1px solid #e8e8e8;background:#fafbfc !important;flex:0 0 auto;
+  border-bottom:1px solid var(--tb-eztb-border);background:var(--tb-eztb-surface-alt) !important;flex:0 0 auto;
 }
-.tb-eztb-avatar{width:34px;height:34px;border-radius:50%;flex:0 0 auto;background:#eef0f3;}
+.tb-eztb-avatar{width:34px;height:34px;border-radius:50%;flex:0 0 auto;background:var(--tb-eztb-chip-alt);}
 .tb-eztb-head-main{flex:1 1 auto;min-width:0;}
 .tb-eztb-title{
-  font-weight:600;font-size:15px;color:#222 !important;
+  font-weight:600;font-size:15px;color:var(--tb-eztb-text) !important;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-.tb-eztb-sub{color:#8a8f99 !important;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tb-eztb-sub{color:var(--tb-eztb-text-faint) !important;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tb-eztb-close{
   flex:0 0 auto;width:28px;height:28px;line-height:26px;text-align:center;border:none;
-  background:#eef0f3 !important;border-radius:50%;cursor:pointer;font-size:16px;color:#555 !important;padding:0;
+  background:var(--tb-eztb-chip-alt) !important;border-radius:50%;cursor:pointer;font-size:16px;color:var(--tb-eztb-text-on-soft) !important;padding:0;
 }
-.tb-eztb-close:hover{background:#e2e5ea !important;}
+.tb-eztb-close:hover{background:var(--tb-eztb-surface-hover) !important;}
 .tb-eztb-tabs{
-  display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid #e8e8e8;
-  background:#fff !important;flex:0 0 auto;overflow-x:auto;
+  display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--tb-eztb-border);
+  background:var(--tb-eztb-surface) !important;flex:0 0 auto;overflow-x:auto;
 }
 .tb-eztb-tab{
   border:none;background:transparent !important;cursor:pointer;padding:7px 12px;
-  font-size:13px;color:#57606a !important;border-bottom:2px solid transparent;white-space:nowrap;
+  font-size:13px;color:var(--tb-eztb-text-muted) !important;border-bottom:2px solid transparent;white-space:nowrap;
 }
-.tb-eztb-tab:hover{color:#1677ff !important;}
-.tb-eztb-tab.active{color:#1677ff !important;border-bottom-color:#1677ff;font-weight:600;}
-.tb-eztb-body{position:relative;flex:1 1 auto;min-height:0;overflow:auto;padding:14px 16px;background:#fff !important;}
+.tb-eztb-tab:hover{color:var(--tb-eztb-accent) !important;}
+.tb-eztb-tab.active{color:var(--tb-eztb-accent) !important;border-bottom-color:var(--tb-eztb-accent);font-weight:600;}
+.tb-eztb-body{position:relative;flex:1 1 auto;min-height:0;overflow:auto;padding:14px 16px;background:var(--tb-eztb-surface) !important;}
 /* 每个页签一个独立容器：内容互不覆盖，切换只切显隐，异步回调也不会串台 */
 .tb-eztb-pane{display:none !important;}
 .tb-eztb-pane.active{display:block !important;}
 .tb-eztb-foot{
-  display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid #e8e8e8;
-  background:#fafbfc !important;flex:0 0 auto;font-size:12px;color:#8a8f99 !important;
+  display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--tb-eztb-border);
+  background:var(--tb-eztb-surface-alt) !important;flex:0 0 auto;font-size:12px;color:var(--tb-eztb-text-faint) !important;
 }
 .tb-eztb-foot .tb-eztb-spacer{flex:1 1 auto;}
-.tb-eztb-foot a{color:#1677ff !important;text-decoration:none;}
+.tb-eztb-foot a{color:var(--tb-eztb-accent) !important;text-decoration:none;}
 .tb-eztb-linkbtn{
   background:none !important;border:none;padding:0;margin:0;cursor:pointer;
-  color:#1677ff !important;font-size:12px;font-family:inherit;line-height:1.6;
+  color:var(--tb-eztb-accent) !important;font-size:12px;font-family:inherit;line-height:1.6;
 }
 .tb-eztb-linkbtn:hover{text-decoration:underline;}
-.tb-eztb-linkbtn[disabled]{color:#8a8f99 !important;cursor:default;text-decoration:none;}
+.tb-eztb-linkbtn[disabled]{color:var(--tb-eztb-text-faint) !important;cursor:default;text-decoration:none;}
 
-.tb-eztb-loading{display:flex;align-items:center;justify-content:center;gap:10px;padding:40px 0;color:#666 !important;font-size:13px;}
+.tb-eztb-loading{display:flex;align-items:center;justify-content:center;gap:10px;padding:40px 0;color:var(--tb-eztb-text-dim) !important;font-size:13px;}
 .tb-eztb-spinner{
-  width:22px;height:22px;border:3px solid #d6e4ff;border-top-color:#1677ff;
+  width:22px;height:22px;border:3px solid var(--tb-eztb-spinner-track);border-top-color:var(--tb-eztb-accent);
   border-radius:50%;animation:tb-eztb-spin .8s linear infinite;
 }
 @keyframes tb-eztb-spin{to{transform:rotate(360deg);}}
-.tb-eztb-empty{padding:32px 0;text-align:center;color:#8a8f99 !important;font-size:13px;}
+.tb-eztb-empty{padding:32px 0;text-align:center;color:var(--tb-eztb-text-faint) !important;font-size:13px;}
 .tb-eztb-error{
-  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff5f5 !important;
-  border:1px solid #ffd8d8;color:#c0392b !important;font-size:13px;word-break:break-all;
+  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:var(--tb-eztb-danger-bg) !important;
+  border:1px solid var(--tb-eztb-danger-border);color:var(--tb-eztb-danger-text) !important;font-size:13px;word-break:break-all;
 }
 .tb-eztb-warn{
-  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fffaf0 !important;
-  border:1px solid #ffe2b8;color:#8a5a00 !important;font-size:12px;
+  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:var(--tb-eztb-warn-bg) !important;
+  border:1px solid var(--tb-eztb-warn-border);color:var(--tb-eztb-warn-text) !important;font-size:12px;
 }
 
 .tb-eztb-kv{display:grid;grid-template-columns:96px 1fr;gap:8px 12px;font-size:13px;margin:0;padding:0;}
-.tb-eztb-kv dt{color:#8a8f99 !important;}
-.tb-eztb-kv dd{margin:0;color:#222 !important;word-break:break-word;}
+.tb-eztb-kv dt{color:var(--tb-eztb-text-faint) !important;}
+.tb-eztb-kv dd{margin:0;color:var(--tb-eztb-text) !important;word-break:break-word;}
 
 .tb-eztb-list{display:flex;flex-direction:column;gap:2px;}
 .tb-eztb-row{
@@ -31387,8 +31772,8 @@ ${endStackCall}`;
   text-decoration:none !important;color:inherit !important;
   text-align:left !important;white-space:normal !important;
 }
-.tb-eztb-row:hover{background:#f6f8fa !important;}
-.tb-eztb-row-avatar{width:30px;height:30px;border-radius:50%;flex:0 0 auto;background:#eef0f3;}
+.tb-eztb-row:hover{background:var(--tb-eztb-surface-soft) !important;}
+.tb-eztb-row-avatar{width:30px;height:30px;border-radius:50%;flex:0 0 auto;background:var(--tb-eztb-chip-alt);}
 /* 标题与副标题必须是块级，否则 overflow/ellipsis 对行内元素无效，
    两行文字会挤在同一行并撑乱行高。 */
 .tb-eztb-row-main{
@@ -31396,39 +31781,39 @@ ${endStackCall}`;
 }
 .tb-eztb-row-title{
   display:block;max-width:100%;font-size:13px;line-height:1.45;
-  color:#222 !important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--tb-eztb-text) !important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .tb-eztb-row-sub{
   display:block;max-width:100%;font-size:12px;line-height:1.4;
-  color:#8a8f99 !important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--tb-eztb-text-faint) !important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .tb-eztb-row-meta{
   flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.4;
-  color:#8a8f99 !important;text-align:right;white-space:nowrap;
+  color:var(--tb-eztb-text-faint) !important;text-align:right;white-space:nowrap;
 }
 /* 右侧要同时放「查楼层」和时间：竖着排，别把行撑宽 */
 .tb-eztb-row-meta-stack{
   display:flex;flex-direction:column;align-items:flex-end;gap:3px;
 }
-.tb-eztb-row-time{font-size:12px;color:#8a8f99 !important;}
+.tb-eztb-row-time{font-size:12px;color:var(--tb-eztb-text-faint) !important;}
 /* 副标题里的小吧名：和正文区分开 */
 .tb-eztb-row-forum{
   display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;
-  background:#f2f3f5 !important;color:#57606a !important;font-size:11px;line-height:16px;
+  background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;font-size:11px;line-height:16px;
 }
 /* 「检测签到号」之后补上的"近期发言 N 条" */
-.tb-eztb-row-extra{color:#8a8f99 !important;}
+.tb-eztb-row-extra{color:var(--tb-eztb-text-faint) !important;}
 /* 楼中楼回复的对象：淡一点，别抢正文 */
-.tb-eztb-row-replyto{color:#8a8f99 !important;margin-right:4px;}
+.tb-eztb-row-replyto{color:var(--tb-eztb-text-faint) !important;margin-right:4px;}
 /* 楼层号（查到了就换成它） */
 .tb-eztb-floor{
-  padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
+  padding:0 6px;border-radius:4px;background:var(--tb-eztb-chip-strong) !important;color:var(--tb-eztb-text-strong) !important;
   font-size:11px;line-height:17px;white-space:nowrap;
 }
 /* 「疑似只签到」标记：只提示、不结论，所以用弱一点的样式 */
 .tb-eztb-signin{
   display:inline-block;margin-right:4px;padding:0 6px;border-radius:999px;
-  background:#fff8e6 !important;color:#9a6700 !important;border:1px dashed #ffe2b8;
+  background:var(--tb-eztb-warn-bg-soft) !important;color:var(--tb-eztb-warn-text-strong) !important;border:1px dashed var(--tb-eztb-warn-border);
   font-size:11px;line-height:16px;white-space:nowrap;
 }
 /* 「关注的吧」里的签到检测结论区 */
@@ -31439,11 +31824,11 @@ ${endStackCall}`;
 .tb-eztb-piestat{margin:0 0 12px;}
 .tb-eztb-pie{
   display:flex;align-items:center;gap:16px;margin:0;padding:10px 12px;
-  border:1px solid #e8e8e8;border-radius:8px;background:#fafbfc !important;
+  border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
 .tb-eztb-pie-svg{width:96px;height:96px;flex:0 0 auto;}
 .tb-eztb-pie-legend{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0;}
-.tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:#57606a !important;}
+.tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:var(--tb-eztb-text-muted) !important;}
 .tb-eztb-pie-dot{
   width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block;
 }
@@ -31452,67 +31837,67 @@ ${endStackCall}`;
   display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;vertical-align:bottom;
 }
-.tb-eztb-pie-count{color:#24292f !important;font-weight:600;}
-.tb-eztb-pie-percent{color:#8a8f99 !important;}
-.tb-eztb-pie-total{color:#8a8f99 !important;margin-top:2px;}
-.tb-eztb-pie-empty{color:#8a8f99 !important;}
+.tb-eztb-pie-count{color:var(--tb-eztb-text-strong) !important;font-weight:600;}
+.tb-eztb-pie-percent{color:var(--tb-eztb-text-faint) !important;}
+.tb-eztb-pie-total{color:var(--tb-eztb-text-faint) !important;margin-top:2px;}
+.tb-eztb-pie-empty{color:var(--tb-eztb-text-faint) !important;}
 /* 「查看全部 N 个吧」按钮与展开后的完整列表 */
 .tb-eztb-pielistwrap{margin-top:8px;}
 /* 两路 feed 没到齐时的提示：不能让"只有主题帖"的饼图看起来像完整的 */
 .tb-eztb-pie-pending{
   margin:6px 0 0;padding:6px 8px;border-radius:6px;font-size:12px;
-  background:#f2f7ff !important;border:1px solid #cfe0ff;color:#1a4d99 !important;
+  background:var(--tb-eztb-info-bg) !important;border:1px solid var(--tb-eztb-info-border);color:var(--tb-eztb-info-text) !important;
 }
 .tb-eztb-pielistbtn{
-  padding:2px 10px;border:1px solid #d0d7de;border-radius:6px;cursor:pointer;
-  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+  padding:2px 10px;border:1px solid var(--tb-eztb-border-input);border-radius:6px;cursor:pointer;
+  background:var(--tb-eztb-surface) !important;color:var(--tb-eztb-accent) !important;font:inherit;font-size:12px;
 }
-.tb-eztb-pielistbtn:hover{background:#e8f3ff !important;border-color:#bcd8ff;}
+.tb-eztb-pielistbtn:hover{background:var(--tb-eztb-accent-bg) !important;border-color:var(--tb-eztb-accent-border);}
 .tb-eztb-pielist{
   margin-top:8px;max-height:240px;overflow:auto;
-  border:1px solid #e8e8e8;border-radius:8px;background:#fff !important;padding:6px 8px;
+  border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface) !important;padding:6px 8px;
 }
-.tb-eztb-pielist-head{font-size:12px;color:#8a8f99 !important;margin:2px 0 6px;}
+.tb-eztb-pielist-head{font-size:12px;color:var(--tb-eztb-text-faint) !important;margin:2px 0 6px;}
 .tb-eztb-pieitem{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;}
 .tb-eztb-pieitem-name{
   flex:0 0 auto;width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:#24292f !important;
+  color:var(--tb-eztb-text-strong) !important;
 }
 .tb-eztb-pieitem-bar{
-  flex:1 1 auto;min-width:40px;height:8px;border-radius:4px;background:#eef1f4 !important;overflow:hidden;
+  flex:1 1 auto;min-width:40px;height:8px;border-radius:4px;background:var(--tb-eztb-chip-strong) !important;overflow:hidden;
 }
-.tb-eztb-pieitem-bar > i{display:block;height:100%;background:#1677ff !important;border-radius:4px;}
-.tb-eztb-pieitem-count{flex:0 0 auto;min-width:34px;text-align:right;color:#24292f !important;}
-.tb-eztb-pieitem-percent{flex:0 0 auto;min-width:48px;text-align:right;color:#8a8f99 !important;}
+.tb-eztb-pieitem-bar > i{display:block;height:100%;background:var(--tb-eztb-accent) !important;border-radius:4px;}
+.tb-eztb-pieitem-count{flex:0 0 auto;min-width:34px;text-align:right;color:var(--tb-eztb-text-strong) !important;}
+.tb-eztb-pieitem-percent{flex:0 0 auto;min-width:48px;text-align:right;color:var(--tb-eztb-text-faint) !important;}
 /* 三种行内小按钮共用一套样式：「查等级」「查楼层」「检测签到号」。
    注意别互相复用类名——测试和排查都按类名找按钮，混用会点错目标。 */
 .tb-eztb-levelbtn,.tb-eztb-floorbtn,.tb-eztb-minibtn{
-  padding:1px 8px;border:1px solid #bcd8ff;border-radius:6px;cursor:pointer;
-  background:#fff !important;color:#1677ff !important;font:inherit;font-size:12px;
+  padding:1px 8px;border:1px solid var(--tb-eztb-accent-border);border-radius:6px;cursor:pointer;
+  background:var(--tb-eztb-surface) !important;color:var(--tb-eztb-accent) !important;font:inherit;font-size:12px;
 }
-.tb-eztb-levelbtn:hover,.tb-eztb-floorbtn:hover,.tb-eztb-minibtn:hover{background:#e8f3ff !important;}
+.tb-eztb-levelbtn:hover,.tb-eztb-floorbtn:hover,.tb-eztb-minibtn:hover{background:var(--tb-eztb-accent-bg) !important;}
 .tb-eztb-levelbtn[disabled],.tb-eztb-floorbtn[disabled],.tb-eztb-minibtn[disabled]{
-  opacity:.6;cursor:default;color:#8a8f99 !important;border-color:#e0e3e7;
+  opacity:.6;cursor:default;color:var(--tb-eztb-text-faint) !important;border-color:var(--tb-eztb-border-muted);
 }
 /* 发帖页签的类型标签：主题 / 回复 / 楼中楼 */
 .tb-eztb-tag{
   display:inline-block;margin-right:6px;padding:0 6px;border-radius:4px;
   font-size:11px;line-height:17px;vertical-align:1px;white-space:nowrap;
 }
-.tb-eztb-tag-topic{background:#e8f3ff !important;color:#1677ff !important;border:1px solid #bcd8ff;}
-.tb-eztb-tag-reply{background:#f2f3f5 !important;color:#57606a !important;border:1px solid #e0e3e7;}
-.tb-eztb-tag-sub{background:#fff8e6 !important;color:#9a6700 !important;border:1px solid #ffe2b8;}
+.tb-eztb-tag-topic{background:var(--tb-eztb-accent-bg) !important;color:var(--tb-eztb-accent) !important;border:1px solid var(--tb-eztb-accent-border);}
+.tb-eztb-tag-reply{background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;border:1px solid var(--tb-eztb-border-muted);}
+.tb-eztb-tag-sub{background:var(--tb-eztb-warn-bg-soft) !important;color:var(--tb-eztb-warn-text-strong) !important;border:1px solid var(--tb-eztb-warn-border);}
 /* 「发帖」页签里的两个子页签（主题帖 / 回复）：两个 feed 各自分页，互不影响 */
 .tb-eztb-subtabs{display:flex;gap:6px;margin:0 0 10px;}
 .tb-eztb-subtab{
-  padding:3px 12px;border:1px solid #d0d7de;border-radius:999px;cursor:pointer;
-  background:#f6f8fa !important;color:#57606a !important;
+  padding:3px 12px;border:1px solid var(--tb-eztb-border-input);border-radius:999px;cursor:pointer;
+  background:var(--tb-eztb-surface-soft) !important;color:var(--tb-eztb-text-muted) !important;
   font:inherit;font-size:12px;line-height:20px;white-space:nowrap;
 }
-.tb-eztb-subtab:hover{color:#1677ff !important;border-color:#bcd8ff;}
+.tb-eztb-subtab:hover{color:var(--tb-eztb-accent) !important;border-color:var(--tb-eztb-accent-border);}
 .tb-eztb-subtab.active{
-  background:#e8f3ff !important;border-color:#1677ff;
-  color:#1677ff !important;font-weight:600;
+  background:var(--tb-eztb-accent-bg) !important;border-color:var(--tb-eztb-accent);
+  color:var(--tb-eztb-accent) !important;font-weight:600;
 }
 /* 同 .tb-eztb-pane：只切显隐，切回来时已加载的内容还在 */
 .tb-eztb-subpane{display:none !important;}
@@ -31540,15 +31925,15 @@ ${endStackCall}`;
 .tb-eztb-badge{
   display:inline-block;padding:0 6px;border-radius:999px;font-size:11px;line-height:17px;
   font-weight:600;white-space:nowrap;cursor:pointer;pointer-events:auto !important;flex:0 0 auto;
-  color:hsl(var(--tb-eztb-badge-hue,210) 62% 28%) !important;
-  background:hsl(var(--tb-eztb-badge-hue,210) 92% 94%) !important;
-  border:1px solid hsl(var(--tb-eztb-badge-hue,210) 72% 76%);
+  color:hsl(var(--tb-eztb-badge-hue,210) 62% var(--tb-eztb-badge-fg)) !important;
+  background:hsl(var(--tb-eztb-badge-hue,210) 92% var(--tb-eztb-badge-bg)) !important;
+  border:1px solid hsl(var(--tb-eztb-badge-hue,210) 72% var(--tb-eztb-badge-bd));
 }
 .tb-eztb-badge:hover{filter:brightness(.97);}
 /* 证据较弱（只在回复/楼中楼里出现）：虚线边框 + 降透明度 */
 .tb-eztb-badge-unsure{opacity:.72;border-style:dashed;}
 .tb-eztb-badge-more{
-  background:#f2f3f5 !important;color:#57606a !important;border-color:#d0d7de;
+  background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;border-color:var(--tb-eztb-border-input);
 }
 /* 行里连一个标记都放不下时的兜底：一个小圆点，颜色仍然区分规则 */
 .tb-eztb-badge-dot{padding:0 5px;font-size:10px;line-height:17px;}
@@ -31556,52 +31941,52 @@ ${endStackCall}`;
 /* 面板「成分」页签 */
 .tb-eztb-hits{display:flex;flex-direction:column;gap:10px;}
 .tb-eztb-hit{
-  padding:10px 12px;border:1px solid #e8e8e8;border-radius:8px;background:#fafbfc !important;
+  padding:10px 12px;border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
 .tb-eztb-hit-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
 .tb-eztb-hit-head .tb-eztb-badge{cursor:default;}
-.tb-eztb-hit-unsure{font-size:12px;color:#8a5a00 !important;}
+.tb-eztb-hit-unsure{font-size:12px;color:var(--tb-eztb-warn-text) !important;}
 .tb-eztb-evidence{
   display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;
-  font-size:12px;color:#57606a !important;
+  font-size:12px;color:var(--tb-eztb-text-muted) !important;
 }
 .tb-eztb-evidence-keyword{
-  padding:0 6px;border-radius:4px;background:#eef1f4 !important;color:#24292f !important;
+  padding:0 6px;border-radius:4px;background:var(--tb-eztb-chip-strong) !important;color:var(--tb-eztb-text-strong) !important;
   font-size:11px;line-height:17px;
 }
 .tb-eztb-evidence-text{
-  flex:1 1 100%;font-size:12px;color:#57606a !important;word-break:break-word;
+  flex:1 1 100%;font-size:12px;color:var(--tb-eztb-text-muted) !important;word-break:break-word;
 }
-.tb-eztb-mark{background:#fff3bf !important;color:inherit !important;padding:0 2px;border-radius:2px;}
+.tb-eztb-mark{background:var(--tb-eztb-mark-bg) !important;color:inherit !important;padding:0 2px;border-radius:2px;}
 .tb-eztb-textarea-tall{min-height:150px;}
 .tb-eztb-more{
-  display:block;width:100%;margin-top:12px;padding:8px;border:1px solid #d0d7de;
-  background:#f6f8fa !important;border-radius:8px;cursor:pointer;font-size:13px;color:#24292f !important;
+  display:block;width:100%;margin-top:12px;padding:8px;border:1px solid var(--tb-eztb-border-input);
+  background:var(--tb-eztb-surface-soft) !important;border-radius:8px;cursor:pointer;font-size:13px;color:var(--tb-eztb-text-strong) !important;
 }
-.tb-eztb-more:hover{background:#eef1f4 !important;}
+.tb-eztb-more:hover{background:var(--tb-eztb-chip-strong) !important;}
 .tb-eztb-more[disabled]{opacity:.6;cursor:default;}
 
 .tb-eztb-form{display:flex;flex-direction:column;gap:12px;}
 .tb-eztb-report{
-  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#f6f8fa !important;
-  border:1px solid #e4e8ec;font:12px/1.6 Consolas,Menlo,monospace !important;
-  color:#24292f !important;white-space:pre-wrap;word-break:break-all;max-height:52vh;overflow:auto;
+  margin:0 0 12px;padding:10px 12px;border-radius:8px;background:var(--tb-eztb-surface-soft) !important;
+  border:1px solid var(--tb-eztb-border-soft);font:12px/1.6 Consolas,Menlo,monospace !important;
+  color:var(--tb-eztb-text-strong) !important;white-space:pre-wrap;word-break:break-all;max-height:52vh;overflow:auto;
 }
 .tb-eztb-field{display:flex;flex-direction:column;gap:6px;}
-.tb-eztb-field label{font-size:13px;font-weight:600;color:#24292f !important;}
+.tb-eztb-field label{font-size:13px;font-weight:600;color:var(--tb-eztb-text-strong) !important;}
 .tb-eztb-textarea,.tb-eztb-input{
-  width:100%;padding:8px 10px;border:1px solid #d0d7de;border-radius:8px;
+  width:100%;padding:8px 10px;border:1px solid var(--tb-eztb-border-input);border-radius:8px;
   font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
-  color:#24292f !important;background:#fff !important;
+  color:var(--tb-eztb-text-strong) !important;background:var(--tb-eztb-surface) !important;
 }
 .tb-eztb-textarea{min-height:76px;resize:vertical;word-break:break-all;}
-.tb-eztb-hint{font-size:12px;color:#8a8f99 !important;}
+.tb-eztb-hint{font-size:12px;color:var(--tb-eztb-text-faint) !important;}
 .tb-eztb-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap;}
 .tb-eztb-actions button{
-  border:1px solid #d0d7de;background:#f6f8fa !important;color:#24292f !important;
+  border:1px solid var(--tb-eztb-border-input);background:var(--tb-eztb-surface-soft) !important;color:var(--tb-eztb-text-strong) !important;
   border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;
 }
-.tb-eztb-actions button.primary{background:#1677ff !important;border-color:#1677ff;color:#fff !important;}
+.tb-eztb-actions button.primary{background:var(--tb-eztb-accent) !important;border-color:var(--tb-eztb-accent);color:var(--tb-eztb-surface) !important;}
 .tb-eztb-actions button:hover{opacity:.92;}
 `;
 
@@ -31640,7 +32025,7 @@ ${endStackCall}`;
         if (!ref) return;
         event.preventDefault();
         event.stopPropagation();
-        console.log("[eztb] 按钮被点击，正在打开面板", ref);
+        log.debug("按钮被点击，正在打开面板：", describeUser(ref));
         openUserPanel(ref);
       },
       true
@@ -31681,8 +32066,14 @@ ${endStackCall}`;
       GM_registerMenuCommand("eztb：诊断当前页面", () => {
         openDiagnoseDialog();
       });
+      GM_registerMenuCommand("eztb：中断当前所有在飞请求", () => {
+        const count3 = abortAllInFlight();
+        alert(
+          count3 > 0 ? `已中断 ${count3} 个在飞请求` : "当前没有在飞请求"
+        );
+      });
     } catch (error) {
-      console.warn("[eztb] 注册菜单命令失败", error);
+      log.warn("注册菜单命令失败：", error);
     }
   }
   function boot() {
@@ -31693,7 +32084,7 @@ ${endStackCall}`;
     registerMenuCommands();
     installClickDelegate();
     startScanner(mount);
-    console.log("[eztb] 已加载：数据直连贴吧接口，不经过第三方服务");
+    log.info("已加载：数据直连贴吧接口，不经过第三方服务");
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot, { once: true });
@@ -31702,23 +32093,42 @@ ${endStackCall}`;
   }
 })();
 
-
 /* ===========================================================================
  * NOTICE · 本文件打包进来的第三方代码
  *
  * 这不是 @require 进来的外部脚本，而是构建时打包进来的库（见 src/ 与 build.mjs）。
- * 按 Greasy Fork 的规定，内嵌的库要写明来源、名称与版本：
+ * 按 Greasy Fork 的规定，内嵌的库要写明来源、名称与版本。
+ * 下面这份清单由 scripts/deps-info.mjs 在构建时从磁盘上的 package.json 与 git 读出，
+ * 不是手写的，所以不会随着上游更新而失真。
  *
- *   tieba.js SDK（v3 分支）
- *       来源  https://github.com/Dilettante258/tieba-toolbox  的 packages/sdk
- *       该仓库与 packages/sdk 都没有 LICENSE 文件，也未声明 license 字段；
- *       对外分发（包括上传到脚本站）之前请先向上游确认授权。
- *   effect 3.19.18
- *       许可  MIT                            来源  https://github.com/Effect-TS/effect
- *   @bufbuild/protobuf 2.11.0
- *       许可  Apache-2.0 AND BSD-3-Clause     来源  https://github.com/bufbuild/protobuf-es
- *   long 5.3.2
- *       许可  Apache-2.0                     来源  https://github.com/dcodeIO/long.js
+ *   tieba.js 3.1.3 · 许可 ISC
+ *       来源  https://github.com/Dilettante258/tieba.js
+ *       锁定提交  338a81eacf4eb326fcb3ffbfa55d46395117a2e9
+ *       依上游 package.json 的 license 字段声明为 ISC。该仓库暂未附带 LICENSE 文件，
+ *       这里按 ISC 模板补一份（版权人取自 package.json 的 author：Dilettante258）：
+ *
+ *         Copyright (c) Dilettante258
+ *         Permission to use, copy, modify, and/or distribute this software for any
+ *         purpose with or without fee is hereby granted, provided that the above
+ *         copyright notice and this permission notice appear in all copies.
+ *         THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ *         WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ *         MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ *         ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ *         WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ *         ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ *         OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ *       建议仍向上游要一份正式 LICENSE 文件。
+ *   上游 eztb v3 · 构建时用的那一份检出（见 sdk.lock.json）
+ *       来源  https://github.com/Dilettante258/eazy-tieba
+ *       锁定提交  c772db664deff2d04c8103f940401b631e322110
+ *   effect 3.19.18 · 许可 MIT
+ *       来源  https://github.com/Effect-TS/effect
+ *   @bufbuild/protobuf 2.11.0 · 许可 (Apache-2.0 AND BSD-3-Clause)
+ *       来源  https://github.com/bufbuild/protobuf-es
+ *   long 5.3.2 · 许可 Apache-2.0
+ *       来源  https://github.com/dcodeIO/long.js
  *
  * 本工程自己的代码按上面的 @license 发布。
  * =========================================================================== */

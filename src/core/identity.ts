@@ -9,7 +9,7 @@
 import { Effect } from "effect";
 import { getProfile, getUserInfo } from "tieba.js";
 import {
-	type CachedProfile,
+	type ProfileData,
 	profileCacheKey,
 	readProfileCache,
 	writeProfileCache,
@@ -46,10 +46,10 @@ export interface Identity {
 	un?: string;
 	nickname?: string;
 	portrait?: string;
-	profile?: CachedProfile;
+	profile?: ProfileData;
 }
 
-function snapshotProfile(user: any, ref: UserRef): CachedProfile {
+function snapshotProfile(user: any, ref: UserRef): ProfileData {
 	return {
 		id: Number(user?.id ?? 0) || undefined,
 		uid: user?.tiebaUid ? String(user.tiebaUid) : undefined,
@@ -115,14 +115,14 @@ export async function resolveIdentity(
 		throw new Error("无法识别该用户（缺少贴吧号 / 用户 ID / 用户名）");
 	}
 
-	const profile = snapshotProfile(user, ref);
-	writeProfileCache(key, profile);
+	const snapshot = snapshotProfile(user, ref);
+	writeProfileCache(key, snapshot);
 	return {
 		id: Number(user.id),
-		uid: profile.uid,
-		un: profile.un,
-		nickname: profile.nickname,
-		portrait: profile.portrait,
-		profile,
+		uid: snapshot.uid,
+		un: snapshot.un,
+		nickname: snapshot.nickname,
+		portrait: snapshot.portrait,
+		profile: snapshot,
 	};
 }

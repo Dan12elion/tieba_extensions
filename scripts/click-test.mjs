@@ -802,6 +802,26 @@ const PAGE = `<!doctype html>
   }, 150000);
 
   setTimeout(function () {
+    /*
+     * ── 阶段 0：诊断面板 ──
+     * 诊断入口挂在脚本菜单上，用 __tbMenus 触发。这套测试以前完全没碰过诊断面板，
+     * 这里只覆盖"能开、有报告、能关"这三件最基本的事。
+     */
+    (function () {
+      var diagnose = window.__tbMenus['eztb：诊断当前页面'];
+      add('菜单里注册了「诊断当前页面」', typeof diagnose === 'function', '');
+      if (typeof diagnose !== 'function') return;
+      diagnose();
+      var report = document.querySelector('.tb-eztb-mask .tb-eztb-report');
+      add('诊断面板打开并渲染出报告', !!report, '');
+      var text = report ? String(report.textContent) : '';
+      add('报告里有在飞请求数', text.indexOf('在飞请求') >= 0, '');
+      var closeBtn = document.querySelector('.tb-eztb-mask .tb-eztb-close');
+      if (closeBtn) closeBtn.click();
+      add('诊断面板能关掉（不留遮罩）', !document.querySelector('.tb-eztb-mask'), '');
+      add('阶段 0 没有 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+    })();
+
     // ── 阶段 1：注入与命中 ──
     var buttons = document.querySelectorAll('.tb-eztb-btn');
     add('按钮已注入（新版+旧版）', buttons.length >= 2, '共 ' + buttons.length + ' 个');
@@ -828,6 +848,53 @@ const PAGE = `<!doctype html>
     if (!clickTarget) { add('存在可点击按钮', false, ''); finish(); return; }
     clickTarget.click();
     add('点击后面板已打开', !!document.querySelector('.tb-eztb-mask'), '');
+
+    /*
+     * 焦点陷阱（2026-09-28 修的那个洞）：打开时焦点落在弹窗容器本身（tabIndex = -1），
+     * 旧代码用 dialogEl.contains(activeElement) 判"在不在弹窗里"，容器自己是 true，
+     * 于是反向 Tab 不会被拦，焦点会退到遮罩后面的页面元素上。
+     *
+     * 合成事件不会真的移动焦点，但会走我们的 keydown 处理器；处理器拦没拦下这次
+     * Tab 可以直接从 dispatchEvent 的返回值读出来（返回 false = 调用了 preventDefault）。
+     * 所以这几条在旧代码上会红——正好是"改回坏的样子，断言必须失败"的那种断言。
+     */
+    (function () {
+      var scope = lastMask();
+      var dialog = scope && scope.querySelector('.tb-eztb-dialog');
+      if (!dialog) { add('焦点陷阱：找到弹窗容器', false, ''); return; }
+      var items = Array.prototype.filter.call(
+        dialog.querySelectorAll(
+          'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
+        ),
+        function (el) { return !el.hasAttribute('disabled') && el.offsetParent !== null; }
+      );
+      function tabPrevented(el, shiftKey) {
+        var ev = new KeyboardEvent('keydown', {
+          key: 'Tab', shiftKey: !!shiftKey, bubbles: true, cancelable: true
+        });
+        return el.dispatchEvent(ev) === false;
+      }
+      dialog.focus();
+      add('焦点陷阱：打开后焦点落在弹窗容器上',
+          document.activeElement === dialog,
+          String(document.activeElement && document.activeElement.className));
+      add('焦点陷阱：容器上反向 Tab 会被拦下（不会退到遮罩后面）',
+          tabPrevented(dialog, true), '');
+      add('焦点陷阱：容器上正向 Tab 会被拦下（转交给第一个可聚焦项）',
+          tabPrevented(dialog, false), '');
+      add('焦点陷阱：弹窗里有可聚焦元素', items.length > 0, '共 ' + items.length + ' 个');
+      if (items.length) {
+        var last = items[items.length - 1];
+        var first = items[0];
+        last.focus();
+        add('焦点陷阱：最后一个可聚焦项上正向 Tab 会回卷到第一个',
+            tabPrevented(last, false), '');
+        first.focus();
+        add('焦点陷阱：第一个可聚焦项上反向 Tab 会回卷到最后一个',
+            tabPrevented(first, true), '');
+      }
+      dialog.focus();
+    })();
 
     // ── 阶段 2：真实数据渲染 ──
     until(function () { return !!document.querySelector('.tb-eztb-kv'); }, function (ok) {

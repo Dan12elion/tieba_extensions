@@ -1,6 +1,12 @@
 /** BDUSS 与运行参数设置。 */
 
-import { getSettings, updateSettings } from "../core/settings.ts";
+import {
+	type ToolboxSettings,
+	exportSettingsJson,
+	getSettings,
+	importSettingsJson,
+	updateSettings,
+} from "../core/settings.ts";
 import { invalidateClient } from "../core/sdk.ts";
 import { clearProfileCache } from "../core/cached.ts";
 import { requestQueue } from "../core/queue.ts";
@@ -136,6 +142,24 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	);
 	parts.push(`</div>`);
 
+	parts.push(`<div class="tb-eztb-field">`);
+	parts.push(`<label for="tb-eztb-io">设置导入 / 导出</label>`);
+	parts.push(
+		`<textarea id="tb-eztb-io" class="tb-eztb-textarea" spellcheck="false" placeholder="点「导出到文本框」把当前设置写进这里；把别处的设置粘进来，再点「从文本框导入」"></textarea>`,
+	);
+	parts.push(
+		`<div class="tb-eztb-hint">导出的内容<b>不包含 BDUSS</b>；导入时也<b>不会读取 BDUSS</b>，你自己的凭据不会被别人的文件覆盖。导入后立即生效，等于替你按了一次保存。</div>`,
+	);
+	parts.push(
+		`<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:0;">` +
+			`<button data-act="export">导出到文本框</button>` +
+			`<button data-act="io-copy">复制</button>` +
+			`<button data-act="import">从文本框导入</button>` +
+			`</div>`,
+	);
+	parts.push(`<div class="tb-eztb-hint" id="tb-eztb-io-status"></div>`);
+	parts.push(`</div>`);
+
 	parts.push(`<div class="tb-eztb-actions">`);
 	parts.push(`<button data-act="help">打开辅助获取网址</button>`);
 	parts.push(`<button data-act="clear">清空资料缓存</button>`);
@@ -173,6 +197,82 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 
 	const textarea = () =>
 		dialog.body.querySelector<HTMLTextAreaElement>("#tb-eztb-rules");
+
+	const ioBox = () =>
+		dialog.body.querySelector<HTMLTextAreaElement>("#tb-eztb-io");
+	const ioStatus = (text: string) => {
+		const el = dialog.body.querySelector<HTMLElement>("#tb-eztb-io-status");
+		if (el) el.textContent = text;
+	};
+
+	/** 导入之后要把表单刷成存储里的样子，否则"看到的值"和"生效的值"会对不上 */
+	const fillForm = (settings: ToolboxSettings) => {
+		const set = (id: string, value: string) => {
+			const el = dialog.body.querySelector<
+				HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+			>(`#${id}`);
+			if (el) el.value = value;
+		};
+		set("tb-eztb-bduss", settings.bduss);
+		set("tb-eztb-help", settings.bdussHelpUrl);
+		set("tb-eztb-interval", String(settings.minIntervalMs));
+		set("tb-eztb-maxpages", String(settings.maxPagesPerList));
+		set("tb-eztb-rules", settings.compositionRules);
+		set("tb-eztb-composition-auto", settings.compositionAuto ? "1" : "0");
+		set("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
+		set("tb-eztb-cachedays", String(settings.compositionCacheDays));
+		set("tb-eztb-signin-level", String(settings.signInLevelThreshold));
+	};
+
+	dialog.body
+		.querySelector('[data-act="export"]')
+		?.addEventListener("click", () => {
+			const box = ioBox();
+			if (!box) return;
+			box.value = exportSettingsJson();
+			box.focus();
+			box.select();
+			ioStatus("已填入上面的文本框（不含 BDUSS），可以直接全选复制。");
+		});
+
+	dialog.body
+		.querySelector('[data-act="io-copy"]')
+		?.addEventListener("click", () => {
+			const box = ioBox();
+			if (!box) return;
+			if (!box.value.trim()) {
+				ioStatus("文本框是空的，先点「导出到文本框」。");
+				return;
+			}
+			box.focus();
+			box.select();
+			void (async () => {
+				try {
+					await navigator.clipboard.writeText(box.value);
+					ioStatus("已复制到剪贴板。");
+				} catch {
+					// 剪贴板 API 需要权限；不行就退回"选中，你自己按 Ctrl+C"
+					ioStatus("浏览器不允许直接写剪贴板，内容已选中，按 Ctrl+C 复制。");
+				}
+			})();
+		});
+
+	dialog.body
+		.querySelector('[data-act="import"]')
+		?.addEventListener("click", () => {
+			const box = ioBox();
+			if (!box) return;
+			const result = importSettingsJson(box.value);
+			if (!result.ok) {
+				ioStatus(`导入失败：${result.reason}`);
+				return;
+			}
+			fillForm(result.settings);
+			requestQueue.setMinInterval(result.settings.minIntervalMs);
+			invalidateClient();
+			rescanPage();
+			ioStatus("已导入并保存（BDUSS 未改动）。");
+		});
 
 	dialog.body
 		.querySelector('[data-act="rules-example"]')

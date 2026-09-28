@@ -12,6 +12,7 @@
 
 import { getPosts } from "tieba.js";
 import { callSdkLoose } from "./identity.ts";
+import { type KvEntry, createKvCache } from "./kvCache.ts";
 import { loadReplyRows, loadTopicRows } from "./userPost.ts";
 import { errorMessage, toNumber } from "./util.ts";
 
@@ -20,25 +21,15 @@ const CACHE_MAX = 500;
 /** 一个吧最多试几个帖子（他自己的主题帖最靠谱，排在最前面） */
 const MAX_THREADS = 3;
 
-interface CachedForumLevel {
+interface CachedForumLevel extends KvEntry {
 	level: number;
-	ts: number;
 }
 
-const memory = new Map<string, number>();
-let disk: Record<string, CachedForumLevel> = loadDisk();
-
-function loadDisk(): Record<string, CachedForumLevel> {
-	try {
-		const stored = GM_getValue<Record<string, CachedForumLevel>>(
-			CACHE_KEY,
-			{},
-		);
-		return stored && typeof stored === "object" ? stored : {};
-	} catch {
-		return {};
-	}
-}
+const cache = createKvCache<CachedForumLevel>({
+	storageKey: CACHE_KEY,
+	max: CACHE_MAX,
+	validate: (entry) => entry.level > 0,
+});
 
 const cacheKey = (targetId: number, forumName: string) =>
 	`${targetId}:${forumName}`;
@@ -47,9 +38,8 @@ export function readForumLevelCache(
 	targetId: number,
 	forumName: string,
 ): number | null {
-	const key = cacheKey(targetId, forumName);
-	const hit = memory.get(key) ?? disk[key]?.level;
-	return hit && hit > 0 ? hit : null;
+	const hit = cache.read(cacheKey(targetId, forumName));
+	return hit ? hit.level : null;
 }
 
 function writeForumLevelCache(
@@ -57,31 +47,11 @@ function writeForumLevelCache(
 	forumName: string,
 	level: number,
 ): void {
-	const key = cacheKey(targetId, forumName);
-	memory.set(key, level);
-	disk[key] = { level, ts: Date.now() };
-	const keys = Object.keys(disk);
-	if (keys.length > CACHE_MAX) {
-		keys.sort((a, b) => (disk[a].ts ?? 0) - (disk[b].ts ?? 0));
-		for (const stale of keys.slice(0, keys.length - CACHE_MAX)) {
-			delete disk[stale];
-		}
-	}
-	try {
-		GM_setValue(CACHE_KEY, disk);
-	} catch {
-		/* 存储失败时至少内存里有效 */
-	}
+	cache.write(cacheKey(targetId, forumName), { level });
 }
 
 export function clearForumLevelCache(): void {
-	memory.clear();
-	disk = {};
-	try {
-		GM_setValue(CACHE_KEY, {});
-	} catch {
-		/* 忽略 */
-	}
+	cache.clear();
 }
 
 export interface ForumLevelResult {

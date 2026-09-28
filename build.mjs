@@ -12,6 +12,7 @@ import {
 	createShimPlugin,
 	DEFAULT_EZTB_ROOT,
 } from "./scripts/shims-plugin.mjs";
+import { buildNotice, collectEmbeddedDeps } from "./scripts/deps-info.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -59,7 +60,7 @@ const SUPPORT_URL =
 	"https://github.com/Dan12elion/tieba_extensions/issues";
 const DESCRIPTION =
 	process.env.EZTB_DESCRIPTION ??
-	"在贴吧页面上给每个用户名加一个 eztb 按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。";
+	"在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。";
 
 /** 键名最长的 @description:zh-CN 是 18 字符，留一列空格，值从第 20 列开始 */
 const metaLine = (key, value) => `// @${key.padEnd(20)}${value}`;
@@ -100,32 +101,10 @@ const HEADER = `// -------------------------------------------------------------
 `;
 
 /**
- * 文件末尾的第三方代码说明。
- *
- * 依赖的 dist 里没有 license banner，所以 esbuild 的 legalComments 收集不到东西，
- * 这段是手写的（版本号来自各包的 package.json，改依赖时跟着改）。
+ * 产物末尾的第三方代码说明。构建时由 scripts/deps-info.mjs 从磁盘上的
+ * package.json 与 git 生成（旧版本是手写常量，来源 URL 与许可都写错过）。
  */
-const NOTICE = `
-/* ===========================================================================
- * NOTICE · 本文件打包进来的第三方代码
- *
- * 这不是 @require 进来的外部脚本，而是构建时打包进来的库（见 src/ 与 build.mjs）。
- * 按 Greasy Fork 的规定，内嵌的库要写明来源、名称与版本：
- *
- *   tieba.js SDK（v3 分支）
- *       来源  https://github.com/Dilettante258/tieba-toolbox  的 packages/sdk
- *       该仓库与 packages/sdk 都没有 LICENSE 文件，也未声明 license 字段；
- *       对外分发（包括上传到脚本站）之前请先向上游确认授权。
- *   effect 3.19.18
- *       许可  MIT                            来源  https://github.com/Effect-TS/effect
- *   @bufbuild/protobuf 2.11.0
- *       许可  Apache-2.0 AND BSD-3-Clause     来源  https://github.com/bufbuild/protobuf-es
- *   long 5.3.2
- *       许可  Apache-2.0                     来源  https://github.com/dcodeIO/long.js
- *
- * 本工程自己的代码按上面的 @license 发布。
- * =========================================================================== */
-`;
+let NOTICE = "";
 
 /** SDK 里 core/http.ts 有一处 Buffer.from()，浏览器下退化为透传即可 */
 const BANNER = `/* eslint-disable */
@@ -162,12 +141,31 @@ async function main() {
 	const esbuild = loadEsbuild();
 	const shimPlugin = createShimPlugin({ projectRoot: __dirname, eztbRoot: EZTB_ROOT });
 
+	// 内嵌依赖的版本 / 许可 / 提交号：从磁盘上的 package.json 与 git 读出，
+	// 并和仓库里的 sdk.lock.json 比对。对不上就停下——产物里写的"内嵌的是哪一版"
+	// 必须是能被验证的，而不是靠人记得更新注释。
+	const deps = collectEmbeddedDeps({ projectRoot: __dirname, eztbRoot: EZTB_ROOT });
+	if (deps.problems.length) {
+		console.error("内嵌依赖自检未通过，已停止构建：");
+		for (const problem of deps.problems) {
+			console.error(`  - ${problem}`);
+		}
+		console.error(
+			"确认上游更新没问题后，更新 sdk.lock.json，再重新构建（并复跑 verify）。",
+		);
+		process.exit(1);
+	}
+	NOTICE = buildNotice(deps);
+
 	const options = {
 		entryPoints: [path.join(__dirname, "src/main.ts")],
 		bundle: true,
 		format: "iife",
 		platform: "browser",
 		target: ["es2020"],
+		// 显式固定工作目录：esbuild 给每个模块加的那行 `// <路径>` 注释是按它算的，
+		// 不固定的话同一份源码在不同 cwd 下会构建出不同的产物（见 stabilizeModuleComments）。
+		absWorkingDir: __dirname,
 		// 依赖（effect / @bufbuild/protobuf / long）装在 eztb 仓库里，
 		// 本工程刻意不重复安装，交给 esbuild 的 nodePaths 解析。
 		nodePaths: [path.join(EZTB_ROOT, "node_modules")],
@@ -214,8 +212,33 @@ async function main() {
 
 function writeOutput(code) {
 	fs.mkdirSync(OUT_DIR, { recursive: true });
-	fs.writeFileSync(OUT_FILE, `${META}\n${HEADER}\n${code}\n${NOTICE}`, "utf8");
+	fs.writeFileSync(
+		OUT_FILE,
+		`${META}\n${HEADER}\n${stabilizeModuleComments(code)}\n${NOTICE}`,
+		"utf8",
+	);
 	return Buffer.byteLength(code, "utf8");
+}
+
+/**
+ * 把 esbuild 的 `// <路径>` 模块注释换成与机器无关的写法。
+ *
+ * 为什么必须做：这行注释按 `absWorkingDir` 算相对路径，落在它**之外**的模块
+ * （也就是上游 `packages/sdk/**`）会被写成绝对路径——本机是 `../eztb/...`，
+ * CI 或别人的机器上是 `/home/runner/work/.../eztb/...`。于是"同一份源码构建出的
+ * 产物"在两台机器上逐字符对不上，CI 里那条 `git diff --exit-code -- dist`
+ * （用来拦"改了源码忘了重建产物"）会永远失败，而不是真的发现了忘重建。
+ */
+function stabilizeModuleComments(code) {
+	const posix = (p) => p.replace(/\\/g, "/");
+	return code
+		// 上游 SDK：不管前缀是绝对路径还是 ../eztb，都收敛成同一个记号
+		// （模块注释在 IIFE 里有缩进，所以不能只用 `^//` 锚定）
+		.replace(/^(\s*)\/\/ .*?packages\/sdk\//gm, "$1// <eztb>/packages/sdk/")
+		.split(posix(__dirname))
+		.join("<root>")
+		.split(posix(EZTB_ROOT))
+		.join("<eztb>");
 }
 
 main().catch((error) => {

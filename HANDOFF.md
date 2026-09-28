@@ -1,7 +1,7 @@
 # eztb-userscript 项目交接文档
 
 > 新对话继续这个项目时，读完这份就能恢复全部上下文。
-> 最后更新 2026-09-27 · 当前版本 **1.7.4**
+> 最后更新 2026-09-28 · 当前版本 **1.8.0**
 > 仓库（公开）：<https://github.com/Dan12elion/tieba_extensions>
 > 用户装的那条对应 `dist/tieba-eztb-toolbox.user.js`
 
@@ -55,12 +55,16 @@ eztb-userscript/
 ├─ README.md                    # 用户向文档（安装、功能、构建）
 ├─ PLAN.md                      # 立项时的改造/验证清单（已归档）
 ├─ HANDOFF.md                   # 本文件
+├─ IMPROVEMENTS.md              # 对标同类项目的改动建议（含进度）
 ├─ LICENSE                      # MIT（只覆盖本工程代码）
-├─ THIRD-PARTY.md               # 内嵌的第三方代码与授权状态
+├─ THIRD-PARTY.md               # 内嵌的第三方代码与授权状态（★ 1.8.0 更正过）
+├─ sdk.lock.json                # 锁内嵌 SDK + 构建它的那份上游 eztb 检出（提交号，构建时核对）
+├─ .github/workflows/ci.yml     # CI：离线三项 + 产物同步校验（★ 1.8.0 新增）
 ├─ .gitattributes               # 统一 LF（产物会被直接安装/上传）
 ├─ .gitignore                   # 忽略 node_modules、dist/.verify、dist/.samples
 ├─ scripts/
 │  ├─ shims-plugin.mjs          # Node→浏览器 的解析替换规则（打包与测试共用）
+│  ├─ deps-info.mjs             # 读内嵌依赖的版本/许可/提交号，生成产物 NOTICE
 │  ├─ typecheck.mjs             # tsc --noEmit（别名、参数形状、字段是否存在）
 │  ├─ verify.mjs                # 签名逐字符比对 + 产物检查
 │  ├─ keyword-test.mjs          # 成分规则 / 饼图 / 判定的纯离线测试
@@ -87,7 +91,9 @@ eztb-userscript/
 
 `core/` 里几个值得先看的模块：`userPost.ts`（双 feed 取数）、`userForums.ts`（关注的吧 + 隐藏回退）、
 `forumLevel.ts` / `replyFloor.ts` / `forumActivity.ts`（三个"点了才查"）、`composition*.ts`（成分）、
-`postStats.ts` / `activityRule.ts`（纯逻辑，离线可测）。
+`postStats.ts` / `activityRule.ts`（纯逻辑，离线可测）、
+`kvCache.ts`（五个缓存的公共工厂，★ 1.8.0 新增）、`settings.ts`（含结构迁移与导入导出）、
+`log.ts`（分级日志 + 脱敏）、`gmhttp.ts`（请求 + 在飞登记/取消）。
 
 ---
 
@@ -120,6 +126,30 @@ SDK 没有暴露 `UserPost` 的编解码器，取主题帖要用 `is_thread=1`�
   「发帖」页签内部再拆两个子容器（`.tb-eztb-subpane`）。
 - **点击走 document 捕获阶段的事件委托** + WeakMap 关联按钮与用户信息；按钮用 `<button type="button">`。
 - **按钮的 z-index 只能是 5**，且必须 `pointer-events:auto !important`（§5 #1/#3）。
+
+### 3.3 1.8.0 新增的几层（改之前先看这里）
+
+| 模块 | 做什么 | 为什么要有它 |
+|---|---|---|
+| `core/kvCache.ts` | 五个缓存（资料 / 成分 / 吧内等级 / 楼层 / 签到检测）共用的工厂：内存 Map + 磁盘 Record + TTL + 按 ts 淘汰 + 存盘 | 以前五份复制粘贴；**存盘失败五处都被 `try/catch` 静默吞掉**，用户以为缓存住了其实没有 |
+| `core/log.ts` | 分级日志（默认 `info`）+ 200 条环形缓冲 + `describeUser()` 脱敏 | 以前点击日志是 `console.log("…", ref)`，把整个用户对象倒进控制台 |
+| `core/settings.ts` | `schemaVersion` + 迁移表 + `normalizeSettings()` + 导入导出 | 以前读设置是 `{ ...DEFAULT, ...stored }`，没有版本、没有迁移、未知键会一直留在存储里 |
+| `ui/modal.ts` | 弹窗关闭统一走 `close()` | `closeOpenDialog()` 以前只 `remove()` DOM，**监听器不摘、`onClose` 不触发**（§5 #35） |
+| `core/gmhttp.ts` | 记录在飞请求（`inFlightCount()` / `abortAllInFlight()`） | 以前 `GM_xmlhttpRequest` 的返回值（就是 `{ abort() }`）被丢掉，没有任何取消入口 |
+| `scripts/deps-info.mjs` + `sdk.lock.json` | 构建时读 SDK 的版本/许可/提交号，生成 NOTICE，并与锁文件核对；`sdk.lock.json` 里的 `eztb` 段还锁住**上游检出本身**（CI 按它检出上游） | 以前 NOTICE 是手写常量，**来源 URL 与许可都写错**（§5 #37）；只锁 SDK 的提交号、不锁上游检出，CI 就复现不出同一份产物（§5 #39） |
+| `build.mjs` 的 `stabilizeModuleComments()` | 把 esbuild 的 `// <路径>` 模块注释收敛成 `<eztb>/packages/sdk/...` 与 `src/...` | 那些注释里会带**机器相关的绝对路径**，产物换台机器就变，CI 的「重建后 `git diff` 必须为空」会永远红（§5 #40） |
+
+几条**已经想清楚、不要"顺手改回去"**的决定：
+
+- **不在面板关闭时 `abortAllInFlight()`。** 关掉面板后在飞的那几个请求会把结果写进
+  资料/发帖缓存，下次打开同一用户是白拿的；而且一刀切中止会连带打断后台正在跑的
+  成分检测（它不受面板管辖）。取消入口做成手动命令，原因见 `core/gmhttp.ts` 的注释。
+- **`kvCache` 的磁盘格式就是条目本身**（带 `ts`），没有另加一层信封，所以 1.7.x 写下的
+  缓存 1.8.0 仍然读得出来。要改这个形状就得同时写迁移。
+- **存储键名 `tbEztbToolboxSettingsV1` 里的 `V1` 不要改**：改键名等于把已装用户的
+  BDUSS 与规则表全部孤儿化。结构版本另用 `schemaVersion` 字段记。
+- **深色模式跟的是 `prefers-color-scheme`（系统偏好），不是贴吧自己的夜间模式开关。**
+  后者是页面内的一个 class，跟系统偏好不一定同步，猜错反而更难看。
 
 ---
 
@@ -273,6 +303,13 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 32 | 复查揪出两处：① 某一路"第一页成功、翻后页失败"时仍写「饼图里缺这一路」，可前面几页的条数明明算进去了；② 面板与「成分 / 签到号检测」同时取同一页回复时，吧名反查各发一遍（实测 9 个吧发了 15 次） | ① `buildPieNotes` 没有"这一路有没有已经加载出来的行"这个信息；② `resolveForumNames` 的 `wanted` 是开头算一次的，轮到某个 id 时另一条路径可能已经把它取回来了——**in-flight 去重挡得住"同时在飞"，挡不住"已经写进缓存、只是不在我的 wanted 快照里"** | ① `PieFeedState.hasRows`：取到过行就改说「后续页没取到（饼图只统计到已经加载出来的那部分）」；② 反查加按 id 去重的 in-flight 表，并在**取数前**与**等完限速名额后**各回看一次缓存。实测两路并发 15 次 → 9 次（正好等于该页唯一吧数）；live-test 加了自归一断言（不去重会是唯一吧数的两倍） |
 | 33 | 提交信息与内容不符 | `3b183b2` 的信息是 `docs: 把子代理提到的两个小遗留记进「可以继续做的事」`，实际同时带了 #32 的**代码修复**（`postStats.ts` / `userPost.ts` / `userPanel.ts`）、两份测试的改动与重建的产物。看 `git log --oneline` 会以为那一版只动了文档 | 把 §9.2 里那两条（同一提交已经修掉的"遗留"）移走、在 §9.1 补记归属；以后 `docs:` 只提交文档，动代码或产物写 `feat:` / `fix:` |
 | 34 | 仓库里其实**没有可用的类型检查**：`tsc --noEmit` 报 100+ 个错 | 根 `tsconfig.json` 只有 `baseUrl` 和一条指向 `../eztb/packages/sdk/dist/index.d.ts` 的 `paths`——那个 `dist` 根本不存在（SDK 从**源码**消费）；而 src 里的相对导入带 `.ts` 后缀，又用了 `tieba.js` / `tieba.js/generated/*` / `eztb-internal/*` / `effect` 这些构建期别名，`tsc` 一个都解析不到。能跑的配置此前只存在于被 gitignore 的 `dist/.verify/tsconfig.check.json` 里 | 把配置并进根 `tsconfig.json`（`allowImportingTsExtensions` + 与 `shims-plugin.mjs` 对齐的 `paths`，注释里写明要一起改），新增 `scripts/typecheck.mjs`（从上游借 typescript，缺了会报出路径），并写进测试清单 |
+| 35 | 从面板底部点「设置」之后，旧面板的捕获阶段 keydown 监听器永远留在 document 上，`onClose` 也从不触发 | `closeOpenDialog()`（`ui/modal.ts`）只做了 `document.querySelector(".tb-eztb-mask")?.remove()`，而摘监听器/触发回调/还焦点都在 `close()` 里；`openDialog()` 一进来就调 `closeOpenDialog()`，正好走这条路 | 把当前弹窗的 `close` 存在模块级 `activeClose` 上，`closeOpenDialog()` 改成调它（再兜底 remove 一次）。1.8.0 顺带补了 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后把焦点还给打开它的按钮。**今天没有可见症状**（没人传 `onClose`），但只要有人用 `onClose` 做清理就会变成真 bug |
+| 36 | 「明明查过了，重开面板还是重新请求」——因为缓存根本没写进去 | 五个缓存模块各自 `try { GM_setValue(...) } catch { /* 忽略存储失败 */ }`，写失败是静默的。另外整张表 JSON 塞进单个 value，条数一多会撞油猴的存储配额 | 抽 `core/kvCache.ts`：统一实现 + 把失败记进 `getStorageIssues()`（诊断面板会显示）+ 失败时砍掉一半重试一次。**以后新增缓存一律用它，不要再抄第六份** |
+| 37 | 产物 NOTICE 里 SDK 的来源是 `Dilettante258/tieba-toolbox`，许可写的是"未声明"，`verify.mjs` 还把这两条**断言**了 | 来源 URL 手写、仓库后来改名成 `eazy-tieba`；而 `packages/sdk` 其实是 **submodule**（指向 `Dilettante258/tieba.js`），它的 `package.json` 里明确写着 `license: ISC`。"没有 license 字段"这个结论从来没核对过 | NOTICE 改成构建时由 `scripts/deps-info.mjs` 从磁盘上的 `package.json` + `git rev-parse HEAD` 生成；加 `sdk.lock.json` 锁版本，构建对不上就失败；`verify.mjs` 的期望值也从同一份数据算出来。**教训：断言里写死的外部事实要有出处，否则等于把错误钉成了测试** |
+| 38 | 给缓存条目加了一个**必填**字段之后，`userPanel.ts` 一行没改却冒出 20+ 个「Property 'x' does not exist on type '{}'」 | `renderProfile` 里是 `const profile = identity.profile ?? {}`。原来 `CachedProfile` 属性全可选，`{}` 可赋给它，TS 的联合类型收敛把它化简掉了；`ts` 一旦变成必填，`{}` 不再可赋给 `CachedProfile`，联合就退化成 `{}`，取任何字段都报错 | 给面板侧单独一个 `ProfileData = Omit<CachedProfile, "ts">`（属性全可选），`Identity.profile` 用它。**给"存进缓存的数据"加必填字段时，留意有没有地方在用 `?? {}` 兜空** |
+| 39 | CI 里「重建后 `git diff --exit-code -- dist` 必须为空」从第一天起就会红，而原因**不是**"忘了重建产物" | 工作流 clone 的是上游 `v3` 的**尖端**，而 `sdk.lock.json` 锁的是某个具体提交：v3 一直在动（2026-09-28 实测尖端 `8ca0637c` 的 `packages/sdk` 已经是 `db48716f`，不是被锁的 `338a81e`），拿尖端构建出来的产物自然与仓库里提交的那份不同 | 工作流改成按 `sdk.lock.json` 的 `eztb.commit` 检出上游（`fetch --depth 1 origin <sha>` → `checkout --detach` → `submodule update --init --recursive`），`sdk.lock.json` 也新增 `eztb` 段锁住上游检出。**只锁 SDK 不够**——被锁的 SDK 提交要靠某个确定的上游提交带出来（本机模拟过整条链路：fetch-by-sha、子模块落到 `338a81e`、两个不同位置的上游构建出同一份产物） |
+| 40 | 同一份源码在两台机器上构建出的产物**逐字符不同**，CI 的产物同步校验永远过不了 | esbuild 给每个模块加一行 `// <路径>` 注释，路径按 `absWorkingDir` 算相对值，落在它**之外**的模块（上游 `packages/sdk/**`）会写成绝对路径：本机是 `../eztb/...`，CI 是 `/home/runner/work/.../eztb/...`。实测两份产物**只差这 43 行注释**（大小差 2 KB），代码逻辑完全一致 | `build.mjs` 显式 `absWorkingDir: __dirname`，并在写文件前用 `stabilizeModuleComments()` 把这行注释收敛成 `<eztb>/packages/sdk/...`。验证方法：用两个不同位置的 `EZTB_ROOT` 各构建一次比 sha256（现在两者相同） |
+| 41 | 弹窗焦点陷阱看着生效，**反向 Tab** 却会退到遮罩后面的页面元素上（正向 Tab 看不出来） | `openDialog()` 打开时把焦点放在弹窗容器本身（`tabIndex = -1`），而判定"焦点在不在弹窗里"用的是 `dialogEl.contains(document.activeElement)`——容器自己是 true，于是 `Shift+Tab` 不满足回卷条件，浏览器默认行为就把焦点交给了遮罩后面页面里的可聚焦元素。正向 Tab 碰巧因为 DOM 顺序（容器后面紧跟着第一个按钮）看起来是对的 | 判定改成"当前焦点是不是**可聚焦项列表**里的一个"：容器自己、禁用项、隐藏项一律算"在外面"，两种方向都回卷。补了 6 条无头浏览器断言，用 `dispatchEvent()` 的返回值判断有没有被 `preventDefault`（返回 false = 拦下了），所以这几条在旧写法上会红 |
 
 ### 排查方法论
 
@@ -295,11 +332,14 @@ cd <本项目目录>
 node build.mjs                     # 未压缩可读版（Greasy Fork 要求）
 node build.mjs --minify            # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/typecheck.mjs         # 类型检查
-node scripts/verify.mjs            # 签名比对 + 产物检查 + Greasy Fork 要求（39 项）
+node scripts/verify.mjs            # 签名比对 + 产物检查 + 内嵌依赖自检 + Greasy Fork 要求（44 项）
 node scripts/keyword-test.mjs      # 规则 / 饼图 / 签到的纯离线测试（70 项）
 node scripts/live-test.mjs         # 真实接口链路（33 项）
-node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互（140 项）
-node scripts/page-test.mjs         # 真实页面快照回归（1 份快照 × 2 种宽度，34 项）
+node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互（151 项）
+node scripts/page-test.mjs         # 真实页面快照回归（项数取决于本机有几份快照，见下）
+
+# 也可以直接用 package.json 里的脚本：npm test / npm run test:live 等
+# （本机没有 npm，`npm run` 只是给有 npm 的人看的；直接敲上面的命令即可）
 
 node scripts/probe-user.mjs <portrait串|数字ID> [吧名]   # 打原始返回 + 展平后的发帖行
 node scripts/extract-mhtml.mjs "某个.mhtml"              # MHTML → 可加载的 HTML
@@ -310,11 +350,16 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 | 脚本 | 机制 | 能抓到什么 |
 |---|---|---|
 | `typecheck.mjs` | 用根 `tsconfig.json` 跑 `tsc --noEmit`（typescript 从上游借） | 别名解析、参数形状、字段是否存在（esbuild 不做类型检查） |
-| `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 与浏览器 shim 跑一遍逐字符比对；另把 Greasy Fork 的硬性要求写成 V7 一组断言 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项 |
+| `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 与浏览器 shim 跑一遍逐字符比对；另把 Greasy Fork 的硬性要求写成 V7 一组断言；内嵌依赖的版本/许可/提交号与 `sdk.lock.json` 核对 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项、NOTICE 与真实依赖脱节 |
+| `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**这套 CI 还没在 GitHub 上实跑过**，但两个会让它必红的结构性问题（§5 #39、#40）已经修掉，整条"取上游 → 构建 → 比产物"的链路在本机用临时目录模拟过 |
 | `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` 三个纯逻辑模块做断言 | 成分规则、饼图算法、签到判定改坏（离线即可发现） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证** |
-| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令 |
+| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合、弹窗焦点陷阱（含反向 Tab，§5 #41） |
 | `page-test.mjs` | 读真实快照（「网页，完整」自带 `<标题>_files/` 的 CSS；MHTML 需先抓 CSS），同一份跑正常宽度与 420px 窄容器两遍 | 只有真实页面才暴露的问题（#6 标记撞名、无规则时不注入标记、#14 头部行排版、#24 按钮压正文） |
+
+> **page-test 的断言数不是固定值**：它按找到的快照逐个跑，而快照是 gitignore 的
+> （含真实帖子内容）。本机 2026-09-28 有 4 份可用快照，跑出 68 项；旧文档里记的
+> "34 项"是当时快照更少时的数字。**看到项数变了先确认快照目录，别急着怀疑测试坏了。**
 
 ### 环境依赖
 
@@ -354,7 +399,12 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 - 面板底部 **「刷新当前页签」**：重新解析用户 + 重建当前页签，其它页签保留；「发帖」里刷新后回到原来选中的子页签。
 - **页面成分标注**：配好规则后，命中的用户在「查询」旁多一个彩色标记，hover 写原因，点它直接开「成分」页签。
   显示几个由头部行剩余空隙决定（最多 3 个，放不下收成 `+N`、再放不下退成一个圆点），**任何情况下都不折行**（§5 #14）。
-- 脚本菜单：设置 BDUSS / 运行参数、清空用户资料缓存、清空成分缓存、重新检测本页用户、诊断当前页面。
+- **设置导入 / 导出**（1.8.0）：设置面板底部「导出到文本框 / 复制 / 从文本框导入」。
+  导出**不含 BDUSS**，导入**不读 BDUSS**——这条是硬规则，写在 `settings.ts` 的注释里，
+  以后改这段代码别破坏它（用户会拿这个文件互相传规则表）。
+- **深色模式**（1.8.0）：配色全部走 `--tb-eztb-*` 变量，跟随 `prefers-color-scheme`。
+- 脚本菜单：设置 BDUSS / 运行参数、清空用户资料缓存、清空成分缓存、重新检测本页用户、
+  诊断当前页面、**中断当前所有在飞请求**（1.8.0）。
 - 页面适配：旧版（`.l_post` / `.p_author_name` / `.lzl_cnt > .at`）、新版（`.head-line`）。
 
 ---
@@ -368,8 +418,9 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 2. **必须卸载旧脚本 `tieba-eztb-follow.user.js`**：它的按钮已失效（href 被剥掉），还会与本脚本抢 DOM 标记。
 3. 遇到"某类页面不出按钮"，用菜单里的 **「eztb：诊断当前页面」** 复制报告，
    或把该页面另存为 `.mhtml` 放进快照目录（默认同级 `../test0`，或本仓库 `dist/.samples/`）。
-4. 要传 Greasy Fork：直接用 `dist/` 那份产物（元数据已指向本仓库），
-   但**需先确认 tieba.js SDK 的授权**（上游没有 LICENSE，见 §9.4 与 `THIRD-PARTY.md`）。
+4. 要传 Greasy Fork：直接用 `dist/` 那份产物（元数据已指向本仓库）。
+   SDK 的授权问题 1.8.0 已经查清（ISC，见 §9.4 与 `THIRD-PARTY.md`），
+   原来卡在这里的那条不再是阻塞项；剩下可选的一步是向上游要一份正式 `LICENSE` 文件。
 
 ---
 
@@ -379,6 +430,29 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.8.0 · 对标同类项目后的一轮工程化 + 几个具体问题**
+
+起点是 `IMPROVEMENTS.md`（对标 Bilibili-Evolved / aiotieba / Tieba-Remix 等做的一轮调研）。
+这一版**没有加新查询功能**，动的是工程与体验：
+
+| 改动 | 关键点 |
+|---|---|
+| **更正 SDK 的许可与来源** | `packages/sdk` 是 submodule → `Dilettante258/tieba.js`，`license: ISC`。THIRD-PARTY.md / NOTICE / verify 断言三处同时改（§5 #37） |
+| **`sdk.lock.json` + NOTICE 自动生成** | 构建时从 `package.json` + `git rev-parse HEAD` 读，对不上就**构建失败**；`scripts/deps-info.mjs`。锁分两层：`sdk`（内嵌的 SDK）+ `eztb`（构建它的上游检出，§5 #39） |
+| **CI** | `.github/workflows/ci.yml`：离线三项 + `git diff --exit-code -- dist`（产物同步）；真机三套走 `workflow_dispatch`。上游按锁文件里的 `eztb.commit` 检出，不是 v3 尖端 |
+| **产物可复现** | `build.mjs` 把 esbuild 的模块路径注释收敛成机器无关的写法（§5 #40）。换机器 / 换目录构建出的产物现在**逐字符相同**，所以"产物同步"这条校验才有意义 |
+| **五个缓存收成一个工厂** | `core/kvCache.ts`；顺带修掉"存盘失败被静默吞"（§5 #36）。磁盘格式没变，老缓存仍可读 |
+| **设置有了版本与迁移** | `schemaVersion` + `MIGRATIONS` + `normalizeSettings()`；新增导入/导出（BDUSS 永不进导出文件、永不从导入文件读取） |
+| **修掉弹窗关闭的漏监听** | `closeOpenDialog()` 改走 `close()`；补 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后还原焦点（§5 #35） |
+| **顺带修掉焦点陷阱的漏洞** | 焦点在弹窗**容器**上时，`dialogEl.contains(activeElement)` 判定为"在弹窗内"，反向 Tab 不会被拦、会退到遮罩后面。改判"焦点是否落在可聚焦项上"。这条是新增的自动化断言查出来的（§5 #41） |
+| **请求可以取消了** | `gmhttp.ts` 登记在飞请求，菜单与诊断面板都能一键中断。**刻意不在面板关闭时自动取消**（§3.3） |
+| **日志不再倒对象** | `core/log.ts`：分级 + 环形缓冲 + `describeUser()` 脱敏；诊断报告里带上最近 20 条 |
+| **深色模式** | `ui/styles.ts` 的 133 处硬编码色值全换成 `--tb-eztb-*` 变量，跟随系统深色偏好 |
+| **文案** | `@description` 里"加一个 eztb 按钮"改成"加一个「查询」按钮"，与按钮上的字一致 |
+
+改动完的基线（2026-09-28 本机实测）：typecheck 0 错 / verify 44 / keyword-test 70 /
+live-test 33 / click-test 151 / page-test 68（取决于本机快照数量，见 §6），全绿。
 
 **1.7.4 · 界面文案（第二批）**
 
@@ -503,9 +577,13 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 ### 9.4 工程约束
 
-- 上游 `packages/sdk` 锁在 `v3` 分支；协议或结构变动后要重新打包并复跑 `verify.mjs`。
+- 上游 `packages/sdk` 锁在 `v3` 分支，具体提交锁在 `sdk.lock.json`；
+  协议或结构变动后要更新锁文件、重新打包并复跑 `verify.mjs`（构建会对不上就停）。
 - 本工程与上游是**两个独立目录**，没有 submodule 关系（`EZTB_ROOT` 指过去即可）。
-- 整个上游仓库（含 SDK、API）**没有 LICENSE 文件**，对外分发前需先确认授权。
+- 上游主仓库（含 `apps/api`）**没有 LICENSE 文件**；但内嵌的 SDK 本身有明确许可：
+  `packages/sdk` 是 submodule → `Dilettante258/tieba.js`，`package.json` 写 `license: ISC`
+  （**1.8.0 更正的结论**，之前文档里写"未声明"是错的）。缺的只是上游没有 `LICENSE` 文件，
+  产物 NOTICE 里按 ISC 模板补了许可文本；再稳妥一点就向上游要一份正式 LICENSE。
 - `dist/tieba-eztb-toolbox.user.js` **提交进仓库**：改完代码要 `node build.mjs` 重建并一起提交，
   否则 README 里的 raw 安装链接给别人的是旧产物。
 - 快照（`../test0/*.mhtml`）与 CSS 缓存不进仓库：含真实用户帖子内容，体积也大。
@@ -516,7 +594,8 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test`）。
-   当前基线（1.7.4 实测）：typecheck 0 错 / verify 39 / keyword-test 70 / live-test 33 / click-test 140 / page-test 34 全绿。
+   当前基线（1.8.0 实测）：typecheck 0 错 / verify 44 / keyword-test 70 / live-test 33 / click-test 151 /
+   page-test 68 全绿（page-test 的项数随本机有的快照数量变化）。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。
 4. 涉及协议或数据模型的疑问**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs` 或
@@ -524,5 +603,9 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 5. **改完重建产物并提交**：`node build.mjs` → 跑测试 → 改 `package.json` 版本号 →
    `git add -A && git commit && git push`（仓库已公开，`main` 直接推）。
    **只要 `dist/` 内容变了就必须提 `@version`**；`docs:` 就只提交文档（§5 #33）。
-6. 交付时提醒用户**重装脚本**；描述用"用户能感知到什么"（多了什么按钮、标记长什么样、哪里变快了），
-   而不是只报"改了哪个文件"。
+   > 顺序上有两处会咬人：**版本号要在 `node build.mjs` 之前改**（`@version` 是从
+   > `package.json` 抄进产物的）；而 CI 里那条 `git diff --exit-code -- dist` 正是为了
+   > 拦住"改了源码忘了重建"。想避开手工顺序失误，直接照 CI 那串命令跑一遍。
+6. `IMPROVEMENTS.md` 里还有没做完的条目（文件拆分、共同关注、规则文档等），下次可以接着挑。
+7. 交付时提醒用户**重装脚本**；描述用"用户能感知到什么"（多了什么按钮、标记长什么样、哪里变快了），
+  而不是只报"改了哪个文件"。

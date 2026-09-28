@@ -1,0 +1,17 @@
+{
+  "_comment": "内嵌的 tieba.js SDK 锁定的版本，外加构建它的那一份上游 eztb 检出。eztb 段是必须的：v3 分支一直在动，它的 packages/sdk 子模块指针也跟着动，只锁 SDK 的提交号并不能让 CI 复现出仓库里提交的那份产物。构建时 scripts/deps-info.mjs 会拿这里记的版本/许可/提交号与磁盘上的 packages/sdk/package.json、两个 git HEAD 比对，对不上就让构建失败；上游更新后确认无误再改这里，并重新构建产物。",
+  "eztb": {
+    "repository": "https://github.com/Dilettante258/eazy-tieba",
+    "branch": "v3",
+    "commit": "c772db664deff2d04c8103f940401b631e322110"
+  },
+  "sdk": {
+    "name": "tieba.js",
+    "version": "3.1.3",
+    "license": "ISC",
+    "repository": "https://github.com/Dilettante258/tieba.js",
+    "branch": "v3",
+    "commit": "338a81eacf4eb326fcb3ffbfa55d46395117a2e9"
+  },
+  "lockedAt": "2026-09-28"
+}

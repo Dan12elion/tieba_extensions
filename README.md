@@ -36,6 +36,14 @@
 
 面板底部是 **「刷新当前页签」**：重新解析用户并重建当前页签，其它页签的内容保留。
 
+另外两件与界面有关的：
+
+- **设置可以导入导出了**：设置面板里有「导出到文本框 / 复制 / 从文本框导入」。
+  导出的内容**不含 BDUSS**，导入时也**不会读取 BDUSS**，所以把规则表发给别人是安全的；
+  换电脑或重装脚本之前建议先导出一份（卸载脚本会连规则一起清掉）。
+- **深色模式**：界面配色跟随系统的深色偏好（`prefers-color-scheme`）自动切换。
+  注意这里跟的是系统设置，不是贴吧自己那个夜间模式开关——两者不一定同步。
+
 ### 「发帖」页签
 
 - **按吧统计的饼图**：统计他的发帖都发在哪些吧（条数与占比），最多画 5 个，其余合成「其它 N 个吧」；
@@ -106,7 +114,11 @@
 
 脚本菜单里还有：**「eztb：清空成分缓存」**、**「eztb：重新检测本页用户」**，
 以及 **「eztb：诊断当前页面」**（列出 URL、各扫描器选择器的命中数、已注入按钮数、
-页面上用户主页链接的 class 统计——遇到「某类页面不出按钮」时把这个报告发出来即可定位）。
+页面上用户主页链接的 class 统计、在飞请求数、存储写入失败记录与最近的日志；
+面板里另有「中断在飞请求」按钮——遇到「某类页面不出按钮」时把这个报告发出来即可定位）。
+
+还有 **「eztb：中断当前所有在飞请求」**：请求失控（比如误设了很小的间隔、正在批量检测）
+时可以一键停下，不用关页面。
 
 > 术语对照（容易搞错，已踩过坑）：上游网页的 `/follow` 是「关注列表 / 共关注 N 人」，对应 `getFollow`；
 > 「关注的吧」是 `/likeforum`，对应 `getLikeForum`。两者不是同一个接口。
@@ -136,8 +148,11 @@
 - BDUSS 等同于账号登录凭据，请勿分享或粘贴到不可信的网站。
 - 请保持默认的请求间隔，不要用它做批量抓取或任何自动化写操作。
 - 许可见 [LICENSE](LICENSE)（本工程自己的代码，MIT）与 [THIRD-PARTY.md](THIRD-PARTY.md)（内嵌的第三方代码）。
-- 上游 eztb 仓库与 `packages/sdk` **没有 LICENSE 文件**，也没声明 `license` 字段；
-  产物里内嵌了这段 SDK（来源与版本见产物末尾的 NOTICE），**对外分发前需自行确认授权**。
+- 内嵌的 `packages/sdk` 是上游仓库里的 **git submodule**，指向
+  [Dilettante258/tieba.js](https://github.com/Dilettante258/tieba.js)；它的 `package.json` 声明
+  `license: ISC`（`v3` 分支当前是 3.1.3）。版本与提交号锁在 [`sdk.lock.json`](sdk.lock.json) 里，
+  构建时会和磁盘上的实际值核对，对不上会直接停下来。
+  上游仓库暂时没有 `LICENSE` 文件，产物末尾的 NOTICE 里按 ISC 模板补了一份许可文本。
 - 另外内嵌三个许可明确的库：effect（MIT）、@bufbuild/protobuf（Apache-2.0 AND BSD-3-Clause）、long（Apache-2.0）。
 
 ## 与旧脚本的关系
@@ -169,6 +184,20 @@
 > 为什么不用 `@require` 加载库？SDK 有 4 个 Node 依赖（`undici`、`node:crypto`、`node-html-parser`、`Buffer`）
 > 需要在构建时替换成浏览器实现，直接 `@require` 原版跑不起来。
 
+### 持续集成
+
+`.github/workflows/ci.yml` 在每次 push / PR 上跑**离线三项 + 产物同步校验**：
+`typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`。
+本项目的产物是提交进仓库的（README 的 raw 链接指着它），所以这里校验的是
+**产物和源码一致**——改了源码忘了重建会被直接拦住。
+
+`live-test` / `click-test` / `page-test` 依赖真实接口与无头浏览器，放在同一个 workflow 的
+`workflow_dispatch` 里手动触发，不进 PR 门禁。
+
+> 这套 CI **写好后还没在 GitHub 上实际跑过**。它需要 clone 上游 eztb（含 submodule）
+> 并 `bun install` 一次——本机开发不需要装 bun，但 CI 里 esbuild / typescript / effect
+> 都得从上游装出来。第一次跑起来可能要调。
+
 ## 目录结构
 
 ```
@@ -176,9 +205,13 @@ eztb-userscript/
 ├─ build.mjs              # esbuild 打包 + 拼接油猴元数据
 ├─ tsconfig.json          # 类型检查配置（paths 与 shims-plugin.mjs 的别名对齐）
 ├─ package.json           # 版本号：产物元数据里的 @version 就是它
+├─ sdk.lock.json          # 内嵌 SDK 锁定的版本 / 许可 / 提交号（构建时核对）
 ├─ HANDOFF.md / PLAN.md   # 交接文档 / 立项时的清单（历史）
+├─ IMPROVEMENTS.md        # 对标同类项目的改动建议与进度
+├─ .github/workflows/     # CI（离线三项 + 产物同步校验）
 ├─ scripts/
 │  ├─ shims-plugin.mjs    # Node → 浏览器 的解析替换规则（打包与校验共用）
+│  ├─ deps-info.mjs       # 读内嵌依赖的版本 / 许可 / 提交号，生成产物 NOTICE
 │  ├─ typecheck.mjs       # tsc --noEmit（借上游的 typescript）
 │  ├─ verify.mjs          # MD5 签名逐字符比对 + 产物检查 + Greasy Fork 要求
 │  ├─ keyword-test.mjs    # 纯逻辑离线测试（规则 / 饼图 / 判定）
@@ -212,6 +245,11 @@ node scripts/verify.mjs
 
 默认不压缩是有意为之：Greasy Fork 要求提交未压缩代码，油猴编辑器里也只有未压缩版能正常换行阅读。
 
+构建时会读 `packages/sdk/package.json` 与 `git rev-parse HEAD`，和仓库里的
+`sdk.lock.json` 比对，并把结果写进产物末尾的 NOTICE。**对不上就直接停下**，
+提示你先确认上游改了什么、再更新锁文件——上游 `v3` 一动，产物就变了，
+这条是唯一能证明"产物里内嵌的是哪一版"的东西。
+
 元数据里与"你是谁"有关的部分可用环境变量覆盖，不用改代码：
 
 | 环境变量 | 作用 | 默认 |
@@ -230,11 +268,11 @@ node scripts/verify.mjs
 | 命令 | 验证内容 |
 | --- | --- |
 | `node scripts/typecheck.mjs` | 类型检查（`tsc --noEmit`）。别名解析、接口参数形状、字段确实存在——esbuild 只打包不检查，所以这条单列 |
-| `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；以及 Greasy Fork 的发布要求（39 项） |
+| `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；内嵌依赖自检（SDK 与上游检出的版本/许可/提交号都要对上 `sdk.lock.json`）；以及 Greasy Fork 的发布要求（44 项） |
 | `node scripts/keyword-test.mjs` | 成分规则解析、匹配、排除词、证据强弱、高亮转义，发帖占比/饼图几何、「查看全部吧」列表、签到号判定与发帖行副标题（70 项，纯离线） |
 | `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点）：签名、protobuf、multipart、HTTPS 升级、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、"点了才查"的等级与楼层（都与直接调接口交叉验证）、隐藏发帖的不变量、回复页吧名反查的缓存与去重（33 项） |
-| `node scripts/click-test.mjs` | 无头 Edge/Chrome：按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、「查等级」/「检测签到号」、菜单命令、占比饼图、回复正文与「查楼层」、隐藏发帖说辞（140 项） |
-| `node scripts/page-test.mjs` | 真实页面快照回归：按钮注入、新版头部行排版、按钮与正文不重叠（同一份快照跑正常宽度与 420px 窄容器两遍，34 项） |
+| `node scripts/click-test.mjs` | 无头 Edge/Chrome：按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、「查等级」/「检测签到号」、菜单命令、诊断面板的开关、弹窗焦点陷阱、占比饼图、回复正文与「查楼层」、隐藏发帖说辞（151 项） |
+| `node scripts/page-test.mjs` | 真实页面快照回归：按钮注入、新版头部行排版、按钮与正文不重叠（每份快照跑正常宽度与 420px 窄容器两遍）。**项数取决于本机有几份快照**，不是固定值 |
 
 > page-test 的快照放在仓库的 `dist/.samples/`（已 gitignore；同级的 `../test0` 也会找）。
 > 找不到快照的用例会显示"跳过"并注明，不会假装通过。

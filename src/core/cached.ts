@@ -1,10 +1,12 @@
 /** 用户资料缓存：避免同一用户反复解析，减少接口压力。 */
 
+import { type KvEntry, createKvCache } from "./kvCache.ts";
+
 const CACHE_KEY = "tbEztbToolboxProfileCacheV1";
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const CACHE_MAX = 500;
 
-export interface CachedProfile {
+export interface CachedProfile extends KvEntry {
 	id?: number;
 	uid?: string;
 	un?: string;
@@ -28,20 +30,21 @@ export interface CachedProfile {
 	isBawu?: boolean;
 	bawuType?: string;
 	vipLevel?: number;
-	ts?: number;
 }
 
-const memory = new Map<string, CachedProfile>();
-let disk: Record<string, CachedProfile> = loadDisk();
+/**
+ * 不带时间戳的资料。
+ *
+ * 面板拿到的 profile 不带 `ts`（只有缓存条目才需要它），所有属性都可选，
+ * 所以 `profile ?? {}` 这种写法仍然能正常取字段。
+ */
+export type ProfileData = Omit<CachedProfile, "ts">;
 
-function loadDisk(): Record<string, CachedProfile> {
-	try {
-		const stored = GM_getValue<Record<string, CachedProfile>>(CACHE_KEY, {});
-		return stored && typeof stored === "object" ? stored : {};
-	} catch {
-		return {};
-	}
-}
+const cache = createKvCache<CachedProfile>({
+	storageKey: CACHE_KEY,
+	max: CACHE_MAX,
+	ttlMs: CACHE_TTL,
+});
 
 function stripQuery(value: string): string {
 	return value.split("?")[0];
@@ -60,44 +63,17 @@ export function profileCacheKey(ref: {
 
 export function readProfileCache(key: string | null): CachedProfile | null {
 	if (!key) return null;
-	const hit = memory.get(key) ?? disk[key];
-	if (!hit) return null;
-	if (Date.now() - (hit.ts ?? 0) > CACHE_TTL) {
-		memory.delete(key);
-		delete disk[key];
-		return null;
-	}
-	return hit;
+	return cache.read(key);
 }
 
 export function writeProfileCache(
 	key: string | null,
-	value: CachedProfile,
+	value: ProfileData,
 ): void {
 	if (!key) return;
-	const entry = { ...value, ts: Date.now() };
-	memory.set(key, entry);
-	disk[key] = entry;
-	const keys = Object.keys(disk);
-	if (keys.length > CACHE_MAX) {
-		keys.sort((a, b) => (disk[a].ts ?? 0) - (disk[b].ts ?? 0));
-		for (const stale of keys.slice(0, keys.length - CACHE_MAX)) {
-			delete disk[stale];
-		}
-	}
-	try {
-		GM_setValue(CACHE_KEY, disk);
-	} catch {
-		/* 忽略存储失败 */
-	}
+	cache.write(key, value);
 }
 
 export function clearProfileCache(): void {
-	memory.clear();
-	disk = {};
-	try {
-		GM_setValue(CACHE_KEY, {});
-	} catch {
-		/* 忽略 */
-	}
+	cache.clear();
 }

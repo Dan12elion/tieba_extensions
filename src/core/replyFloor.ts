@@ -15,32 +15,23 @@
 
 import { getComments } from "tieba.js";
 import { callSdkLoose } from "./identity.ts";
+import { type KvEntry, createKvCache } from "./kvCache.ts";
 import { errorMessage, toNumber } from "./util.ts";
 
 const CACHE_KEY = "tbEztbToolboxReplyFloorV1";
 const CACHE_MAX = 800;
 
-interface CachedReplyFloor {
+interface CachedReplyFloor extends KvEntry {
 	floor: number;
 	/** 那一楼的正文摘要（可能是空的：被删、只有图片、或那一楼本身没文字） */
 	excerpt: string;
-	ts: number;
 }
 
-const memory = new Map<string, CachedReplyFloor>();
-let disk: Record<string, CachedReplyFloor> = loadDisk();
-
-function loadDisk(): Record<string, CachedReplyFloor> {
-	try {
-		const stored = GM_getValue<Record<string, CachedReplyFloor>>(
-			CACHE_KEY,
-			{},
-		);
-		return stored && typeof stored === "object" ? stored : {};
-	} catch {
-		return {};
-	}
-}
+const cache = createKvCache<CachedReplyFloor>({
+	storageKey: CACHE_KEY,
+	max: CACHE_MAX,
+	validate: (entry) => entry.floor > 0,
+});
 
 const cacheKey = (threadId: string, postId: string) =>
 	`${threadId}:${postId}`;
@@ -49,10 +40,7 @@ export function readReplyFloorCache(
 	threadId: string,
 	postId: string,
 ): CachedReplyFloor | null {
-	const key = cacheKey(threadId, postId);
-	const hit = memory.get(key) ?? disk[key];
-	if (!hit || !(hit.floor > 0)) return null;
-	return hit;
+	return cache.read(cacheKey(threadId, postId));
 }
 
 function writeReplyFloorCache(
@@ -61,33 +49,11 @@ function writeReplyFloorCache(
 	floor: number,
 	excerpt: string,
 ): CachedReplyFloor {
-	const value: CachedReplyFloor = { floor, excerpt, ts: Date.now() };
-	memory.set(cacheKey(threadId, postId), value);
-	disk[cacheKey(threadId, postId)] = value;
-
-	const keys = Object.keys(disk);
-	if (keys.length > CACHE_MAX) {
-		keys.sort((a, b) => (disk[a].ts ?? 0) - (disk[b].ts ?? 0));
-		for (const stale of keys.slice(0, keys.length - CACHE_MAX)) {
-			delete disk[stale];
-		}
-	}
-	try {
-		GM_setValue(CACHE_KEY, disk);
-	} catch {
-		/* 存储失败时至少内存里有效 */
-	}
-	return value;
+	return cache.write(cacheKey(threadId, postId), { floor, excerpt });
 }
 
 export function clearReplyFloorCache(): void {
-	memory.clear();
-	disk = {};
-	try {
-		GM_setValue(CACHE_KEY, {});
-	} catch {
-		/* 忽略 */
-	}
+	cache.clear();
 }
 
 export interface ReplyFloorResult {

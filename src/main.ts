@@ -6,6 +6,8 @@
  */
 
 import { clearProfileCache } from "./core/cached.ts";
+import { abortAllInFlight } from "./core/gmhttp.ts";
+import { describeUser, log } from "./core/log.ts";
 import { requestQueue } from "./core/queue.ts";
 import { getSettings } from "./core/settings.ts";
 import {
@@ -72,7 +74,8 @@ function installClickDelegate(): void {
 			if (!ref) return;
 			event.preventDefault();
 			event.stopPropagation();
-			console.log("[eztb] 按钮被点击，正在打开面板", ref);
+			// 只记脱敏后的短串：以前这里把整个 ref（含 portrait）倒进控制台
+			log.debug("按钮被点击，正在打开面板：", describeUser(ref));
 			openUserPanel(ref);
 		},
 		true,
@@ -116,8 +119,16 @@ function registerMenuCommands(): void {
 		GM_registerMenuCommand("eztb：诊断当前页面", () => {
 			openDiagnoseDialog();
 		});
+		GM_registerMenuCommand("eztb：中断当前所有在飞请求", () => {
+			const count = abortAllInFlight();
+			alert(
+				count > 0
+					? `已中断 ${count} 个在飞请求`
+					: "当前没有在飞请求",
+			);
+		});
 	} catch (error) {
-		console.warn("[eztb] 注册菜单命令失败", error);
+		log.warn("注册菜单命令失败：", error);
 	}
 }
 
@@ -131,7 +142,7 @@ function boot(): void {
 	installClickDelegate();
 	startScanner(mount);
 
-	console.log("[eztb] 已加载：数据直连贴吧接口，不经过第三方服务");
+	log.info("已加载：数据直连贴吧接口，不经过第三方服务");
 }
 
 if (document.readyState === "loading") {
