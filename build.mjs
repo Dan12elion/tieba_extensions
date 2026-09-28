@@ -224,10 +224,15 @@ function writeOutput(code) {
  * 把 esbuild 的 `// <路径>` 模块注释换成与机器无关的写法。
  *
  * 为什么必须做：这行注释按 `absWorkingDir` 算相对路径，落在它**之外**的模块
- * （也就是上游 `packages/sdk/**`）会被写成绝对路径——本机是 `../eztb/...`，
- * CI 或别人的机器上是 `/home/runner/work/.../eztb/...`。于是"同一份源码构建出的
- * 产物"在两台机器上逐字符对不上，CI 里那条 `git diff --exit-code -- dist`
- * （用来拦"改了源码忘了重建产物"）会永远失败，而不是真的发现了忘重建。
+ * 会写成相对路径，跨盘/跨根路径时甚至写成绝对路径：本机是 `../eztb/node_modules/...`，
+ * 工程比上游深一层就是 `../../eztb/...`，CI 里可能是 `/home/runner/work/.../eztb/...`。
+ * 于是"同一份源码构建出的产物"在两台机器上逐字符对不上，CI 里那条
+ * `git diff --exit-code -- dist`（用来拦"改了源码忘了重建产物"）会永远失败，
+ * 而不是真的发现了忘重建。
+ *
+ * 实测（2026-09-28）：工程与上游同为兄弟目录时产物逐字节相同（sha256 一致）；
+ * 把工程挪深一层，产物行数不变、逻辑不变，但有 306 行注释不同——就是下面这两条规则
+ * 覆盖的那部分。收敛之后，产物与目录布局无关。
  */
 function stabilizeModuleComments(code) {
 	const posix = (p) => p.replace(/\\/g, "/");
@@ -235,6 +240,10 @@ function stabilizeModuleComments(code) {
 		// 上游 SDK：不管前缀是绝对路径还是 ../eztb，都收敛成同一个记号
 		// （模块注释在 IIFE 里有缩进，所以不能只用 `^//` 锚定）
 		.replace(/^(\s*)\/\/ .*?packages\/sdk\//gm, "$1// <eztb>/packages/sdk/")
+		// 内嵌的第三方库（effect / @bufbuild/protobuf / long 等）同理会带上
+		// `../eztb/node_modules/` 或绝对前缀，一并收敛（node_modules 以下保留，
+		// 这样还能看出具体是哪个文件被打了进来）
+		.replace(/^(\s*)\/\/ .*?node_modules\//gm, "$1// <eztb>/node_modules/")
 		.split(posix(__dirname))
 		.join("<root>")
 		.split(posix(EZTB_ROOT))
