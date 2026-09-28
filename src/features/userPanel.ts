@@ -44,6 +44,7 @@ import {
 	parseRules,
 } from "../core/composition.ts";
 import { getSettings } from "../core/settings.ts";
+import { log } from "../core/log.ts";
 import { type CompositionCheckResult, checkUser } from "./compositionScan.ts";
 import {
 	escapeHtml,
@@ -1054,7 +1055,7 @@ export function openUserPanel(
 				refreshButton.textContent = "已刷新";
 			} catch (error) {
 				refreshButton.textContent = "刷新失败";
-				console.warn("[eztb] 刷新失败", error);
+				log.warn("刷新当前页签失败：", error);
 			} finally {
 				setTimeout(() => {
 					refreshButton.disabled = false;

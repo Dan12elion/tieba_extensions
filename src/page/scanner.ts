@@ -7,6 +7,7 @@ import {
 	processOldLzlAuthor,
 	processOldPostAuthor,
 } from "./adapters.ts";
+import { log } from "../core/log.ts";
 
 /**
  * 「已处理」标记。
@@ -60,7 +61,7 @@ function scan(root: ParentNode, mount: MountFn): void {
 			try {
 				target.handler(el, mount);
 			} catch (error) {
-				console.warn(`[eztb] 处理${target.label}失败`, error);
+				log.warn(`处理${target.label}失败：`, error);
 			}
 		}
 	}
@@ -77,7 +78,7 @@ function healHeadline(node: Element, mount: MountFn): void {
 	try {
 		processNewHeadline(headline, mount);
 	} catch (error) {
-		console.warn("[eztb] 补回按钮失败", error);
+		log.warn("补回按钮失败：", error);
 	}
 }
 
@@ -87,8 +88,8 @@ export function startScanner(mount: MountFn): void {
 	// 旧脚本若仍在运行，两组按钮会重复。这里只提示一次，不删除别人的 DOM。
 	if (!legacyWarned && document.querySelector(`.${LEGACY_BUTTON_CLASS}`)) {
 		legacyWarned = true;
-		console.warn(
-			"[eztb] 检测到旧版脚本（tieba-eztb-follow.user.js）的按钮仍在页面上。" +
+		log.warn(
+			"检测到旧版脚本（tieba-eztb-follow.user.js）的按钮仍在页面上。" +
 				"它会在每个用户名旁再插一个「查关注」按钮，且点击已失效；" +
 				"请在油猴里卸载它，避免重复与干扰。",
 		);

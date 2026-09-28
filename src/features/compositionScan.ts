@@ -28,6 +28,7 @@ import {
 	detectComposition,
 } from "../core/compositionDetect.ts";
 import { resolveIdentity } from "../core/identity.ts";
+import { log } from "../core/log.ts";
 import { getSettings, hasBduss } from "../core/settings.ts";
 import type { UserRef } from "../page/adapters.ts";
 import { clearBadges, renderBadges } from "../page/badges.ts";
@@ -166,7 +167,7 @@ async function drain(): Promise<void> {
 				await checkUser(ref, { force });
 			} catch (error) {
 				// 单个用户失败（比如对方设置了隐私）不影响其他人
-				console.warn("[eztb] 成分检测失败", error);
+				log.warn("成分检测失败：", error);
 			}
 		}
 	} finally {
@@ -194,7 +195,7 @@ export function registerUserForComposition(
 	if (!hasBduss()) {
 		if (!noBdussWarned) {
 			noBdussWarned = true;
-			console.warn("[eztb] 还没设置 BDUSS，成分检测不会工作");
+			log.warn("还没设置 BDUSS，成分检测不会工作");
 		}
 		return;
 	}

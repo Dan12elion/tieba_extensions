@@ -1,7 +1,7 @@
 # eztb-userscript 项目交接文档
 
 > 新对话继续这个项目时，读完这份就能恢复全部上下文。
-> 最后更新 2026-09-28 · 当前版本 **1.8.0**
+> 最后更新 2026-09-28 · 当前版本 **1.8.1**
 > 仓库（公开）：<https://github.com/Dan12elion/tieba_extensions>
 > 用户装的那条对应 `dist/tieba-eztb-toolbox.user.js`
 
@@ -150,6 +150,8 @@ SDK 没有暴露 `UserPost` 的编解码器，取主题帖要用 `is_thread=1`�
   BDUSS 与规则表全部孤儿化。结构版本另用 `schemaVersion` 字段记。
 - **深色模式跟的是 `prefers-color-scheme`（系统偏好），不是贴吧自己的夜间模式开关。**
   后者是页面内的一个 class，跟系统偏好不一定同步，猜错反而更难看。
+  配色只有两处来源：`ui/styles.ts` 的 `--tb-eztb-*` 变量，以及**在 TS 里拼出来的 SVG**
+  （§5 #42 就是漏了后者）。两处都要改，`click-test` 的深色那一遍会盯着。
 
 ---
 
@@ -310,6 +312,11 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 39 | CI 里「重建后 `git diff --exit-code -- dist` 必须为空」从第一天起就会红，而原因**不是**"忘了重建产物" | 工作流 clone 的是上游 `v3` 的**尖端**，而 `sdk.lock.json` 锁的是某个具体提交：v3 一直在动（2026-09-28 实测尖端 `8ca0637c` 的 `packages/sdk` 已经是 `db48716f`，不是被锁的 `338a81e`），拿尖端构建出来的产物自然与仓库里提交的那份不同 | 工作流改成按 `sdk.lock.json` 的 `eztb.commit` 检出上游（`fetch --depth 1 origin <sha>` → `checkout --detach` → `submodule update --init --recursive`），`sdk.lock.json` 也新增 `eztb` 段锁住上游检出。**只锁 SDK 不够**——被锁的 SDK 提交要靠某个确定的上游提交带出来（本机模拟过整条链路：fetch-by-sha、子模块落到 `338a81e`、两个不同位置的上游构建出同一份产物） |
 | 40 | 同一份源码在两台机器上构建出的产物**逐字符不同**，CI 的产物同步校验永远过不了 | esbuild 给每个模块加一行 `// <路径>` 注释，路径按 `absWorkingDir` 算相对值；落在它之外的模块（上游 `packages/sdk/**` 与 `node_modules/**`）就会带上相对甚至绝对前缀——本机是 `../eztb/...`，工程深一层是 `../../eztb/...`，跨盘时是 `E:/...`，CI 里是 `/home/runner/work/.../eztb/...`。实测：只差这些注释行，代码逻辑完全一致 | `build.mjs` 显式 `absWorkingDir: __dirname`，写文件前用 `stabilizeModuleComments()` 把两类注释分别收敛成 `<eztb>/packages/sdk/...` 与 `<eztb>/node_modules/...`（node_modules 以下保留，还能看出哪个文件被打进来）。**两条规则缺一不可**：只收敛 SDK 的话，换目录布局仍有 306 行注释不同；补上 node_modules 那条之后，实测「工程与上游同级」和「工程比上游深一层」两种布局的产物 sha256 完全相同（`72E3CC74…`） |
 | 41 | 弹窗焦点陷阱看着生效，**反向 Tab** 却会退到遮罩后面的页面元素上（正向 Tab 看不出来） | `openDialog()` 打开时把焦点放在弹窗容器本身（`tabIndex = -1`），而判定"焦点在不在弹窗里"用的是 `dialogEl.contains(document.activeElement)`——容器自己是 true，于是 `Shift+Tab` 不满足回卷条件，浏览器默认行为就把焦点交给了遮罩后面页面里的可聚焦元素。正向 Tab 碰巧因为 DOM 顺序（容器后面紧跟着第一个按钮）看起来是对的 | 判定改成"当前焦点是不是**可聚焦项列表**里的一个"：容器自己、禁用项、隐藏项一律算"在外面"，两种方向都回卷。补了 6 条无头浏览器断言，用 `dispatchEvent()` 的返回值判断有没有被 `preventDefault`（返回 false = 拦下了），所以这几条在旧写法上会红 |
+| 42 | 深色模式下饼图的"空数据底环"是一圈刺眼的亮灰 | 1.8.0 把 `styles.ts` 的硬编码色值全换成了变量，但**颜色不止在 CSS 里**：饼图那段 SVG 是在 `core/postStats.ts` 里拼字符串生成的，底环写死 `stroke="#eef0f3"`。CSS 变量换不掉它——写死的 SVG 颜色没有任何地方能兜住 | 底环改成 `<circle class="tb-eztb-pie-track">` + `--tb-eztb-pie-track`（亮 `#eef0f3` / 深 `#343a41`）。`verify.mjs` 加一条"产物里没有写死的 `stroke=`/`fill=` 色值"，`click-test.mjs` 加**一整遍深色模式**（见 §11）。**教训：换配色时要把 TS 里拼出来的 HTML/SVG 也扫一遍** |
+| 43 | 诊断报告里那句"最近的日志（最多 20 条）"几乎永远是空的 | `core/log.ts` 建好了，但只有 `main.ts` 三处在写它；其余错误路径（`scanner.ts`、`compositionScan.ts`、`userPanel.ts`、`settings.ts`、`kvCache.ts`）仍然是裸 `console.warn`。于是用户真正遇到的失败**不进环形缓冲**，报告里只剩"已加载"一行 | 那些 `console.warn` 全部改走 `log.warn`；`verify.mjs` 新增 V8 扫 `src/**`，禁止绕过 `log.ts` 的 `console.warn`/`console.error`（`log.ts` 自己除外）。**诊断面板的价值取决于"出事的地方愿不愿意往环里写"** |
+| 44 | 装过更新版本的人退回旧版后，设置里的新字段被静默抹掉 | `migrate()` 的回写条件是 `changed: startVersion !== SETTINGS_SCHEMA_VERSION`：存储里是 v3、脚本是 v2 时，`changed` 也为 true，于是**读一次就把 v3 专有字段写没了**（`normalizeSettings()` 会丢掉未知键）。等用户再升回新版本，那几项设置已经永久丢失 | 改成只在**升级**时回写（`startVersion < SETTINGS_SCHEMA_VERSION`）。未知字段这一版仍然读不出来，但至少不会毁掉磁盘上的数据 |
+| 45 | 导入 `{"settings": []}` 会报"导入成功"，实际什么都没导入 | 判空用的是 `typeof holder.settings === "object"`，而数组也是 `"object"`，展开后是空对象，于是合并结果 = 现有设置，却回了 `ok: true` | `settings` 是数组（或不是对象）时明确报错。**导入这种"看起来成功了"的路径宁可直接失败** |
+| 46 | 万一 `onClose` 回调抛错，"先关旧的再开新的"这一步会断在半路 | `openDialog()` 一进来就 `closeOpenDialog()`，异常会从 `close()` 里穿出来，新弹窗根本开不了 | `close()` 里把 `onClose` 包进 `try/catch` 记 `log.warn`。关窗这件事必须总能成功 |
 
 ### 排查方法论
 
@@ -332,10 +339,10 @@ cd <本项目目录>
 node build.mjs                     # 未压缩可读版（Greasy Fork 要求）
 node build.mjs --minify            # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/typecheck.mjs         # 类型检查
-node scripts/verify.mjs            # 签名比对 + 产物检查 + 内嵌依赖自检 + Greasy Fork 要求（44 项）
+node scripts/verify.mjs            # 签名比对 + 产物检查 + 内嵌依赖自检 + Greasy Fork 要求 + 源码卫生（51 项）
 node scripts/keyword-test.mjs      # 规则 / 饼图 / 签到的纯离线测试（70 项）
 node scripts/live-test.mjs         # 真实接口链路（33 项）
-node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互（151 项）
+node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互（170 项，其中深色模式 16 项）
 node scripts/page-test.mjs         # 真实页面快照回归（项数取决于本机有几份快照，见下）
 
 # 也可以直接用 package.json 里的脚本：npm test / npm run test:live 等
@@ -354,7 +361,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 | `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**这套 CI 还没在 GitHub 上实跑过**，但两个会让它必红的结构性问题（§5 #39、#40）已经修掉，整条"取上游 → 构建 → 比产物"的链路在本机用临时目录模拟过 |
 | `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` 三个纯逻辑模块做断言 | 成分规则、饼图算法、签到判定改坏（离线即可发现） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证** |
-| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合、弹窗焦点陷阱（含反向 Tab，§5 #41） |
+| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node。**跑两遍**：亮色那一遍走完整流程，深色那一遍加 `--blink-settings=preferredColorScheme=0`（实测这个值才是深色，1/2 都是亮色）只做配色与对比度 | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合、弹窗焦点陷阱（含反向 Tab，§5 #41）、**深色模式的底色/底环颜色/文字与徽章对比度/无残留白底**（§5 #42） |
 | `page-test.mjs` | 读真实快照（「网页，完整」自带 `<标题>_files/` 的 CSS；MHTML 需先抓 CSS），同一份跑正常宽度与 420px 窄容器两遍 | 只有真实页面才暴露的问题（#6 标记撞名、无规则时不注入标记、#14 头部行排版、#24 按钮压正文） |
 
 > **page-test 的断言数不是固定值**：它按找到的快照逐个跑，而快照是 gitignore 的
@@ -431,6 +438,23 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 
 ### 9.1 已完成
 
+**1.8.1 · 一轮独立审查后的收尾**
+
+1.8.0 之后做的一轮审查（重点是"改动是不是真的修到位了、有没有修出新洞"），
+改的都是**看得见的漏**，没有新功能：
+
+| 改动 | 关键点 |
+|---|---|
+| **深色模式补完** | 饼图空数据底环原本写死在 `core/postStats.ts` 的 SVG 里（§5 #42），改成 CSS 变量；弹窗加 `color-scheme:light dark`，深色下原生滚动条不再发亮 |
+| **深色模式进了自动化** | `click-test.mjs` 现在跑**两遍**：第二遍用 `--blink-settings=preferredColorScheme=0` 强制深色，量底色、底环颜色、文字/徽章/按钮对比度，并断言"弹窗里没有残留的纯白底元素"。**改回旧的写死颜色，亮色与深色各有一条断言变红**（反向验证过） |
+| **错误提示统一进日志环** | `scanner.ts` / `compositionScan.ts` / `userPanel.ts` / `settings.ts` / `kvCache.ts` 的裸 `console.warn` 全部改走 `core/log.ts`，诊断报告才真的带得出出错信息（§5 #43）；`verify.mjs` 新增 V8 扫源码守住这条 |
+| **设置的两个静默坑** | 未来版本的存储在降级时不再被回写覆盖（§5 #44）；导入 `{"settings": []}` 不再谎报成功（§5 #45） |
+| **依赖锁定补强** | `sdk.lock.json` 增加 `sdk.author`（ISC 的版权署名出处）；`deps-info` 在 ISC 但拿不到 `author` 时**直接构建失败**；许可不是 ISC 时不再硬套 ISC 模板；`verify.mjs` 增加了"内嵌库名称+版本""版权署名"两类断言（原来只查来源 URL） |
+| **关窗不再可能半路断掉** | `onClose` 抛错只记日志，不影响关窗与"关旧的再开新的"（§5 #46） |
+
+改动完的基线（2026-09-28 本机实测）：typecheck 0 错 / verify 51 / keyword-test 70 /
+live-test 33 / click-test 170（其中深色模式 16 条）/ page-test 68，全绿。
+
 **1.8.0 · 对标同类项目后的一轮工程化 + 几个具体问题**
 
 起点是 `IMPROVEMENTS.md`（对标 Bilibili-Evolved / aiotieba / Tieba-Remix 等做的一轮调研）。
@@ -451,7 +475,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 | **深色模式** | `ui/styles.ts` 的 133 处硬编码色值全换成 `--tb-eztb-*` 变量，跟随系统深色偏好 |
 | **文案** | `@description` 里"加一个 eztb 按钮"改成"加一个「查询」按钮"，与按钮上的字一致 |
 
-改动完的基线（2026-09-28 本机实测）：typecheck 0 错 / verify 44 / keyword-test 70 /
+改动完的基线（1.8.0 当时）：typecheck 0 错 / verify 44 / keyword-test 70 /
 live-test 33 / click-test 151 / page-test 68（取决于本机快照数量，见 §6），全绿。
 
 **1.7.4 · 界面文案（第二批）**
@@ -594,7 +618,7 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test`）。
-   当前基线（1.8.0 实测）：typecheck 0 错 / verify 44 / keyword-test 70 / live-test 33 / click-test 151 /
+   当前基线（1.8.1 实测）：typecheck 0 错 / verify 51 / keyword-test 70 / live-test 33 / click-test 170 /
    page-test 68 全绿（page-test 的项数随本机有的快照数量变化）。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。

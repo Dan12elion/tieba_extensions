@@ -45,6 +45,7 @@ const THEME_VARS = `
   --tb-eztb-border-muted:#e0e3e7;
   --tb-eztb-border-input:#d0d7de;
   --tb-eztb-border-busy:#ddd;
+  --tb-eztb-pie-track:#eef0f3;
   --tb-eztb-overlay:rgba(0,0,0,.45);
   --tb-eztb-shadow:rgba(0,0,0,.28);
   /* 成分徽章的色相由 JS 按下标给，这里只切明度 */
@@ -90,6 +91,7 @@ const THEME_VARS = `
     --tb-eztb-border-muted:#343a41;
     --tb-eztb-border-input:#3c434b;
     --tb-eztb-border-busy:#3c434b;
+    --tb-eztb-pie-track:#343a41;
     --tb-eztb-overlay:rgba(0,0,0,.6);
     --tb-eztb-shadow:rgba(0,0,0,.55);
     --tb-eztb-badge-fg:78%;
@@ -128,6 +130,8 @@ export const STYLE_TEXT = `${THEME_VARS}
   display:flex;flex-direction:column;width:min(820px,calc(100vw - 32px));
   height:min(84vh,760px);background:var(--tb-eztb-surface) !important;border-radius:12px;overflow:hidden;
   box-shadow:0 12px 48px var(--tb-eztb-shadow);color:var(--tb-eztb-text) !important;font-size:14px;line-height:1.6;
+  /* 原生滚动条与表单控件跟着系统偏好走，否则深色弹窗里会拖一条亮色滚动条 */
+  color-scheme:light dark;
   /* 弹窗会被注入到贴吧页面里，页面样式可能通过继承污染排版，这里逐项复位 */
   text-align:left !important;text-indent:0 !important;letter-spacing:normal !important;
   word-spacing:normal !important;white-space:normal !important;
@@ -257,7 +261,9 @@ export const STYLE_TEXT = `${THEME_VARS}
   display:flex;align-items:center;gap:16px;margin:0;padding:10px 12px;
   border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
+/* 空数据时的那圈底环：颜色必须走变量，写死会在深色模式下变成一圈亮灰 */
 .tb-eztb-pie-svg{width:96px;height:96px;flex:0 0 auto;}
+.tb-eztb-pie-track{stroke:var(--tb-eztb-pie-track);}
 .tb-eztb-pie-legend{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0;}
 .tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:var(--tb-eztb-text-muted) !important;}
 .tb-eztb-pie-dot{

@@ -268,10 +268,10 @@ node scripts/verify.mjs
 | 命令 | 验证内容 |
 | --- | --- |
 | `node scripts/typecheck.mjs` | 类型检查（`tsc --noEmit`）。别名解析、接口参数形状、字段确实存在——esbuild 只打包不检查，所以这条单列 |
-| `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；内嵌依赖自检（SDK 与上游检出的版本/许可/提交号都要对上 `sdk.lock.json`）；以及 Greasy Fork 的发布要求（44 项） |
+| `node scripts/verify.mjs` | 浏览器版 MD5 / `packRequest` 与 Node 版逐字符一致；产物无残留 Node 依赖、不含 eztb.org；内嵌依赖自检（SDK 与上游检出的版本/许可/提交号/**版权署名**都要对上 `sdk.lock.json`）；Greasy Fork 的发布要求；源码卫生（没有绕过 `core/log.ts` 的 `console.warn`）（51 项） |
 | `node scripts/keyword-test.mjs` | 成分规则解析、匹配、排除词、证据强弱、高亮转义，发帖占比/饼图几何、「查看全部吧」列表、签到号判定与发帖行副标题（70 项，纯离线） |
 | `node scripts/live-test.mjs` | 打真实贴吧接口（匿名 proto 端点）：签名、protobuf、multipart、HTTPS 升级、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、"点了才查"的等级与楼层（都与直接调接口交叉验证）、隐藏发帖的不变量、回复页吧名反查的缓存与去重（33 项） |
-| `node scripts/click-test.mjs` | 无头 Edge/Chrome：按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、「查等级」/「检测签到号」、菜单命令、诊断面板的开关、弹窗焦点陷阱、占比饼图、回复正文与「查楼层」、隐藏发帖说辞（151 项） |
+| `node scripts/click-test.mjs` | 无头 Edge/Chrome：按钮注入、命中测试（`elementFromPoint`）、面板渲染、子页签独立翻页、成分标记、「查等级」/「检测签到号」、菜单命令、诊断面板的开关、弹窗焦点陷阱、占比饼图、回复正文与「查楼层」、隐藏发帖说辞；**再跑一遍深色模式**（底色/底环颜色/文字与徽章对比度）（170 项） |
 | `node scripts/page-test.mjs` | 真实页面快照回归：按钮注入、新版头部行排版、按钮与正文不重叠（每份快照跑正常宽度与 420px 窄容器两遍）。**项数取决于本机有几份快照**，不是固定值 |
 
 > page-test 的快照放在仓库的 `dist/.samples/`（已 gitignore；同级的 `../test0` 也会找）。

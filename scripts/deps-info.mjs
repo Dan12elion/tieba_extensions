@@ -91,13 +91,26 @@ export function collectEmbeddedDeps({ projectRoot, eztbRoot }) {
 	const sdkPkg = readJson(path.join(sdkDir, "package.json"));
 	if (!sdkPkg) problems.push(`读不到 ${path.join(sdkDir, "package.json")}`);
 
+	const sdkLicense = sdkPkg?.license ?? "(未声明)";
+	const sdkAuthor = readAuthor(sdkPkg);
+	/*
+	 * ISC 要求随副本附上版权人，而版权人只能来自 package.json 的 author。
+	 * 没有 author 就生成不出一份像样的许可文本——与其打一句 `Copyright (c) (版权人未声明)`
+	 * 这种坏掉的正文，不如直接让构建失败、逼人去上游确认。
+	 */
+	if (sdkLicense === "ISC" && !sdkAuthor) {
+		problems.push(
+			"上游 packages/sdk/package.json 没有 author 字段：ISC 的版权署名落不进产物",
+		);
+	}
+
 	const sdk = {
 		name: sdkPkg?.name ?? "tieba.js",
 		version: sdkPkg?.version ?? "(未知)",
-		license: sdkPkg?.license ?? "(未声明)",
+		license: sdkLicense,
 		url: lockSdk?.repository ?? sdkPkg?.repository?.url ?? "(未知)",
 		commit: readGitCommit(sdkDir),
-		author: readAuthor(sdkPkg),
+		author: sdkAuthor,
 	};
 
 	// 上游 eztb 的检出本身也要锁：CI 按它检出上游，本地构建也应当是同一份
@@ -122,6 +135,20 @@ export function collectEmbeddedDeps({ projectRoot, eztbRoot }) {
 		if (lockSdk.license && sdk.license && lockSdk.license !== sdk.license) {
 			problems.push(
 				`sdk.lock.json 的 sdk.license 是 ${lockSdk.license}，实际是 ${sdk.license}`,
+			);
+		}
+		/*
+		 * 版权人也要锁：ISC 要求随副本附上版权人，NOTICE 里的 `Copyright (c)` 就是从这里来的。
+		 * 上游改了 author 而没人注意到的话，产物会继续署旧名字，比不写还糟。
+		 */
+		if (lockSdk.author && sdk.author && lockSdk.author !== sdk.author) {
+			problems.push(
+				`sdk.lock.json 的 sdk.author 是 ${lockSdk.author}，实际是 ${sdk.author}`,
+			);
+		}
+		if (!lockSdk.author) {
+			problems.push(
+				"sdk.lock.json 的 sdk.author 缺失：ISC 的版权署名没法验证",
 			);
 		}
 		if (!lockSdk.commit) {
@@ -168,7 +195,7 @@ export function collectEmbeddedDeps({ projectRoot, eztbRoot }) {
 /** ISC 要求随副本附带许可文本；上游没有 LICENSE 文件，这里按 package.json 的声明补一份 */
 function iscNotice(sdk) {
 	const holder =
-		sdk.author ?? "(版权人未在 package.json 的 author 字段声明，需向上游确认)";
+		sdk.author ?? "(版权人未知——上游 package.json 没有 author，发布前请向上游确认)";
 	return [
 		" *       依上游 package.json 的 license 字段声明为 ISC。该仓库暂未附带 LICENSE 文件，",
 		` *       这里按 ISC 模板补一份（版权人取自 package.json 的 author：${holder}）：`,
@@ -189,6 +216,15 @@ function iscNotice(sdk) {
 	];
 }
 
+/** 许可不是 ISC 时的提示：模板不能混着套，得按上游实际声明的那份许可来附 */
+function otherLicenseNotice(sdk) {
+	return [
+		` *       上游 package.json 声明的许可是 ${sdk.license}（不是 ISC），`,
+		" *       这里没有按 ISC 模板补正文——请按该许可的要求，把许可文本一并附进分发物。",
+		" *       如果确实是 ISC，请同步更新 sdk.lock.json 的 sdk.license。",
+	];
+}
+
 /** 生成产物末尾的 NOTICE 文本 */
 export function buildNotice({ sdk, eztb, libs }) {
 	const lines = [
@@ -203,7 +239,7 @@ export function buildNotice({ sdk, eztb, libs }) {
 		` *   ${sdk.name} ${sdk.version} · 许可 ${sdk.license}`,
 		` *       来源  ${sdk.url}`,
 		` *       锁定提交  ${sdk.commit ?? "(未知，不是 git 检出)"}`,
-		...iscNotice(sdk),
+		...(sdk.license === "ISC" ? iscNotice(sdk) : otherLicenseNotice(sdk)),
 	];
 	if (eztb?.commit != null || eztb?.url) {
 		lines.push(

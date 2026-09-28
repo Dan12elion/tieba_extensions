@@ -1,6 +1,7 @@
 /** 通用弹窗外壳：头部 + 可选标签页 + 内容区 + 底部。 */
 
 import { escapeHtml } from "../core/util.ts";
+import { log } from "../core/log.ts";
 
 export interface DialogTab {
 	id: string;
@@ -98,7 +99,13 @@ export function openDialog(options: DialogOptions): DialogHandle {
 		root.remove();
 		document.removeEventListener("keydown", onKeydown, true);
 		if (previouslyFocused?.isConnected) previouslyFocused.focus();
-		options.onClose?.();
+		// onClose 抛出来的话，会打断调用方（比如 openDialog 里"先关旧的再开新的"这一步），
+		// 留下一半的状态。这里兜住：关窗这件事必须总是成功。
+		try {
+			options.onClose?.();
+		} catch (error) {
+			log.warn("弹窗关闭回调抛错：", error);
+		}
 	};
 
 	const onKeydown = (event: KeyboardEvent) => {

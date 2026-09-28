@@ -226,6 +226,21 @@ function verifyGreasyForkRules() {
 	for (const source of [deps.sdk.url, ...deps.libs.map((lib) => lib.url)]) {
 		check(`内嵌库来源已写明：${source}`, code.includes(source));
 	}
+	// Greasy Fork 的要求是「来源 + 名称 + 版本」，只写来源不算数。
+	// 期望值同样来自磁盘上的 package.json，不是手写的字符串。
+	for (const lib of [deps.sdk, ...deps.libs]) {
+		check(
+			`内嵌库名称与版本已写明：${lib.name} ${lib.version}`,
+			code.includes(`${lib.name} ${lib.version}`),
+		);
+	}
+	// ISC 要求随副本附上版权署名；署名取自上游 package.json 的 author（见 deps-info.mjs）
+	if (deps.sdk.author) {
+		check(
+			`内嵌库版权署名已写明：${deps.sdk.author}`,
+			code.includes(`Copyright (c) ${deps.sdk.author}`),
+		);
+	}
 	check(
 		`内嵌库许可已写明：${deps.sdk.license}`,
 		code.includes(deps.sdk.license),
@@ -244,12 +259,54 @@ function verifyGreasyForkRules() {
 	);
 	// 回归保护：旧的 NOTICE 把手写的来源写成了 tieba-toolbox（该仓库已改名）
 	check("产物里没有过期的 SDK 来源写法", !code.includes("tieba-toolbox"));
+
+	/*
+	 * 深色模式的回归保护。
+	 *
+	 * 弹窗里的颜色统一走 --tb-eztb-* 变量，变量有两套值（亮/深）。
+	 * 但只要有一处是**写死的**颜色（比如饼图底环那个 stroke="#eef0f3"），
+	 * 深色模式下就没人能把它换掉——这类颜色没有别处能兜住，所以钉在这里。
+	 */
+	const hardcodedSvgColors =
+		code.match(/(?:stroke|fill)="#[0-9a-fA-F]{3,8}"/g) ?? [];
+	check(
+		"SVG 颜色都走 CSS 变量（没有写死的 stroke/fill 色值，深色模式才换得掉）",
+		hardcodedSvgColors.length === 0,
+		hardcodedSvgColors.slice(0, 3).join(" ") || "无",
+	);
+}
+
+/**
+ * V8 · 源码卫生：错误提示不许绕过 core/log.ts。
+ *
+ * 「诊断当前页面」把日志环形缓冲的最后 20 条贴进报告，用户复制出来就能看出哪里出错。
+ * 但只要有一条错误走的是裸 `console.warn`，它就进不了那个环——报告里只剩「已加载」，
+ * 真正出事的那句偏偏不在。这条按源码文件扫，改坏了立刻红。
+ */
+function verifySourceHygiene() {
+	console.log("V8 · 源码卫生");
+	const srcRoot = path.join(projectRoot, "src");
+	const sourceFiles = fs
+		.readdirSync(srcRoot, { recursive: true })
+		.map((entry) => String(entry).replace(/\\/g, "/"))
+		.filter((entry) => entry.endsWith(".ts") && entry !== "core/log.ts");
+	const offenders = sourceFiles.filter((entry) =>
+		/(?:^|[^.\w])console\.(?:warn|error)\s*\(/.test(
+			fs.readFileSync(path.join(srcRoot, entry), "utf8"),
+		),
+	);
+	check(
+		"错误提示统一走 core/log.ts（源码里没有绕过它的 console.warn/error）",
+		offenders.length === 0,
+		offenders.join(" ") || `扫了 ${sourceFiles.length} 个文件`,
+	);
 }
 
 async function main() {
 	await verifySignatures();
 	verifyBundle();
 	verifyGreasyForkRules();
+	verifySourceHygiene();
 	console.log(failures === 0 ? "\n全部通过。" : `\n${failures} 项未通过。`);
 	process.exit(failures === 0 ? 0 : 1);
 }

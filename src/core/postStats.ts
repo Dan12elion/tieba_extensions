@@ -268,7 +268,9 @@ export function buildForumPieSvg(
 		return (
 			`<figure class="tb-eztb-pie">` +
 			`<svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据">` +
-			`<circle cx="60" cy="60" r="${RADIUS}" fill="none" stroke="#eef0f3" stroke-width="${STROKE}"></circle>` +
+			// 颜色走 CSS 变量（.tb-eztb-pie-track）：这里原本写死 #eef0f3，
+			// 深色模式下就成了一圈刺眼的浅灰。写死的 SVG 颜色没有别处能兜住。
+			`<circle class="tb-eztb-pie-track" cx="60" cy="60" r="${RADIUS}" fill="none" stroke-width="${STROKE}"></circle>` +
 			`</svg>` +
 			`<figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption>` +
 			`</figure>`

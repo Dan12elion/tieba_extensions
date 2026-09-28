@@ -6,6 +6,8 @@
  * `schemaVersion` 字段记，见下面的迁移。
  */
 
+import { log } from "./log.ts";
+
 /**
  * 当前设置结构版本。
  *
@@ -165,7 +167,14 @@ function migrate(raw: StoredSettings): {
 	}
 	return {
 		settings: normalizeSettings(current),
-		changed: startVersion !== SETTINGS_SCHEMA_VERSION,
+		/*
+		 * 只有「从旧版本升上来」才回写存储。
+		 *
+		 * 反过来（存储里的版本比本脚本新，比如用户装过更新的版本又退回旧版）**不能**回写：
+		 * 回写会把这一版不认识的字段（`normalizeSettings` 会丢掉未知键）从存储里抹掉，
+		 * 等用户再升回去时，那些设置就永久没了。不加 `changed` 时读一次就覆盖一次。
+		 */
+		changed: startVersion < SETTINGS_SCHEMA_VERSION,
 	};
 }
 
@@ -177,7 +186,7 @@ function persist(settings: ToolboxSettings): void {
 		} satisfies StoredSettings);
 	} catch (error) {
 		// 存不进就只在内存里生效，但要让用户/诊断面板看得见（以前这里被静默吞掉）
-		console.warn("[eztb] 设置写入油猴存储失败：", error);
+		log.warn("设置写入油猴存储失败：", error);
 	}
 }
 
@@ -273,10 +282,19 @@ export function importSettingsJson(text: string): ImportResult {
 	if (typeof format === "string" && format !== SETTINGS_EXPORT_FORMAT) {
 		return { ok: false, reason: `不是本脚本导出的设置（_format = ${format}）` };
 	}
-	const body =
-		holder.settings && typeof holder.settings === "object"
-			? (holder.settings as Record<string, unknown>)
-			: holder;
+	if ("settings" in holder && holder.settings !== undefined) {
+		// 数组也是 typeof "object"，放过去会被当成"空设置"从而谎报导入成功
+		if (
+			!holder.settings ||
+			typeof holder.settings !== "object" ||
+			Array.isArray(holder.settings)
+		) {
+			return { ok: false, reason: "settings 字段必须是一个对象" };
+		}
+	}
+	const body = holder.settings
+		? (holder.settings as Record<string, unknown>)
+		: holder;
 
 	// 明确丢掉 bduss：导入永远不会覆盖用户自己的凭据
 	const { bduss: _ignored, ...safe } = body;

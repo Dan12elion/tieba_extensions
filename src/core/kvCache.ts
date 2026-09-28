@@ -13,6 +13,8 @@
  *   3. 磁盘读取是懒的：没用到某个缓存就不会去读它。
  */
 
+import { log } from "./log.ts";
+
 export interface KvEntry {
 	ts: number;
 }
@@ -71,8 +73,8 @@ function noteStorageIssue(storageKey: string, error: unknown): void {
 		return;
 	}
 	issues.push({ storageKey, message, at: Date.now() });
-	console.warn(
-		`[eztb] 写入油猴存储失败（${storageKey}）：${message}` +
+	log.warn(
+		`写入油猴存储失败（${storageKey}）：${message}` +
 			"。通常是存储配额已满，本次结果可能不会保留。",
 	);
 }

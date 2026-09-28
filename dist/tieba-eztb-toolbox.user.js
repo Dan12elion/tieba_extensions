@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.8.0
+// @version             1.8.1
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -55,6 +55,65 @@
   var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
   var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 
+  // src/core/log.ts
+  var ORDER = {
+    debug: 10,
+    info: 20,
+    warn: 30,
+    error: 40
+  };
+  var RING_MAX = 200;
+  var MAX_ARG_CHARS = 300;
+  var threshold = "info";
+  var ring = [];
+  function recentLogs() {
+    return ring.slice();
+  }
+  function mask(value) {
+    if (value.length <= 8) return value;
+    return `${value.slice(0, 4)}…${value.slice(-2)}`;
+  }
+  function format(value) {
+    let text;
+    if (typeof value === "string") text = value;
+    else if (value instanceof Error) text = `${value.name}: ${value.message}`;
+    else if (value === void 0) text = "undefined";
+    else {
+      try {
+        text = JSON.stringify(value);
+      } catch {
+        text = String(value);
+      }
+    }
+    if (text === void 0) text = String(value);
+    return text.length > MAX_ARG_CHARS ? `${text.slice(0, MAX_ARG_CHARS)}…` : text;
+  }
+  function emit(level, args2) {
+    if (ORDER[level] < ORDER[threshold]) return;
+    const body = args2.map(format).join(" ");
+    ring.push(`[${(/* @__PURE__ */ new Date()).toISOString()}] ${level}: ${body}`);
+    if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
+    const out = `[eztb] ${body}`;
+    if (level === "error") console.error(out);
+    else if (level === "warn") console.warn(out);
+    else console.log(out);
+  }
+  var log = {
+    debug: (...args2) => emit("debug", args2),
+    info: (...args2) => emit("info", args2),
+    warn: (...args2) => emit("warn", args2),
+    error: (...args2) => emit("error", args2)
+  };
+  function describeUser(user) {
+    if (!user) return "未识别";
+    const parts2 = [];
+    if (user.userId) parts2.push(`id=${user.userId}`);
+    if (user.uid) parts2.push(`uid=${mask(String(user.uid))}`);
+    if (user.un) parts2.push(`un=${user.un}`);
+    if (user.portrait) parts2.push(`portrait=${mask(String(user.portrait))}`);
+    return parts2.join(" ") || "无标识";
+  }
+
   // src/core/kvCache.ts
   var issues = [];
   function getStorageIssues() {
@@ -68,8 +127,8 @@
       return;
     }
     issues.push({ storageKey, message, at: Date.now() });
-    console.warn(
-      `[eztb] 写入油猴存储失败（${storageKey}）：${message}。通常是存储配额已满，本次结果可能不会保留。`
+    log.warn(
+      `写入油猴存储失败（${storageKey}）：${message}。通常是存储配额已满，本次结果可能不会保留。`
     );
   }
   function createKvCache(options) {
@@ -282,65 +341,6 @@
     return gmRequestHandle(options).promise;
   }
 
-  // src/core/log.ts
-  var ORDER = {
-    debug: 10,
-    info: 20,
-    warn: 30,
-    error: 40
-  };
-  var RING_MAX = 200;
-  var MAX_ARG_CHARS = 300;
-  var threshold = "info";
-  var ring = [];
-  function recentLogs() {
-    return ring.slice();
-  }
-  function mask(value) {
-    if (value.length <= 8) return value;
-    return `${value.slice(0, 4)}…${value.slice(-2)}`;
-  }
-  function format(value) {
-    let text;
-    if (typeof value === "string") text = value;
-    else if (value instanceof Error) text = `${value.name}: ${value.message}`;
-    else if (value === void 0) text = "undefined";
-    else {
-      try {
-        text = JSON.stringify(value);
-      } catch {
-        text = String(value);
-      }
-    }
-    if (text === void 0) text = String(value);
-    return text.length > MAX_ARG_CHARS ? `${text.slice(0, MAX_ARG_CHARS)}…` : text;
-  }
-  function emit(level, args2) {
-    if (ORDER[level] < ORDER[threshold]) return;
-    const body = args2.map(format).join(" ");
-    ring.push(`[${(/* @__PURE__ */ new Date()).toISOString()}] ${level}: ${body}`);
-    if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
-    const out = `[eztb] ${body}`;
-    if (level === "error") console.error(out);
-    else if (level === "warn") console.warn(out);
-    else console.log(out);
-  }
-  var log = {
-    debug: (...args2) => emit("debug", args2),
-    info: (...args2) => emit("info", args2),
-    warn: (...args2) => emit("warn", args2),
-    error: (...args2) => emit("error", args2)
-  };
-  function describeUser(user) {
-    if (!user) return "未识别";
-    const parts2 = [];
-    if (user.userId) parts2.push(`id=${user.userId}`);
-    if (user.uid) parts2.push(`uid=${mask(String(user.uid))}`);
-    if (user.un) parts2.push(`un=${user.un}`);
-    if (user.portrait) parts2.push(`portrait=${mask(String(user.portrait))}`);
-    return parts2.join(" ") || "无标识";
-  }
-
   // src/core/queue.ts
   var SerialQueue = class {
     constructor(minIntervalMs) {
@@ -457,7 +457,14 @@
     }
     return {
       settings: normalizeSettings(current),
-      changed: startVersion !== SETTINGS_SCHEMA_VERSION
+      /*
+       * 只有「从旧版本升上来」才回写存储。
+       *
+       * 反过来（存储里的版本比本脚本新，比如用户装过更新的版本又退回旧版）**不能**回写：
+       * 回写会把这一版不认识的字段（`normalizeSettings` 会丢掉未知键）从存储里抹掉，
+       * 等用户再升回去时，那些设置就永久没了。不加 `changed` 时读一次就覆盖一次。
+       */
+      changed: startVersion < SETTINGS_SCHEMA_VERSION
     };
   }
   function persist(settings) {
@@ -467,7 +474,7 @@
         schemaVersion: SETTINGS_SCHEMA_VERSION
       });
     } catch (error) {
-      console.warn("[eztb] 设置写入油猴存储失败：", error);
+      log.warn("设置写入油猴存储失败：", error);
     }
   }
   function getSettings() {
@@ -521,7 +528,12 @@
     if (typeof format5 === "string" && format5 !== SETTINGS_EXPORT_FORMAT) {
       return { ok: false, reason: `不是本脚本导出的设置（_format = ${format5}）` };
     }
-    const body = holder.settings && typeof holder.settings === "object" ? holder.settings : holder;
+    if ("settings" in holder && holder.settings !== void 0) {
+      if (!holder.settings || typeof holder.settings !== "object" || Array.isArray(holder.settings)) {
+        return { ok: false, reason: "settings 字段必须是一个对象" };
+      }
+    }
+    const body = holder.settings ? holder.settings : holder;
     const { bduss: _ignored, ...safe } = body;
     const merged = normalizeSettings({ ...getSettings(), ...safe });
     merged.bduss = getSettings().bduss;
@@ -29919,7 +29931,7 @@ ${endStackCall}`;
         try {
           await checkUser(ref, { force });
         } catch (error) {
-          console.warn("[eztb] 成分检测失败", error);
+          log.warn("成分检测失败：", error);
         }
       }
     } finally {
@@ -29940,7 +29952,7 @@ ${endStackCall}`;
     if (!hasBduss()) {
       if (!noBdussWarned) {
         noBdussWarned = true;
-        console.warn("[eztb] 还没设置 BDUSS，成分检测不会工作");
+        log.warn("还没设置 BDUSS，成分检测不会工作");
       }
       return;
     }
@@ -30207,7 +30219,11 @@ ${endStackCall}`;
       root.remove();
       document.removeEventListener("keydown", onKeydown, true);
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
-      options.onClose?.();
+      try {
+        options.onClose?.();
+      } catch (error) {
+        log.warn("弹窗关闭回调抛错：", error);
+      }
     };
     const onKeydown = (event) => {
       if (event.key === "Escape") {
@@ -30666,7 +30682,7 @@ ${endStackCall}`;
         try {
           target.handler(el, mount2);
         } catch (error) {
-          console.warn(`[eztb] 处理${target.label}失败`, error);
+          log.warn(`处理${target.label}失败：`, error);
         }
       }
     }
@@ -30679,15 +30695,15 @@ ${endStackCall}`;
     try {
       processNewHeadline(headline, mount2);
     } catch (error) {
-      console.warn("[eztb] 补回按钮失败", error);
+      log.warn("补回按钮失败：", error);
     }
   }
   function startScanner(mount2) {
     scan(document, mount2);
     if (!legacyWarned && document.querySelector(`.${LEGACY_BUTTON_CLASS}`)) {
       legacyWarned = true;
-      console.warn(
-        "[eztb] 检测到旧版脚本（tieba-eztb-follow.user.js）的按钮仍在页面上。它会在每个用户名旁再插一个「查关注」按钮，且点击已失效；请在油猴里卸载它，避免重复与干扰。"
+      log.warn(
+        "检测到旧版脚本（tieba-eztb-follow.user.js）的按钮仍在页面上。它会在每个用户名旁再插一个「查关注」按钮，且点击已失效；请在油猴里卸载它，避免重复与干扰。"
       );
     }
     if (!window.MutationObserver) return;
@@ -30907,7 +30923,7 @@ ${endStackCall}`;
     const slices = buildForumSlices(counts, maxSlices);
     const total = totalForumCount(counts);
     if (!total) {
-      return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle cx="60" cy="60" r="${RADIUS}" fill="none" stroke="#eef0f3" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
+      return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle class="tb-eztb-pie-track" cx="60" cy="60" r="${RADIUS}" fill="none" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
     }
     let acc = 0;
     const arcs = slices.filter((slice) => slice.count > 0).map((slice) => {
@@ -31543,7 +31559,7 @@ ${endStackCall}`;
           refreshButton.textContent = "已刷新";
         } catch (error) {
           refreshButton.textContent = "刷新失败";
-          console.warn("[eztb] 刷新失败", error);
+          log.warn("刷新当前页签失败：", error);
         } finally {
           setTimeout(() => {
             refreshButton.disabled = false;
@@ -31615,6 +31631,7 @@ ${endStackCall}`;
   --tb-eztb-border-muted:#e0e3e7;
   --tb-eztb-border-input:#d0d7de;
   --tb-eztb-border-busy:#ddd;
+  --tb-eztb-pie-track:#eef0f3;
   --tb-eztb-overlay:rgba(0,0,0,.45);
   --tb-eztb-shadow:rgba(0,0,0,.28);
   /* 成分徽章的色相由 JS 按下标给，这里只切明度 */
@@ -31660,6 +31677,7 @@ ${endStackCall}`;
     --tb-eztb-border-muted:#343a41;
     --tb-eztb-border-input:#3c434b;
     --tb-eztb-border-busy:#3c434b;
+    --tb-eztb-pie-track:#343a41;
     --tb-eztb-overlay:rgba(0,0,0,.6);
     --tb-eztb-shadow:rgba(0,0,0,.55);
     --tb-eztb-badge-fg:78%;
@@ -31697,6 +31715,8 @@ ${endStackCall}`;
   display:flex;flex-direction:column;width:min(820px,calc(100vw - 32px));
   height:min(84vh,760px);background:var(--tb-eztb-surface) !important;border-radius:12px;overflow:hidden;
   box-shadow:0 12px 48px var(--tb-eztb-shadow);color:var(--tb-eztb-text) !important;font-size:14px;line-height:1.6;
+  /* 原生滚动条与表单控件跟着系统偏好走，否则深色弹窗里会拖一条亮色滚动条 */
+  color-scheme:light dark;
   /* 弹窗会被注入到贴吧页面里，页面样式可能通过继承污染排版，这里逐项复位 */
   text-align:left !important;text-indent:0 !important;letter-spacing:normal !important;
   word-spacing:normal !important;white-space:normal !important;
@@ -31826,7 +31846,9 @@ ${endStackCall}`;
   display:flex;align-items:center;gap:16px;margin:0;padding:10px 12px;
   border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
+/* 空数据时的那圈底环：颜色必须走变量，写死会在深色模式下变成一圈亮灰 */
 .tb-eztb-pie-svg{width:96px;height:96px;flex:0 0 auto;}
+.tb-eztb-pie-track{stroke:var(--tb-eztb-pie-track);}
 .tb-eztb-pie-legend{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0;}
 .tb-eztb-pie-item{display:flex;align-items:center;gap:6px;color:var(--tb-eztb-text-muted) !important;}
 .tb-eztb-pie-dot{

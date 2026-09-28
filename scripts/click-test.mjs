@@ -632,6 +632,22 @@ const PAGE = `<!doctype html>
         add('隐藏时列表为空（拿不到内容就是拿不到）',
             rowsIn(subPane('topic')).length === 0,
             '行数 ' + rowsIn(subPane('topic')).length);
+        /*
+         * 饼图的「空数据底环」。
+         *
+         * 这一圈以前是写死的 stroke="#eef0f3"：亮色下看不出问题，深色下是一圈亮灰
+         * （深色模式那条断言在另一台浏览器里跑，见 DARK_PAGE）。这里钉住亮色这一半：
+         * 颜色必须由 CSS 变量给，元素上不许再带写死的 stroke 属性。
+         */
+        var track = inPanel('.tb-eztb-pie-track');
+        add('没有数据时饼图画的是空数据底环', !!track, '');
+        if (track) {
+          add('底环的颜色由 CSS 变量决定（元素上没有写死的 stroke）',
+              !track.hasAttribute('stroke'), track.getAttribute('stroke') || '无 stroke 属性');
+          add('亮色下底环是浅灰（#eef0f3）',
+              getComputedStyle(track).stroke === 'rgb(238, 240, 243)',
+              getComputedStyle(track).stroke);
+        }
         extrasDone();
       }, 150);
     }, 100);
@@ -1082,24 +1098,217 @@ const PAGE = `<!doctype html>
 // 页面里的内联脚本先自己过一遍语法。
 // 这些脚本写在 Node 的模板字符串里，一个没转义的 \n 就会把浏览器里的正则/字符串切断，
 // 而浏览器只会给你一句 "Invalid regular expression"，根本看不出是哪一行（踩过）。
-for (const [index, match] of Array.from(
-	PAGE.matchAll(/<script>([\s\S]*?)<\/script>/g),
-).entries()) {
-	try {
-		new Function(match[1]);
-	} catch (error) {
-		console.error(
-			`页面第 ${index + 1} 个内联脚本有语法错误：${error.message}`,
-		);
-		process.exit(1);
+function checkInlineScripts(html, pageName) {
+	for (const [index, match] of Array.from(
+		html.matchAll(/<script>([\s\S]*?)<\/script>/g),
+	).entries()) {
+		try {
+			new Function(match[1]);
+		} catch (error) {
+			console.error(
+				`${pageName} 第 ${index + 1} 个内联脚本有语法错误：${error.message}`,
+			);
+			process.exit(1);
+		}
 	}
 }
+checkInlineScripts(PAGE, "亮色页面");
+
+/**
+ * 深色模式的页面。
+ *
+ * 这套测试以前**完全没碰过深色模式**，而深色是纯 CSS 决定的——没有断言就等于没有保障
+ * （实测就漏了一处：饼图空数据时那圈底环写死 `stroke="#eef0f3"`，深色下是一圈亮灰）。
+ *
+ * 无头 Edge 用 `--blink-settings=preferredColorScheme=0` 可以强制
+ * `prefers-color-scheme: dark`（scripts 之外实测过：0 = 深色，1/2 = 亮色）。
+ * 这一页只做最少的动作：注入按钮 → 开面板 → 切到「发帖」（对方隐藏发帖，饼图是空数据态）
+ * → 量颜色与对比度。
+ */
+const DARK_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>eztb dark</title></head>
+<body>
+<div id="wrap">
+  <div class="l_post" data-field='{"author":{"user_id":${HIDDEN_STUB_USER_ID},"user_name":"%E9%9A%90%E8%97%8F","portrait":"tb.1.hidden"}}'>
+    <div class="d_author"><a class="p_author_name" href="/home/main?id=tb.1.hidden">深色测试用户</a></div>
+  </div>
+</div>
+<script>
+  var __store = { tbEztbToolboxSettingsV1: {
+    bduss: 'TEST_DUMMY_BDUSS',
+    compositionRules: '深色名单 | | | | ${HIDDEN_STUB_USER_ID}',
+    compositionAuto: true,
+    compositionMaxPerPage: 5,
+    compositionCacheDays: 1
+  } };
+  window.GM_getValue = function (k, d) { return (k in __store) ? __store[k] : d; };
+  window.GM_setValue = function (k, v) { __store[k] = v; };
+  window.GM_registerMenuCommand = function () { return 1; };
+  window.GM_xmlhttpRequest = function (d) {
+    fetch('/proxy?u=' + encodeURIComponent(d.url), {
+      method: d.method || 'GET',
+      headers: d.headers || {},
+      body: d.data || undefined
+    }).then(function (res) {
+      return res.arrayBuffer().then(function (buf) {
+        d.onload && d.onload({ status: res.status, statusText: res.statusText, responseHeaders: '', response: buf });
+      });
+    }).catch(function () { d.onerror && d.onerror({}); });
+    return { abort: function () {} };
+  };
+  window.__tbErrors = [];
+  window.addEventListener('error', function (e) { window.__tbErrors.push(String(e.message)); });
+  console.log = function () {};
+</script>
+<script>${bundle}</script>
+<script>
+  var lines = [];
+  function add(label, ok, detail) {
+    lines.push((ok ? 'PASS' : 'FAIL') + '|' + label + '|' + (detail === undefined ? '' : String(detail)));
+  }
+  function until(test, done, giveUp) {
+    var tries = 0;
+    (function poll() {
+      if (test()) return done(true);
+      if (++tries > (giveUp || 100)) return done(false);
+      setTimeout(poll, 200);
+    })();
+  }
+  var finished = false;
+  function finish() {
+    if (finished) return;
+    finished = true;
+    fetch('/result-dark', { method: 'POST', body: 'TBSTART\\n' + lines.join('\\n') + '\\nTBEND' }).catch(function () {});
+  }
+  function rgbTuple(color) {
+    var m = String(color).match(/[0-9.]+/g) || [];
+    return m.slice(0, 3).map(Number);
+  }
+  function luminance(color) {
+    var c = rgbTuple(color).map(function (v) {
+      v = v / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function contrast(fg, bg) {
+    var a = luminance(fg), b = luminance(bg);
+    var hi = Math.max(a, b), lo = Math.min(a, b);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  function lastMask() {
+    var masks = document.querySelectorAll('.tb-eztb-mask');
+    return masks.length ? masks[masks.length - 1] : null;
+  }
+  function inPanel(sel) {
+    var scope = lastMask();
+    return scope ? scope.querySelector(sel) : null;
+  }
+  function contrastOf(el) {
+    var s = getComputedStyle(el);
+    return { text: s.color, bg: s.backgroundColor, ratio: contrast(s.color, s.backgroundColor) };
+  }
+  /** 提前退出也要把"有没有 JS 错误"这条带上，否则失败原因看着像"没跑完" */
+  function finishDark() {
+    add('深色模式无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+    finish();
+  }
+
+  add('深色：prefers-color-scheme 已生效',
+      matchMedia('(prefers-color-scheme: dark)').matches,
+      '轻/深 = ' + (matchMedia('(prefers-color-scheme: dark)').matches ? '深' : '浅'));
+
+  until(function () { return !!document.querySelector('.tb-eztb-btn'); }, function (injected) {
+    add('深色：页面上注入了「查询」按钮', injected, '');
+    if (!injected) { finishDark(); return; }
+
+    var pageBtn = document.querySelector('.tb-eztb-btn');
+    var btnColors = contrastOf(pageBtn);
+    add('深色：「查询」按钮文字对比度 ≥ 3:1', btnColors.ratio >= 3,
+        btnColors.ratio.toFixed(2) + ':1（' + btnColors.text + ' on ' + btnColors.bg + '）');
+
+    pageBtn.click();
+    until(function () { return !!inPanel('.tb-eztb-dialog'); }, function (opened) {
+      add('深色：面板已打开', opened, '');
+      if (!opened) { finishDark(); return; }
+
+      var dialog = inPanel('.tb-eztb-dialog');
+      var dialogBg = getComputedStyle(dialog).backgroundColor;
+      // --tb-eztb-surface 的深色值是 #1c1f24
+      add('深色：弹窗底色用的是深色变量（不是亮色 #fff）',
+          dialogBg === 'rgb(28, 31, 36)', dialogBg);
+
+      var title = inPanel('.tb-eztb-title');
+      if (title) {
+        var titleRatio = contrast(getComputedStyle(title).color, dialogBg);
+        add('深色：标题文字对比度 ≥ 4.5:1', titleRatio >= 4.5, titleRatio.toFixed(2) + ':1');
+      }
+
+      // 资料渲染出来 = 身份解析完了。页签要等这一步之后点，否则点了也不会挂载内容。
+      until(function () { return !!inPanel('.tb-eztb-kv'); }, function (resolved) {
+        add('深色：用户资料已解析（页签可以切了）', resolved, '');
+        if (!resolved) { finishDark(); return; }
+
+        // 成分扫描是异步的（名单命中不需要请求，但也要等扫描那一轮跑完）
+        until(function () { return !!document.querySelector('.tb-eztb-badge'); }, function (marked) {
+          add('深色：命中规则的成分徽章已标注', marked,
+              marked ? String(document.querySelector('.tb-eztb-badge').textContent) : '没找到');
+          if (marked) {
+            var badgeColors = contrastOf(document.querySelector('.tb-eztb-badge'));
+            add('深色：成分徽章文字对比度 ≥ 3:1', badgeColors.ratio >= 3,
+                badgeColors.ratio.toFixed(2) + ':1（' + badgeColors.text + ' on ' + badgeColors.bg + '）');
+          }
+
+          var postsTab = inPanel('.tb-eztb-tab[data-tab="posts"]');
+          add('深色：找到「发帖」页签', !!postsTab, '');
+          if (!postsTab) { finishDark(); return; }
+          postsTab.click();
+
+          until(function () { return !!inPanel('.tb-eztb-pie-track'); }, function (hasTrack) {
+            add('深色：空数据饼图渲染出底环', hasTrack, '');
+            if (hasTrack) {
+              var track = inPanel('.tb-eztb-pie-track');
+              add('深色：底环没有写死的内联 stroke（颜色由 CSS 变量决定）',
+                  !track.hasAttribute('stroke'), track.getAttribute('stroke') || '无 stroke 属性');
+              var trackStroke = getComputedStyle(track).stroke;
+              // --tb-eztb-pie-track 的深色值是 #343a41；亮色（旧代码里写死的那个）是 #eef0f3
+              add('深色：底环是深色（不是写死的那圈亮灰）',
+                  trackStroke === 'rgb(52, 58, 65)',
+                  trackStroke + ' / 亮色写死值应为 rgb(238, 240, 243)');
+            }
+            var empty = inPanel('.tb-eztb-pie-empty');
+            if (empty) {
+              var emptyRatio = contrast(getComputedStyle(empty).color, dialogBg);
+              add('深色：饼图提示文字对比度 ≥ 4.5:1', emptyRatio >= 4.5, emptyRatio.toFixed(2) + ':1');
+            }
+
+            // 深色下弹窗里不许残留亮色底（写死 #fff 的那类会被这条抓到）
+            var lightSurfaces = Array.prototype.filter.call(
+              dialog.querySelectorAll('*'),
+              function (el) { return getComputedStyle(el).backgroundColor === 'rgb(255, 255, 255)'; }
+            );
+            add('深色：弹窗内没有残留的纯白底元素', lightSurfaces.length === 0,
+                lightSurfaces.slice(0, 3).map(function (el) { return el.className; }).join(' / ') || '无');
+
+            finishDark();
+          }, 150);
+        }, 50);
+      }, 100);
+    }, 100);
+  }, 100);
+</script>
+</body></html>`;
+checkInlineScripts(DARK_PAGE, "深色页面");
 
 // ── 本地服务：托管页面 + 转发请求 + 收集结果 ─────────────────────────
 let resolveResult;
+let resolveDarkResult;
 let hiddenStubHits = 0;
 const resultPromise = new Promise((resolve) => {
 	resolveResult = resolve;
+});
+const darkResultPromise = new Promise((resolve) => {
+	resolveDarkResult = resolve;
 });
 
 const server = http.createServer(async (req, res) => {
@@ -1113,10 +1322,25 @@ const server = http.createServer(async (req, res) => {
 		return;
 	}
 
+	if (req.method === "GET" && url.pathname === "/dark") {
+		res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+		res.end(DARK_PAGE);
+		return;
+	}
+
 	if (url.pathname === "/result") {
 		const chunks = [];
 		for await (const chunk of req) chunks.push(chunk);
 		resolveResult(Buffer.concat(chunks).toString("utf8"));
+		res.writeHead(200);
+		res.end("ok");
+		return;
+	}
+
+	if (url.pathname === "/result-dark") {
+		const chunks = [];
+		for await (const chunk of req) chunks.push(chunk);
+		resolveDarkResult(Buffer.concat(chunks).toString("utf8"));
 		res.writeHead(200);
 		res.end("ok");
 		return;
@@ -1208,30 +1432,90 @@ const timeout = new Promise((resolve) =>
 	setTimeout(() => resolve("__TIMEOUT__"), 240_000),
 );
 const raw = await Promise.race([resultPromise, timeout]);
+// 主流程已经交卷，先把这台浏览器收掉，深色那一遍再单开一台
 child.kill();
-server.close();
 
 if (raw === "__TIMEOUT__") {
+	server.close();
 	console.error("浏览器未在 240 秒内返回结果");
 	process.exit(1);
 }
 
-const match = raw.match(/TBSTART([\s\S]*?)TBEND/);
-if (!match) {
-	console.error("结果格式异常：", raw.slice(0, 800));
-	process.exit(1);
+/**
+ * 深色模式单独跑一次：同一台无头 Edge，多一个
+ * `--blink-settings=preferredColorScheme=0`（实测这个值是深色，1/2 是亮色）。
+ * 界面颜色全是 CSS 决定的，不真的在深色偏好下量一遍，改坏了也没人知道。
+ */
+async function runDarkStage() {
+	const darkProfile = fs.mkdtempSync(path.join(os.tmpdir(), "eztb-dark-"));
+	const darkChild = spawn(
+		browser,
+		[
+			"--headless=new",
+			"--disable-extensions",
+			"--no-first-run",
+			"--disable-gpu",
+			"--blink-settings=preferredColorScheme=0",
+			`--user-data-dir=${darkProfile}`,
+			`http://127.0.0.1:${port}/dark`,
+		],
+		{ stdio: "ignore" },
+	);
+	const darkTimeout = new Promise((resolve) =>
+		setTimeout(() => resolve("__TIMEOUT__"), 120_000),
+	);
+	const result = await Promise.race([darkResultPromise, darkTimeout]);
+	darkChild.kill();
+	return result;
 }
+
+const darkRaw = await runDarkStage();
+child.kill();
+server.close();
+
+function parseResults(label, rawText, expectedMin) {
+	const match = rawText.match(/TBSTART([\s\S]*?)TBEND/);
+	if (!match) {
+		console.error(`${label}结果格式异常：`, String(rawText).slice(0, 800));
+		process.exit(1);
+	}
+	const parsed = match[1]
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => {
+			const [status, testLabel, detail] = line.split("|");
+			return { status, label: testLabel, detail };
+		});
+	// 结果条数太少说明中途死掉了，别当成"全绿"
+	if (parsed.length < expectedMin) {
+		console.error(
+			`${label}只返回了 ${parsed.length} 条断言（至少应有 ${expectedMin} 条），这通常意味着页面中途挂了`,
+		);
+		process.exit(1);
+	}
+	return parsed;
+}
+
+const allResults = [
+	...parseResults("亮色", raw, 100).map((item) => ({ ...item, group: "亮色" })),
+	...parseResults("深色", darkRaw, 8).map((item) => ({ ...item, group: "深色" })),
+];
 
 let failures = 0;
 // 「隐藏发帖记录」那条断言依赖这个桩；桩没被命中说明拦截条件写错了（比如 uid 没出现在请求体里）
 console.log(`  隐藏发帖桩命中 ${hiddenStubHits} 次`);
-for (const line of match[1].trim().split("\n")) {
-	const [status, label, detail] = line.split("|");
-	if (status === "PASS") {
-		console.log(`  PASS  ${label}${detail ? ` — ${detail}` : ""}`);
+let currentGroup = null;
+for (const item of allResults) {
+	if (item.group !== currentGroup) {
+		currentGroup = item.group;
+		console.log(`\n【${currentGroup}模式】`);
+	}
+	if (item.status === "PASS") {
+		console.log(`  PASS  ${item.label}${item.detail ? ` — ${item.detail}` : ""}`);
 	} else {
 		failures += 1;
-		console.error(`  FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
+		console.error(`  FAIL  ${item.label}${item.detail ? ` — ${item.detail}` : ""}`);
 	}
 }
 console.log(failures === 0 ? "\n浏览器端验证全部通过。" : `\n${failures} 项失败。`);
