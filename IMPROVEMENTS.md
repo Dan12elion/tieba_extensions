@@ -40,12 +40,13 @@
 > 而且 esbuild 的模块路径注释（上游 SDK 与 node_modules 都有）里带着工作目录相关的路径，
 > 会让产物**换个目录布局就变**。
 >
-> **仍没在真环境确认**：CI 本身（GitHub Actions 上跑 `bun install` 那一段）没实际跑过。
-> 但"按锁文件检出上游 → 构建 → 产物与仓库里的逐字符相同"这条链路，已在本机用临时目录
-> 完整模拟（`fetch --depth 1 origin <sha>` → `submodule update --init --recursive` → 比对 sha256）。
-> 1.8.1 又补了两件事：按提交号 `fetch --depth 1` 在本机复现通过（GitHub 允许按 SHA 取），
-> 且被锁的上游提交里 `packages/sdk` 的 gitlink 正是锁文件记的那个 SDK 提交——
-> 两层锁自洽。**但 `bun install --frozen-lockfile` 那一段仍然只能在 Actions 上验证。**
+> **已确认**（2026-09-28）：整条链路在 GitHub Actions 上真跑通了，`main@e3ef7ea` 的 run 全绿——
+> 按锁文件的提交 SHA 取上游、`bun install --frozen-lockfile`、构建、
+> `git diff --exit-code -- dist` 为空、`verify` 51 项、`keyword-test` 70 项。
+> 也就是说产物**在 Linux runner 上也能逐字节重建**，不只是在本机成立。
+> 下面这些是本机侧的补充验证，留着说明方法论：把工程换目录布局重建比 sha256、
+> 按提交号 `fetch --depth 1`（GitHub 允许按 SHA 取）、被锁的上游提交里 `packages/sdk` 的
+> gitlink 正是锁文件记的那个 SDK 提交（两层锁自洽）。
 > §2.2 里我原本建议锁**每个源文件的 sha256**，实际落地用的是「版本 + 许可 + 提交号（SDK 与上游检出各一个）」——
 > 提交号已经能唯一定位源码，逐文件 sha256 只是在同一提交号被篡改时才多一层，代价却是每次上游更新都要重算一遍清单，不值。
 

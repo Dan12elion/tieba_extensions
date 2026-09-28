@@ -358,7 +358,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 |---|---|---|
 | `typecheck.mjs` | 用根 `tsconfig.json` 跑 `tsc --noEmit`（typescript 从上游借） | 别名解析、参数形状、字段是否存在（esbuild 不做类型检查） |
 | `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 与浏览器 shim 跑一遍逐字符比对；另把 Greasy Fork 的硬性要求写成 V7 一组断言；内嵌依赖的版本/许可/提交号与 `sdk.lock.json` 核对 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项、NOTICE 与真实依赖脱节 |
-| `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**这套 CI 还没在 GitHub 上实跑过**，但两个会让它必红的结构性问题（§5 #39、#40）已经修掉，整条"取上游 → 构建 → 比产物"的链路在本机用临时目录模拟过 |
+| `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**2026-09-28 已在 GitHub 上实跑通过**（`main@e3ef7ea`，见 §9.1）：按 SHA 取上游、`bun install --frozen-lockfile`、产物同步校验、verify、keyword-test 全部 success。`browser-suites` 那个 job 仍是 skipped（只在 `workflow_dispatch` 跑），所以真机三套在 CI 上还没验过 |
 | `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` 三个纯逻辑模块做断言 | 成分规则、饼图算法、签到判定改坏（离线即可发现） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证** |
 | `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node。**跑两遍**：亮色那一遍走完整流程，深色那一遍加 `--blink-settings=preferredColorScheme=0`（实测这个值才是深色，1/2 都是亮色）只做配色与对比度 | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合、弹窗焦点陷阱（含反向 Tab，§5 #41）、**深色模式的底色/底环颜色/文字与徽章对比度/无残留白底**（§5 #42） |
@@ -454,6 +454,13 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 
 改动完的基线（2026-09-28 本机实测）：typecheck 0 错 / verify 51 / keyword-test 70 /
 live-test 33 / click-test 170（其中深色模式 16 条）/ page-test 68，全绿。
+
+**同一天推上 `main` 之后，CI 第一次真跑也通过了**（2026-09-28，`main@e3ef7ea` 的 push 触发）：
+`离线校验` job 的每一步都是 success——按锁文件的提交 SHA 取上游、`bun install --frozen-lockfile`、
+构建、**`git diff --exit-code -- dist` 为空**、`verify` 51 项、`keyword-test` 70 项。
+那条"产物与源码同步"为空是关键：它说明产物在 **Linux runner 上也能逐字节重建**，
+原先只在本机成立（§5 #39/#40 那两个坑修掉的直接产出）。
+`真机测试（手动触发）` job 按设计 skipped——`live`/`click`/`page` 三套在 CI 上**仍未跑过**。
 
 **1.8.0 · 对标同类项目后的一轮工程化 + 几个具体问题**
 

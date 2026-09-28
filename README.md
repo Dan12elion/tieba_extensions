@@ -194,9 +194,11 @@
 `live-test` / `click-test` / `page-test` 依赖真实接口与无头浏览器，放在同一个 workflow 的
 `workflow_dispatch` 里手动触发，不进 PR 门禁。
 
-> 这套 CI **写好后还没在 GitHub 上实际跑过**。它需要 clone 上游 eztb（含 submodule）
-> 并 `bun install` 一次——本机开发不需要装 bun，但 CI 里 esbuild / typescript / effect
-> 都得从上游装出来。第一次跑起来可能要调。
+> 这套 CI 已经在 GitHub 上跑过并通过（2026-09-28，`main@e3ef7ea` 的 push 触发）：
+> 从锁文件记的提交取上游 → `bun install --frozen-lockfile` → 构建 →
+> **`git diff --exit-code -- dist` 为空** → `verify` 51 项 → `keyword-test` 70 项，全绿。
+> 最后那条同时证明了产物在 Linux runner 上能逐字节重建，不只是在本机成立。
+> 需要装 bun 只是因为 esbuild / typescript / effect 都得从上游装出来——本机开发不需要它。
 
 ## 目录结构
 
