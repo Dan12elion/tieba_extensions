@@ -22,6 +22,8 @@ import {
 } from "../core/replyFloor.ts";
 import {
 	type ForumCounts,
+	buildForumFilterHint,
+	buildForumFilterOptionsHtml,
 	buildForumListHtml,
 	buildForumPieSvg,
 	buildPieNotes,
@@ -30,7 +32,16 @@ import {
 	postRowSubParts,
 } from "../core/postStats.ts";
 import { type ForumActivity, loadForumActivity } from "../core/forumActivity.ts";
-import { findSignInForums, signInSummary } from "../core/activityRule.ts";
+import {
+	UNKNOWN_FORUM,
+	findSignInForums,
+	signInSummary,
+} from "../core/activityRule.ts";
+import {
+	PANEL_TABS,
+	type PanelTabId,
+	normalizePanelTabId,
+} from "../core/panelTabs.ts";
 import {
 	HIDDEN_FORUMS_NOTE,
 	NO_LEVEL_NOTE,
@@ -555,10 +566,13 @@ function renderFloorSlot(post: PostRow): string {
 
 function renderPostRow(post: PostRow): string {
 	const isReply = post.kind !== "topic";
+	// 行上带吧名（空吧名归到「未知贴吧」，与饼图/签到统计同一套口径），
+	// 「只看某个吧」的筛选直接读它，不再重新解析副标题里的吧名标签。
+	const forum = String(post.forumName ?? "").trim() || UNKNOWN_FORUM;
 	// 副标题由纯函数拼（吧名标签 / 楼中楼的回复对象 / 回复正文），见 core/postStats.ts
 	const subParts = postRowSubParts(post);
 	return (
-		`<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
+		`<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
 		`<span class="tb-eztb-row-main">` +
 		`<span class="tb-eztb-row-title">` +
 		`<span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>` +
@@ -566,7 +580,7 @@ function renderPostRow(post: PostRow): string {
 		`</span>` +
 		(subParts.length
 			? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>`
-			: `<span class="tb-eztb-row-sub">未知贴吧</span>`) +
+			: `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) +
 		`</span>` +
 		`<span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` +
 		(isReply ? renderFloorSlot(post) : "") +
@@ -689,6 +703,15 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	body.innerHTML =
 		// 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
 		`<div class="tb-eztb-piestat"></div>` +
+		// 按吧筛选：只作用于下面两个子页签的列表；饼图仍然是全量
+		// （把饼图也筛成"只有一个吧"，那张图就没有信息量了）
+		`<div class="tb-eztb-postfilter">` +
+		`<label class="tb-eztb-postfilter-label" for="tb-eztb-forumfilter">只看某个吧</label>` +
+		`<select id="tb-eztb-forumfilter" class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter">` +
+		`<option value="">全部吧</option>` +
+		`</select>` +
+		`<span class="tb-eztb-hint" data-role="filter-hint"></span>` +
+		`</div>` +
 		`<div class="tb-eztb-subtabs" role="tablist">` +
 		POST_SUBTABS.map(
 			(item) =>
@@ -703,6 +726,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	let counts: ForumCounts = {};
 	/** 展开"全部吧"列表的状态：面板重渲染会重建 DOM，状态得存在这里 */
 	let listOpen = false;
+	/** 「只看某个吧」选中的吧名（空串 = 全部吧）。只筛下面两个子页签的列表，饼图保持全量 */
+	let forumFilter = "";
 	/**
 	 * 还没回来的那几路 feed。
 
@@ -716,6 +741,70 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	/** 哪一路 feed 取数失败（失败要写进饼图旁边，不能只留在被隐藏的子页签里） */
 	const failures = new Map<PostSubTab, string>();
 	const pieEl = body.querySelector<HTMLElement>(".tb-eztb-piestat");
+	const filterSelect = body.querySelector<HTMLSelectElement>(
+		'[data-act="forum-filter"]',
+	);
+	const filterHintEl = body.querySelector<HTMLElement>(
+		'[data-role="filter-hint"]',
+	);
+
+	/** 某个子页签里当前可见（没被筛掉）的行数 */
+	const visibleRows = (subTab: PostSubTab): number =>
+		Array.from(
+			body.querySelectorAll<HTMLElement>(
+				`.tb-eztb-subpane[data-subpane="${subTab}"] .tb-eztb-row`,
+			),
+		).filter((row) => !row.classList.contains("tb-eztb-filtered-out")).length;
+
+	/**
+	 * 应用筛选：只切行的显隐（DOM 里保留全部行），所以翻页新加载出来的行也会被同一套规则筛。
+	 * 用 class 而不是 `hidden` 属性——行是 flex 布局，`hidden` 的 display 会被样式表覆盖。
+	 */
+	const applyForumFilter = () => {
+		for (const item of POST_SUBTABS) {
+			for (const row of body.querySelectorAll<HTMLElement>(
+				`.tb-eztb-subpane[data-subpane="${item.id}"] .tb-eztb-row`,
+			)) {
+				const matched =
+					!forumFilter ||
+					(row.dataset.forum ?? UNKNOWN_FORUM) === forumFilter;
+				row.classList.toggle("tb-eztb-filtered-out", !matched);
+			}
+		}
+		if (filterHintEl) {
+			filterHintEl.textContent = buildForumFilterHint(forumFilter, {
+				topic: visibleRows("topic"),
+				reply: visibleRows("reply"),
+			});
+		}
+	};
+
+	/**
+	 * 重建下拉框选项：吧名来自**已加载的行**，所以「加载更多」之后会多出新的吧。
+	 * 选项字符串没变就不动 DOM——否则每次新数据到齐都会把正在展开的下拉框收起来。
+	 */
+	const refreshForumFilter = () => {
+		if (!filterSelect) return;
+		const html = buildForumFilterOptionsHtml(counts, forumFilter);
+		if (filterSelect.dataset.options === html) return;
+		filterSelect.dataset.options = html;
+		filterSelect.innerHTML = html;
+		// 选中的吧在新数据里没有了（比如点过「刷新当前页签」），退回「全部吧」
+		if (
+			!Array.from(filterSelect.options).some(
+				(option) => option.value === forumFilter,
+			)
+		) {
+			forumFilter = "";
+		}
+		filterSelect.value = forumFilter;
+	};
+
+	filterSelect?.addEventListener("change", () => {
+		forumFilter = filterSelect.value;
+		applyForumFilter();
+	});
+
 	const updatePie = () => {
 		if (!pieEl) return;
 		const notes = buildPieNotes(
@@ -734,6 +823,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 				listOpen = !listOpen;
 				updatePie();
 			});
+		refreshForumFilter();
+		applyForumFilter();
 	};
 	updatePie();
 
@@ -921,19 +1012,13 @@ function renderCompositionTab(
 	})();
 }
 
-type TabId = "profile" | "composition" | "follow" | "forums" | "fans" | "posts";
+/** 页签名单来自 core/panelTabs.ts：设置里的「默认打开页签」用的是同一份，别在这里另起一份 */
+type TabId = PanelTabId;
 
-const TABS: Array<{ id: TabId; label: string }> = [
-	{ id: "profile", label: "资料" },
-	{ id: "composition", label: "成分" },
-	{ id: "follow", label: "关注的人" },
-	{ id: "forums", label: "关注的吧" },
-	{ id: "fans", label: "粉丝" },
-	{ id: "posts", label: "发帖" },
-];
+const TABS = PANEL_TABS;
 
 export interface UserPanelOptions {
-	/** 打开时停在哪个页签（默认「资料」） */
+	/** 打开时停在哪个页签；不传就用设置里的「默认打开页签」 */
 	tab?: TabId;
 }
 
@@ -941,7 +1026,8 @@ export function openUserPanel(
 	ref: UserRef,
 	options: UserPanelOptions = {},
 ): void {
-	const initialTab: TabId = options.tab ?? "profile";
+	const initialTab: TabId =
+		options.tab ?? normalizePanelTabId(getSettings().defaultTab);
 	const dialog = openDialog({
 		title: ref.nickname || ref.un || "贴吧用户",
 		subtitleHtml: "正在解析用户信息…",
@@ -972,6 +1058,25 @@ export function openUserPanel(
 	const initialized = new Set<TabId>();
 	let activeTabId: TabId = initialTab;
 	let currentIdentity: Identity | null = null;
+	/**
+	 * 用户**点过**的页签。
+
+	 * 解析用户信息是异步的（第一次要打接口），而这段时间里页签按钮已经能点。
+	 * 以前点击绑定写在解析完成之后，于是"解析中点的页签"被直接丢掉：解析完仍然停在
+	 * 默认页签，用户看到的就是"切换页签没反应、内容一直是加载中"。
+	 * 现在点击随时都记下来，解析一完成就按最后点的那个渲染。
+	 */
+	let requestedTab: TabId = initialTab;
+
+	// 页签点击**立刻**绑定（不等解析）：解析中只记下想看的页签，解析完再渲染
+	for (const tab of TABS) {
+		dialog.root
+			.querySelector(`.tb-eztb-tab[data-tab="${tab.id}"]`)
+			?.addEventListener("click", () => {
+				requestedTab = tab.id;
+				if (currentIdentity) switchTab(tab.id, currentIdentity);
+			});
+	}
 
 	const paneFor = (id: TabId): HTMLElement => {
 		const existing = panes.get(id);
@@ -1075,16 +1180,8 @@ export function openUserPanel(
 			// 清掉解析阶段的占位内容，之后各页签内容都放进自己的容器
 			dialog.body.innerHTML = "";
 
-			// 绑定页签点击：读 currentIdentity，刷新后自动用最新数据
-			for (const tab of TABS) {
-				dialog.root
-					.querySelector(`.tb-eztb-tab[data-tab="${tab.id}"]`)
-					?.addEventListener("click", () => {
-						if (currentIdentity) switchTab(tab.id, currentIdentity);
-					});
-			}
-
-			switchTab(initialTab, identity);
+			// 解析期间用户可能已经点过别的页签，按最后点的那个渲染
+			switchTab(requestedTab, identity);
 		} catch (error) {
 			const message = errorMessage(error);
 			const needBduss = /BDUSS/i.test(message);

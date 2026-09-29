@@ -39,6 +39,7 @@ async function bundle(source, name) {
 await bundle("src/core/composition.ts", "composition.mjs");
 const postStats = await bundle("src/core/postStats.ts", "postStats.mjs");
 const activityRule = await bundle("src/core/activityRule.ts", "activityRule.mjs");
+const panelTabs = await bundle("src/core/panelTabs.ts", "panelTabs.mjs");
 
 const {
 	parseRules,
@@ -748,6 +749,81 @@ console.log("签到号判定");
 	check(
 		"没有候选时也给一句明确的话",
 		signInSummary([], 6, { topics: 0, replies: 0 }).includes("没有发现"),
+	);
+}
+
+// ── 「发帖」页签里的按吧筛选 ──────────────────────────────────────────
+console.log("按吧筛选");
+{
+	const { buildForumFilterOptionsHtml, buildForumFilterHint } = postStats;
+
+	const options = buildForumFilterOptionsHtml(
+		{ 百度: 2, 贴吧: 1, 未知贴吧: 3 },
+		"",
+	);
+	check(
+		"下拉框：第一项是「全部吧」且默认选中，其余按条数从多到少",
+		options.startsWith('<option value="" selected>全部吧</option>') &&
+			options.indexOf("未知贴吧（3）") < options.indexOf("百度（2）") &&
+			options.indexOf("百度（2）") < options.indexOf("贴吧（1）"),
+		options,
+	);
+	check(
+		"下拉框：能把当前选中的吧还原成 selected（重建选项后不会跳回全部吧）",
+		buildForumFilterOptionsHtml({ 百度: 1, 贴吧: 1 }, "贴吧").includes(
+			'<option value="贴吧" selected>贴吧（1）</option>',
+		),
+		buildForumFilterOptionsHtml({ 百度: 1, 贴吧: 1 }, "贴吧"),
+	);
+	check(
+		"下拉框：吧名转义（吧名来自页面数据，不能拼进 HTML）",
+		buildForumFilterOptionsHtml({ '"><img src=x>吧': 1 }, "").includes(
+			"&quot;&gt;&lt;img",
+		),
+		buildForumFilterOptionsHtml({ '"><img src=x>吧': 1 }, ""),
+	);
+	check(
+		"提示：选中某个吧时给出主题帖 / 回复的条数",
+		buildForumFilterHint("百度", { topic: 3, reply: 5 }) ===
+			"筛选「百度」：主题帖 3 个 · 回复 5 条",
+		buildForumFilterHint("百度", { topic: 3, reply: 5 }),
+	);
+	check(
+		"提示：这个吧一条都没有时要明说，而不是显示 0 条",
+		buildForumFilterHint("百度", { topic: 0, reply: 0 }) ===
+			"筛选「百度」：该用户在这个吧没有发帖或回复",
+		buildForumFilterHint("百度", { topic: 0, reply: 0 }),
+	);
+	check(
+		"提示：不筛选（全部吧）时返回空串，界面上不留一行废话",
+		buildForumFilterHint("", { topic: 9, reply: 9 }) === "",
+		JSON.stringify(buildForumFilterHint("", { topic: 9, reply: 9 })),
+	);
+}
+
+// ── 页签注册表（设置里的「默认打开页签」） ────────────────────────────
+console.log("页签注册表");
+{
+	const { PANEL_TABS, DEFAULT_PANEL_TAB, normalizePanelTabId } = panelTabs;
+	check(
+		"六个页签的 id 与标签都齐（面板、设置、存储共用这一份）",
+		PANEL_TABS.length === 6 &&
+			PANEL_TABS.map((tab) => tab.id).join(",") ===
+				"profile,composition,follow,forums,fans,posts",
+		JSON.stringify(PANEL_TABS),
+	);
+	check(
+		"默认页签是「资料」",
+		DEFAULT_PANEL_TAB === "profile" &&
+			PANEL_TABS[0].id === "profile" &&
+			PANEL_TABS[0].label === "资料",
+	);
+	check(
+		"非法值一律退回默认页签（存储里的旧值 / 手改的导入 JSON 都不能把面板打开成空白）",
+		normalizePanelTabId("nope") === "profile" &&
+			normalizePanelTabId(undefined) === "profile" &&
+			normalizePanelTabId(123) === "profile" &&
+			normalizePanelTabId("fans") === "fans",
 	);
 }
 

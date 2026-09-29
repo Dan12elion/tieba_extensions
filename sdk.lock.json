@@ -3,7 +3,7 @@
   "eztb": {
     "repository": "https://github.com/Dilettante258/eazy-tieba",
     "branch": "v3",
-    "commit": "c772db664deff2d04c8103f940401b631e322110"
+    "commit": "8ca0637c9c4082979f61626718b072a076ba7508"
   },
   "sdk": {
     "name": "tieba.js",
@@ -12,7 +12,7 @@
     "author": "Dilettante258",
     "repository": "https://github.com/Dilettante258/tieba.js",
     "branch": "v3",
-    "commit": "338a81eacf4eb326fcb3ffbfa55d46395117a2e9"
+    "commit": "db48716f754c4cfd8ebbeb87d447c378dafeb0eb"
   },
-  "lockedAt": "2026-09-28"
+  "lockedAt": "2026-09-30"
 }

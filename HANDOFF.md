@@ -1,7 +1,7 @@
 # eztb-userscript 项目交接文档
 
 > 新对话继续这个项目时，读完这份就能恢复全部上下文。
-> 最后更新 2026-09-28 · 当前版本 **1.8.1**
+> 最后更新 2026-09-30 · 当前版本 **1.8.2**
 > 仓库（公开）：<https://github.com/Dan12elion/tieba_extensions>
 > 用户装的那条对应 `dist/tieba-eztb-toolbox.user.js`
 
@@ -305,6 +305,7 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 32 | 复查揪出两处：① 某一路"第一页成功、翻后页失败"时仍写「饼图里缺这一路」，可前面几页的条数明明算进去了；② 面板与「成分 / 签到号检测」同时取同一页回复时，吧名反查各发一遍（实测 9 个吧发了 15 次） | ① `buildPieNotes` 没有"这一路有没有已经加载出来的行"这个信息；② `resolveForumNames` 的 `wanted` 是开头算一次的，轮到某个 id 时另一条路径可能已经把它取回来了——**in-flight 去重挡得住"同时在飞"，挡不住"已经写进缓存、只是不在我的 wanted 快照里"** | ① `PieFeedState.hasRows`：取到过行就改说「后续页没取到（饼图只统计到已经加载出来的那部分）」；② 反查加按 id 去重的 in-flight 表，并在**取数前**与**等完限速名额后**各回看一次缓存。实测两路并发 15 次 → 9 次（正好等于该页唯一吧数）；live-test 加了自归一断言（不去重会是唯一吧数的两倍） |
 | 33 | 提交信息与内容不符 | `3b183b2` 的信息是 `docs: 把子代理提到的两个小遗留记进「可以继续做的事」`，实际同时带了 #32 的**代码修复**（`postStats.ts` / `userPost.ts` / `userPanel.ts`）、两份测试的改动与重建的产物。看 `git log --oneline` 会以为那一版只动了文档 | 把 §9.2 里那两条（同一提交已经修掉的"遗留"）移走、在 §9.1 补记归属；以后 `docs:` 只提交文档，动代码或产物写 `feat:` / `fix:` |
 | 34 | 仓库里其实**没有可用的类型检查**：`tsc --noEmit` 报 100+ 个错 | 根 `tsconfig.json` 只有 `baseUrl` 和一条指向 `../eztb/packages/sdk/dist/index.d.ts` 的 `paths`——那个 `dist` 根本不存在（SDK 从**源码**消费）；而 src 里的相对导入带 `.ts` 后缀，又用了 `tieba.js` / `tieba.js/generated/*` / `eztb-internal/*` / `effect` 这些构建期别名，`tsc` 一个都解析不到。能跑的配置此前只存在于被 gitignore 的 `dist/.verify/tsconfig.check.json` 里 | 把配置并进根 `tsconfig.json`（`allowImportingTsExtensions` + 与 `shims-plugin.mjs` 对齐的 `paths`，注释里写明要一起改），新增 `scripts/typecheck.mjs`（从上游借 typescript，缺了会报出路径），并写进测试清单 |
+| 47 | 面板刚打开、页面还在「正在解析用户信息…」时点别的页签，解析完仍然停在默认页签——用户看到的是"点了没反应、内容一直是加载中" | 页签点击的绑定写在 `resolveIdentity()` **之后**：解析这段时间里根本没有监听器。而页签按钮此时已经能点，因为 `openDialog` 自己绑了一份点击（只负责高亮）——于是出现"按钮高亮切了、内容没切" | 点击**立刻**绑定（`requestedTab` 记下最后点过的页签），解析完成按 `switchTab(requestedTab, identity)` 渲染。click-test 阶段 9 用**同步点击**复现（网络回调必然晚于当前这一帧，所以点击一定发生在解析中）；反向验证：把 `requestedTab` 换回 `initialTab` → 该断言必红（实测"可见页签=profile"） |
 | 35 | 从面板底部点「设置」之后，旧面板的捕获阶段 keydown 监听器永远留在 document 上，`onClose` 也从不触发 | `closeOpenDialog()`（`ui/modal.ts`）只做了 `document.querySelector(".tb-eztb-mask")?.remove()`，而摘监听器/触发回调/还焦点都在 `close()` 里；`openDialog()` 一进来就调 `closeOpenDialog()`，正好走这条路 | 把当前弹窗的 `close` 存在模块级 `activeClose` 上，`closeOpenDialog()` 改成调它（再兜底 remove 一次）。1.8.0 顺带补了 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后把焦点还给打开它的按钮。**今天没有可见症状**（没人传 `onClose`），但只要有人用 `onClose` 做清理就会变成真 bug |
 | 36 | 「明明查过了，重开面板还是重新请求」——因为缓存根本没写进去 | 五个缓存模块各自 `try { GM_setValue(...) } catch { /* 忽略存储失败 */ }`，写失败是静默的。另外整张表 JSON 塞进单个 value，条数一多会撞油猴的存储配额 | 抽 `core/kvCache.ts`：统一实现 + 把失败记进 `getStorageIssues()`（诊断面板会显示）+ 失败时砍掉一半重试一次。**以后新增缓存一律用它，不要再抄第六份** |
 | 37 | 产物 NOTICE 里 SDK 的来源是 `Dilettante258/tieba-toolbox`，许可写的是"未声明"，`verify.mjs` 还把这两条**断言**了 | 来源 URL 手写、仓库后来改名成 `eazy-tieba`；而 `packages/sdk` 其实是 **submodule**（指向 `Dilettante258/tieba.js`），它的 `package.json` 里明确写着 `license: ISC`。"没有 license 字段"这个结论从来没核对过 | NOTICE 改成构建时由 `scripts/deps-info.mjs` 从磁盘上的 `package.json` + `git rev-parse HEAD` 生成；加 `sdk.lock.json` 锁版本，构建对不上就失败；`verify.mjs` 的期望值也从同一份数据算出来。**教训：断言里写死的外部事实要有出处，否则等于把错误钉成了测试** |
@@ -390,7 +391,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 | 关注的人 | `getFollow`，分页加载（每页 20） |
 | 关注的吧 | `getLikeForum`（带 Lv.N 与称号），空则回退 `getHiddenLikeForum`（等级取自 `grade` 的键）；没等级的行带「查等级」（点了才查，§4.2） |
 | 粉丝 | `getFans` |
-| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼**，回复与楼中楼显示**回复正文**、带「查楼层」（点了才查，§4.5）；页签顶部是**「发帖都发在哪些吧」的占比饼图** |
+| 发帖 | 拆成 **主题帖 / 回复** 两个子页签，各自独立翻页；每条标注 **主题 / 回复 / 楼中楼**，回复与楼中楼显示**回复正文**、带「查楼层」（点了才查，§4.5）；页签顶部是**「发帖都发在哪些吧」的占比饼图**，饼图下面可以**只看某个吧** |
 
 其他：
 
@@ -404,6 +405,11 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
   不能写成"他从来不发言"；门槛在设置里（`signInLevelThreshold`，默认 6）。
 - **隐藏发帖记录时说清原因**（§4.6）：不写"没有公开的主题帖"，而是「发帖信息设为私密」。
 - 面板底部 **「刷新当前页签」**：重新解析用户 + 重建当前页签，其它页签保留；「发帖」里刷新后回到原来选中的子页签。
+- **「发帖」里按吧筛选**：下拉框列的是**他已经发过言的吧**（带条数，1.8.2 新增），选中后两个子页签
+  一起只留这个吧的行，旁边写明"筛的是哪个吧、多少条"。实现上只切行的 class（DOM 留着），
+  所以翻页新加载的行会被同一套规则筛；**饼图保持全量**（筛成一段没有信息量）。
+- **打开面板时默认停在哪个页签可以设置**（1.8.2 新增，默认「资料」）：页签名单在
+  `core/panelTabs.ts`，面板、设置面板、设置存储共用这一份；页面上的「成分」标记仍直接开「成分」。
 - **页面成分标注**：配好规则后，命中的用户在「查询」旁多一个彩色标记，hover 写原因，点它直接开「成分」页签。
   显示几个由头部行剩余空隙决定（最多 3 个，放不下收成 `+N`、再放不下退成一个圆点），**任何情况下都不折行**（§5 #14）。
 - **设置导入 / 导出**（1.8.0）：设置面板底部「导出到文本框 / 复制 / 从文本框导入」。
@@ -437,6 +443,15 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.8.2 · 用户提的三件事（切页签丢失 / 发帖按吧筛选 / 默认打开页签）+ 上游锁定更新**
+
+| 事项 | 做法 | 验证 |
+|---|---|---|
+| 解析中点页签会被丢掉（§5 #47） | 页签点击改成**立刻**绑定，用 `requestedTab` 记下最后点过的页签，解析完按它渲染 | click-test 阶段 9：**同步**点击复现（网络回调必然晚于这一帧）+ 反向验证（把 `requestedTab` 换成 `initialTab` → 该断言必红，实测"可见页签=profile"） |
+| 「发帖」加**按吧筛选** | 行上带 `data-forum`（空吧名归「未知贴吧」，与饼图同一口径）；下拉框选项与提示抽成纯逻辑（`buildForumFilterOptionsHtml` / `buildForumFilterHint`）；筛选只切行的 class，所以翻页新加载的行走同一套规则；**饼图保持全量** | keyword-test 6 项（按条数排序 / 还原选中 / 吧名转义 / 两种提示 / 不筛选时空串）+ click-test 7 项（下拉框来自已加载的行、默认「全部吧」、只剩该吧、确实筛掉别的吧、按布局量确认真的不可见、提示带吧名与条数、切回全部恢复） |
+| 设置里的**「打开面板时默认停在」** | 新增 `core/panelTabs.ts` 作页签注册表（面板 / 设置 / 存储共用一份）；`settings.defaultTab` 经 `normalizePanelTabId` 兜底，非法值退回「资料」 | keyword-test 3 项（六个页签齐全 / 默认值 / 非法值兜底）+ click-test 2 项（设置里有这一项且六选一、改成「关注的吧」后新开的面板直接停在那） |
+| `sdk.lock.json` 更新到当前上游 | 锁里钉的 eztb 提交是 6/11 的旧线，当前 v3 分支已改写：连它记的 `packages/sdk` 子模块提交都取不到了（`upload-pack: not our ref`），本机构建被自检挡住。现在钉当前 v3 顶端（eztb `8ca0637` + sdk `db48716`，正是本机这份干净的检出） | 产物里 SDK 段**逐字节没变**（只有 NOTICE 的提交号那两行变），说明换锁没引入行为差异；CI 按新提交 depth-1 取上游 + 子模块，比取一个已被改写的提交可靠 |
 
 **1.8.1 · 一轮独立审查后的收尾**
 
@@ -625,8 +640,8 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test`）。
-   当前基线（1.8.1 实测）：typecheck 0 错 / verify 51 / keyword-test 70 / live-test 33 / click-test 170 /
-   page-test 68 全绿（page-test 的项数随本机有的快照数量变化）。
+当前基线（1.8.2 实测）：typecheck 0 错 / verify 51 / keyword-test 79 / live-test 33 / click-test 184 /
+   page-test 34 全绿（page-test 的项数随本机有的快照数量变化——本机现在只有 1 份快照 × 2 种宽度）。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。
 4. 涉及协议或数据模型的疑问**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs` 或

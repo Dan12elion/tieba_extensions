@@ -15,6 +15,10 @@ import { clearForumLevelCache } from "../core/forumLevel.ts";
 import { clearReplyFloorCache } from "../core/replyFloor.ts";
 import { clearForumActivityCache } from "../core/forumActivity.ts";
 import { escapeHtml } from "../core/util.ts";
+import {
+	PANEL_TABS,
+	normalizePanelTabId,
+} from "../core/panelTabs.ts";
 import { openDialog } from "../ui/modal.ts";
 import { clearCompositionCache, rescanPage } from "./compositionScan.ts";
 
@@ -84,6 +88,20 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	);
 	parts.push(
 		`<div class="tb-eztb-hint">每页 20 条。</div>`,
+	);
+	parts.push(`</div>`);
+
+	parts.push(`<div class="tb-eztb-field">`);
+	parts.push(`<label for="tb-eztb-default-tab">打开面板时默认停在</label>`);
+	parts.push(`<select id="tb-eztb-default-tab" class="tb-eztb-input">`);
+	for (const tab of PANEL_TABS) {
+		parts.push(
+			`<option value="${tab.id}"${current.defaultTab === tab.id ? " selected" : ""}>${tab.label}</option>`,
+		);
+	}
+	parts.push(`</select>`);
+	parts.push(
+		`<div class="tb-eztb-hint">点用户名旁的「查询」时先显示哪个页签。页面上的「成分」标记仍然直接打开「成分」页签，不受这里影响。</div>`,
 	);
 	parts.push(`</div>`);
 
@@ -192,6 +210,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 			compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
 			compositionCacheDays: Number(value("tb-eztb-cachedays")),
 			signInLevelThreshold: Number(value("tb-eztb-signin-level")),
+			defaultTab: normalizePanelTabId(value("tb-eztb-default-tab")),
 		};
 	};
 
@@ -222,6 +241,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 		set("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
 		set("tb-eztb-cachedays", String(settings.compositionCacheDays));
 		set("tb-eztb-signin-level", String(settings.signInLevelThreshold));
+		set("tb-eztb-default-tab", settings.defaultTab);
 	};
 
 	dialog.body

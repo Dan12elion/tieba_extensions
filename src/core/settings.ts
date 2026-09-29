@@ -7,6 +7,11 @@
  */
 
 import { log } from "./log.ts";
+import {
+	DEFAULT_PANEL_TAB,
+	normalizePanelTabId,
+	type PanelTabId,
+} from "./panelTabs.ts";
 
 /**
  * 当前设置结构版本。
@@ -45,6 +50,8 @@ export interface ToolboxSettings {
 	 * 等级 ≥ 这个值、且最近一页发帖里在该吧 0 条发言的吧会被标出来。
 	 */
 	signInLevelThreshold: number;
+	/** 打开用户面板时默认停在哪个页签（见 core/panelTabs.ts 的页签注册表） */
+	defaultTab: PanelTabId;
 }
 
 export const DEFAULT_SETTINGS: ToolboxSettings = {
@@ -57,6 +64,7 @@ export const DEFAULT_SETTINGS: ToolboxSettings = {
 	compositionMaxPerPage: 20,
 	compositionCacheDays: 3,
 	signInLevelThreshold: 6,
+	defaultTab: DEFAULT_PANEL_TAB,
 };
 
 /** 存储里比 `ToolboxSettings` 多一个版本号 */
@@ -124,6 +132,7 @@ export function normalizeSettings(input: unknown): ToolboxSettings {
 			1,
 			18,
 		),
+		defaultTab: normalizePanelTabId(raw.defaultTab),
 	};
 }
 

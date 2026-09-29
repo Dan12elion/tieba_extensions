@@ -116,6 +116,44 @@ export function buildForumStats(counts: ForumCounts): ForumStat[] {
 }
 
 /**
+ * 「只看某个吧」下拉框的选项：`全部吧` + 每个吧的条数（按条数从多到少）。
+ *
+ * 选项值与行上的 `data-forum` 是同一个字符串（见 features/userPanel.ts 的 renderPostRow）。
+ * 吧名来自页面数据，属性与文本都要转义；`selected` 是当前选中的吧名——
+ * 重新构建选项（每次新数据到齐都会重建）之后必须把选中项还原，否则会跳回"全部吧"。
+ */
+export function buildForumFilterOptionsHtml(
+	counts: ForumCounts,
+	selected: string,
+): string {
+	const options = buildForumStats(counts).map((stat) => {
+		const value = escapeHtml(stat.forum);
+		const isSelected = stat.forum === selected ? " selected" : "";
+		return `<option value="${value}"${isSelected}>${value}（${stat.count}）</option>`;
+	});
+	return (
+		`<option value=""${selected ? "" : " selected"}>全部吧</option>` +
+		options.join("")
+	);
+}
+
+/**
+ * 筛选提示：选中某个吧时说明筛的是谁、命中多少条；这个吧一条也没有就明说。
+
+ * 不筛选（全部吧）时返回空串，界面上不留一行废话。
+ */
+export function buildForumFilterHint(
+	forum: string,
+	counts: { topic: number; reply: number },
+): string {
+	if (!forum) return "";
+	if (counts.topic + counts.reply === 0) {
+		return `筛选「${forum}」：该用户在这个吧没有发帖或回复`;
+	}
+	return `筛选「${forum}」：主题帖 ${counts.topic} 个 · 回复 ${counts.reply} 条`;
+}
+
+/**
  * 「查看全部 N 个吧」按钮 + 展开后的完整列表。
 
  * 饼图只画前几个吧、剩下的拢成「其它 N 个吧」，有些用户的"其它"占比很大，

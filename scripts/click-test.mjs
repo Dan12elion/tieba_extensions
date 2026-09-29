@@ -655,7 +655,117 @@ const PAGE = `<!doctype html>
 
   function extrasDone() {
     add('阶段 8 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-    finish();
+    phaseTabSwitchAndFilter();
+  }
+
+  /**
+   * 阶段 9：解析中点页签 / 「发帖」按吧筛选 / 「打开面板时默认停在」设置。
+   */
+  function phaseTabSwitchAndFilter() {
+    var closeOld = inPanel('.tb-eztb-close');
+    if (closeOld) closeOld.click();
+    var pagerBtn = document.querySelector('#pager-post .tb-eztb-btn');
+    add('（阶段 9）翻页用用户的按钮在', !!pagerBtn, '');
+    if (!pagerBtn) { finish(); return; }
+
+    /*
+     * ① 解析用户信息还没回来时点的页签不能被丢掉。
+     *
+     * 点开面板后**同步**点页签：网络回调要等当前这一帧的栈清空才会跑，
+     * 所以此刻一定还在"正在解析用户信息…"阶段。旧代码把页签点击绑定写在解析完成之后，
+     * 这一下点击会被直接丢掉，面板解析完仍然停在默认页签——这条断言在旧代码上必红。
+     */
+    pagerBtn.click();
+    var fansTab = inPanel('.tb-eztb-tab[data-tab="fans"]');
+    add('（阶段 9）面板刚出现时页签就能点', !!fansTab, '');
+    if (!fansTab) { finish(); return; }
+    fansTab.click();
+    until(function () {
+      var pane = inPanel('.tb-eztb-pane[data-pane="fans"]');
+      return !!pane && pane.classList.contains('active') && !!pane.querySelector('.tb-eztb-list');
+    }, function (ok) {
+      var visible = visiblePanes().map(function (p) { return p.dataset.pane; });
+      add('解析中点「粉丝」：解析完停在粉丝页签（点击没被丢掉）',
+          ok && visible.length === 1 && visible[0] === 'fans', '可见页签=' + visible.join(','));
+
+      // ② 「发帖」里的按吧筛选
+      var postsTab = inPanel('.tb-eztb-tab[data-tab="posts"]');
+      if (!postsTab) { finish(); return; }
+      postsTab.click();
+      until(function () {
+        var pane = inPanel('.tb-eztb-pane[data-pane="posts"]');
+        var sel = pane ? pane.querySelector('[data-act="forum-filter"]') : null;
+        return !!sel && sel.options.length > 1;
+      }, function (ready) {
+        var pane = inPanel('.tb-eztb-pane[data-pane="posts"]');
+        var sel = pane.querySelector('[data-act="forum-filter"]');
+        add('（阶段 9）「发帖」里有按吧筛选的下拉框，选项来自已加载的发帖',
+            ready, ready ? ('选项 ' + sel.options.length + ' 个') : '超时');
+        if (!ready) { finish(); return; }
+        add('（阶段 9）筛选下拉框默认选中「全部吧」',
+            sel.options[0].value === '' && sel.value === '', sel.options[0].textContent);
+
+        var forum = sel.options[1].value;
+        var allRows = pane.querySelectorAll('.tb-eztb-row').length;
+        sel.value = forum;
+        sel.dispatchEvent(new Event('change'));
+        var rows = Array.prototype.slice.call(pane.querySelectorAll('.tb-eztb-row'));
+        var matched = rows.filter(function (r) { return r.getAttribute('data-forum') === forum; });
+        var kept = rows.filter(function (r) { return !r.classList.contains('tb-eztb-filtered-out'); });
+        add('按吧筛选：只有这个吧的行留在列表里（两个子页签一起筛）',
+            matched.length > 0 && kept.length === matched.length &&
+              kept.every(function (r) { return r.getAttribute('data-forum') === forum; }),
+            '保留 ' + kept.length + ' / 该吧 ' + matched.length + ' / 总 ' + allRows);
+        add('按吧筛选：确实筛掉了别的吧的行', kept.length < allRows,
+            allRows + ' → ' + kept.length);
+        // 光有 class 不算数：在当前可见的子页签里按布局量一次，确认真的不可见了
+        var topicPane = subPane('topic');
+        var topicRows = Array.prototype.slice.call(topicPane.querySelectorAll('.tb-eztb-row'));
+        var topicVisible = topicRows.filter(function (r) { return r.getBoundingClientRect().height > 0; });
+        var topicMatched = topicRows.filter(function (r) { return r.getAttribute('data-forum') === forum; });
+        add('按吧筛选：被筛掉的行真的不可见（按布局量）',
+            topicVisible.length === topicMatched.length && topicVisible.length < topicRows.length,
+            '可见 ' + topicVisible.length + ' / 该吧 ' + topicMatched.length + ' / 总 ' + topicRows.length);
+        var hint = pane.querySelector('[data-role="filter-hint"]');
+        add('按吧筛选：提示里写明是哪个吧、多少条',
+            !!hint && hint.textContent.indexOf(forum) >= 0 &&
+              /主题帖|没有发帖或回复/.test(hint.textContent),
+            hint ? hint.textContent : '(没有提示元素)');
+        sel.value = '';
+        sel.dispatchEvent(new Event('change'));
+        add('按吧筛选：切回「全部吧」后所有行都回来',
+            rows.filter(function (r) { return !r.classList.contains('tb-eztb-filtered-out'); }).length === allRows,
+            '共 ' + allRows + ' 行');
+
+        // ③ 设置里的「打开面板时默认停在」
+        var settingsBtn = inPanel('.tb-eztb-foot [data-act="settings"]');
+        if (!settingsBtn) { finish(); return; }
+        settingsBtn.click();
+        until(function () { return !!inPanel('#tb-eztb-default-tab'); }, function (hasSelect) {
+          add('（阶段 9）设置里有「打开面板时默认停在」', hasSelect, '');
+          if (!hasSelect) { finish(); return; }
+          var select = inPanel('#tb-eztb-default-tab');
+          add('（阶段 9）默认页签的选项覆盖面板的六个页签',
+              select.options.length === 6, '选项 ' + select.options.length + ' 个');
+          select.value = 'forums';
+          var saveBtn = inPanel('[data-act="save"]');
+          if (!saveBtn) { finish(); return; }
+          saveBtn.click();
+          pagerBtn.click();
+          until(function () {
+            var pane = inPanel('.tb-eztb-pane[data-pane="forums"]');
+            return !!pane && pane.classList.contains('active');
+          }, function (landed) {
+            var visible = visiblePanes().map(function (p) { return p.dataset.pane; });
+            add('把默认页签改成「关注的吧」后，新开的面板直接停在关注的吧',
+                landed && visible.length === 1 && visible[0] === 'forums',
+                '可见页签=' + visible.join(','));
+            add('阶段 9 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+            finish();
+          }, 200);
+        }, 200);
+      }, 200);
+    }, 200);
   }
 
   /**

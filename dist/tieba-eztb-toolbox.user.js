@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.8.1
+// @version             1.8.2
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -372,6 +372,20 @@
   };
   var requestQueue = new SerialQueue(400);
 
+  // src/core/panelTabs.ts
+  var PANEL_TABS = [
+    { id: "profile", label: "资料" },
+    { id: "composition", label: "成分" },
+    { id: "follow", label: "关注的人" },
+    { id: "forums", label: "关注的吧" },
+    { id: "fans", label: "粉丝" },
+    { id: "posts", label: "发帖" }
+  ];
+  var DEFAULT_PANEL_TAB = "profile";
+  function normalizePanelTabId(value) {
+    return PANEL_TABS.some((tab) => tab.id === value) ? value : DEFAULT_PANEL_TAB;
+  }
+
   // src/core/settings.ts
   var SETTINGS_SCHEMA_VERSION = 2;
   var STORAGE_KEY = "tbEztbToolboxSettingsV1";
@@ -384,7 +398,8 @@
     compositionAuto: true,
     compositionMaxPerPage: 20,
     compositionCacheDays: 3,
-    signInLevelThreshold: 6
+    signInLevelThreshold: 6,
+    defaultTab: DEFAULT_PANEL_TAB
   };
   var cache2 = null;
   function clampNumber(value, fallback, min4, max6 = Number.POSITIVE_INFINITY) {
@@ -432,7 +447,8 @@
         DEFAULT_SETTINGS.signInLevelThreshold,
         1,
         18
-      )
+      ),
+      defaultTab: normalizePanelTabId(raw.defaultTab)
     };
   }
   var MIGRATIONS = {
@@ -30355,6 +30371,19 @@ ${endStackCall}`;
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-default-tab">打开面板时默认停在</label>`);
+    parts2.push(`<select id="tb-eztb-default-tab" class="tb-eztb-input">`);
+    for (const tab of PANEL_TABS) {
+      parts2.push(
+        `<option value="${tab.id}"${current.defaultTab === tab.id ? " selected" : ""}>${tab.label}</option>`
+      );
+    }
+    parts2.push(`</select>`);
+    parts2.push(
+      `<div class="tb-eztb-hint">点用户名旁的「查询」时先显示哪个页签。页面上的「成分」标记仍然直接打开「成分」页签，不受这里影响。</div>`
+    );
+    parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
     parts2.push(`<label for="tb-eztb-rules">成分关键词规则</label>`);
     parts2.push(
       `<textarea id="tb-eztb-rules" class="tb-eztb-textarea tb-eztb-textarea-tall" spellcheck="false" placeholder="${escapeHtml(RULE_FORMAT_HINT)}">${escapeHtml(current.compositionRules)}</textarea>`
@@ -30443,7 +30472,8 @@ ${endStackCall}`;
         compositionAuto: value("tb-eztb-composition-auto") !== "0",
         compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
         compositionCacheDays: Number(value("tb-eztb-cachedays")),
-        signInLevelThreshold: Number(value("tb-eztb-signin-level"))
+        signInLevelThreshold: Number(value("tb-eztb-signin-level")),
+        defaultTab: normalizePanelTabId(value("tb-eztb-default-tab"))
       };
     };
     const textarea = () => dialog.body.querySelector("#tb-eztb-rules");
@@ -30466,6 +30496,7 @@ ${endStackCall}`;
       set6("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
       set6("tb-eztb-cachedays", String(settings.compositionCacheDays));
       set6("tb-eztb-signin-level", String(settings.signInLevelThreshold));
+      set6("tb-eztb-default-tab", settings.defaultTab);
     };
     dialog.body.querySelector('[data-act="export"]')?.addEventListener("click", () => {
       const box = ioBox();
@@ -30859,6 +30890,21 @@ ${endStackCall}`;
       fraction: count3 / total,
       percentText: `${(count3 / total * 100).toFixed(1)}%`
     }));
+  }
+  function buildForumFilterOptionsHtml(counts, selected) {
+    const options = buildForumStats(counts).map((stat) => {
+      const value = escapeHtml(stat.forum);
+      const isSelected = stat.forum === selected ? " selected" : "";
+      return `<option value="${value}"${isSelected}>${value}（${stat.count}）</option>`;
+    });
+    return `<option value=""${selected ? "" : " selected"}>全部吧</option>` + options.join("");
+  }
+  function buildForumFilterHint(forum, counts) {
+    if (!forum) return "";
+    if (counts.topic + counts.reply === 0) {
+      return `筛选「${forum}」：该用户在这个吧没有发帖或回复`;
+    }
+    return `筛选「${forum}」：主题帖 ${counts.topic} 个 · 回复 ${counts.reply} 条`;
   }
   function buildForumListHtml(counts, open) {
     const stats = buildForumStats(counts);
@@ -31264,8 +31310,9 @@ ${endStackCall}`;
   }
   function renderPostRow(post) {
     const isReply = post.kind !== "topic";
+    const forum = String(post.forumName ?? "").trim() || UNKNOWN_FORUM;
     const subParts = postRowSubParts(post);
-    return `<a class="tb-eztb-row" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">未知贴吧</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`;
+    return `<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`;
   }
   function bindFloorButtons(root) {
     for (const button of Array.from(
@@ -31337,17 +31384,62 @@ ${endStackCall}`;
   function renderPostsTab(body, identity4) {
     const active2 = body.dataset.subtab === "reply" ? "reply" : "topic";
     body.innerHTML = // 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
-    `<div class="tb-eztb-piestat"></div><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
+    `<div class="tb-eztb-piestat"></div><div class="tb-eztb-postfilter"><label class="tb-eztb-postfilter-label" for="tb-eztb-forumfilter">只看某个吧</label><select id="tb-eztb-forumfilter" class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter"><option value="">全部吧</option></select><span class="tb-eztb-hint" data-role="filter-hint"></span></div><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-subtab${item.id === active2 ? " active" : ""}" data-subtab="${item.id}">${item.label}</button>`
     ).join("") + `</div>` + POST_SUBTABS.map(
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
     ).join("");
     let counts = {};
     let listOpen = false;
+    let forumFilter = "";
     const pending4 = new Set(POST_SUBTABS.map((item) => item.id));
     const loadedAny = /* @__PURE__ */ new Set();
     const failures2 = /* @__PURE__ */ new Map();
     const pieEl = body.querySelector(".tb-eztb-piestat");
+    const filterSelect = body.querySelector(
+      '[data-act="forum-filter"]'
+    );
+    const filterHintEl = body.querySelector(
+      '[data-role="filter-hint"]'
+    );
+    const visibleRows = (subTab) => Array.from(
+      body.querySelectorAll(
+        `.tb-eztb-subpane[data-subpane="${subTab}"] .tb-eztb-row`
+      )
+    ).filter((row) => !row.classList.contains("tb-eztb-filtered-out")).length;
+    const applyForumFilter = () => {
+      for (const item of POST_SUBTABS) {
+        for (const row of body.querySelectorAll(
+          `.tb-eztb-subpane[data-subpane="${item.id}"] .tb-eztb-row`
+        )) {
+          const matched = !forumFilter || (row.dataset.forum ?? UNKNOWN_FORUM) === forumFilter;
+          row.classList.toggle("tb-eztb-filtered-out", !matched);
+        }
+      }
+      if (filterHintEl) {
+        filterHintEl.textContent = buildForumFilterHint(forumFilter, {
+          topic: visibleRows("topic"),
+          reply: visibleRows("reply")
+        });
+      }
+    };
+    const refreshForumFilter = () => {
+      if (!filterSelect) return;
+      const html = buildForumFilterOptionsHtml(counts, forumFilter);
+      if (filterSelect.dataset.options === html) return;
+      filterSelect.dataset.options = html;
+      filterSelect.innerHTML = html;
+      if (!Array.from(filterSelect.options).some(
+        (option3) => option3.value === forumFilter
+      )) {
+        forumFilter = "";
+      }
+      filterSelect.value = forumFilter;
+    };
+    filterSelect?.addEventListener("change", () => {
+      forumFilter = filterSelect.value;
+      applyForumFilter();
+    });
     const updatePie = () => {
       if (!pieEl) return;
       const notes = buildPieNotes(
@@ -31363,6 +31455,8 @@ ${endStackCall}`;
         listOpen = !listOpen;
         updatePie();
       });
+      refreshForumFilter();
+      applyForumFilter();
     };
     updatePie();
     const mounted = /* @__PURE__ */ new Set();
@@ -31463,16 +31557,9 @@ ${endStackCall}`;
       }
     })();
   }
-  var TABS = [
-    { id: "profile", label: "资料" },
-    { id: "composition", label: "成分" },
-    { id: "follow", label: "关注的人" },
-    { id: "forums", label: "关注的吧" },
-    { id: "fans", label: "粉丝" },
-    { id: "posts", label: "发帖" }
-  ];
+  var TABS = PANEL_TABS;
   function openUserPanel(ref, options = {}) {
-    const initialTab = options.tab ?? "profile";
+    const initialTab = options.tab ?? normalizePanelTabId(getSettings().defaultTab);
     const dialog = openDialog({
       title: ref.nickname || ref.un || "贴吧用户",
       subtitleHtml: "正在解析用户信息…",
@@ -31486,6 +31573,13 @@ ${endStackCall}`;
     const initialized = /* @__PURE__ */ new Set();
     let activeTabId = initialTab;
     let currentIdentity = null;
+    let requestedTab = initialTab;
+    for (const tab of TABS) {
+      dialog.root.querySelector(`.tb-eztb-tab[data-tab="${tab.id}"]`)?.addEventListener("click", () => {
+        requestedTab = tab.id;
+        if (currentIdentity) switchTab(tab.id, currentIdentity);
+      });
+    }
     const paneFor = (id) => {
       const existing = panes.get(id);
       if (existing) return existing;
@@ -31574,12 +31668,7 @@ ${endStackCall}`;
         const identity4 = await resolveIdentity(ref);
         applyIdentity(identity4);
         dialog.body.innerHTML = "";
-        for (const tab of TABS) {
-          dialog.root.querySelector(`.tb-eztb-tab[data-tab="${tab.id}"]`)?.addEventListener("click", () => {
-            if (currentIdentity) switchTab(tab.id, currentIdentity);
-          });
-        }
-        switchTab(initialTab, identity4);
+        switchTab(requestedTab, identity4);
       } catch (error) {
         const message = errorMessage(error);
         const needBduss = /BDUSS/i.test(message);
@@ -31910,6 +31999,13 @@ ${endStackCall}`;
 .tb-eztb-tag-reply{background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;border:1px solid var(--tb-eztb-border-muted);}
 .tb-eztb-tag-sub{background:var(--tb-eztb-warn-bg-soft) !important;color:var(--tb-eztb-warn-text-strong) !important;border:1px solid var(--tb-eztb-warn-border);}
 /* 「发帖」页签里的两个子页签（主题帖 / 回复）：两个 feed 各自分页，互不影响 */
+/* 按吧筛选：只筛下面两个列表，饼图仍然统计全部（把饼图筛成一段没有信息量）。
+   选择器带上前缀是为了盖过 .tb-eztb-input 的 width:100%（同优先级时后者会赢）。 */
+.tb-eztb-postfilter{display:flex;align-items:center;gap:8px;margin:0 0 10px;flex-wrap:wrap;}
+.tb-eztb-postfilter-label{font-size:12px;color:var(--tb-eztb-text-muted) !important;white-space:nowrap;}
+.tb-eztb-postfilter .tb-eztb-forumfilter{width:auto;max-width:240px;padding:4px 8px;font-size:12px;}
+/* 被筛掉的行只藏起来（DOM 里留着），翻页新加载的行走同一套筛选规则 */
+.tb-eztb-row.tb-eztb-filtered-out{display:none !important;}
 .tb-eztb-subtabs{display:flex;gap:6px;margin:0 0 10px;}
 .tb-eztb-subtab{
   padding:3px 12px;border:1px solid var(--tb-eztb-border-input);border-radius:999px;cursor:pointer;
@@ -32125,7 +32221,7 @@ ${endStackCall}`;
  *
  *   tieba.js 3.1.3 · 许可 ISC
  *       来源  https://github.com/Dilettante258/tieba.js
- *       锁定提交  338a81eacf4eb326fcb3ffbfa55d46395117a2e9
+ *       锁定提交  db48716f754c4cfd8ebbeb87d447c378dafeb0eb
  *       依上游 package.json 的 license 字段声明为 ISC。该仓库暂未附带 LICENSE 文件，
  *       这里按 ISC 模板补一份（版权人取自 package.json 的 author：Dilettante258）：
  *
@@ -32144,7 +32240,7 @@ ${endStackCall}`;
  *       建议仍向上游要一份正式 LICENSE 文件。
  *   上游 eztb v3 · 构建时用的那一份检出（见 sdk.lock.json）
  *       来源  https://github.com/Dilettante258/eazy-tieba
- *       锁定提交  c772db664deff2d04c8103f940401b631e322110
+ *       锁定提交  8ca0637c9c4082979f61626718b072a076ba7508
  *   effect 3.19.18 · 许可 MIT
  *       来源  https://github.com/Effect-TS/effect
  *   @bufbuild/protobuf 2.11.0 · 许可 (Apache-2.0 AND BSD-3-Clause)
