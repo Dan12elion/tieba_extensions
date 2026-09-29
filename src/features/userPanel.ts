@@ -22,11 +22,13 @@ import {
 } from "../core/replyFloor.ts";
 import {
 	type ForumCounts,
+	type SearchAllSummaryInput,
 	buildForumFilterOptionsHtml,
 	buildForumListHtml,
 	buildForumPieSvg,
 	buildPieNotes,
 	buildPostFilterHint,
+	buildSearchAllSummary,
 	countPostsByForum,
 	mergePostRows,
 	mergeForumCounts,
@@ -110,8 +112,12 @@ export interface PagedListHandle<T> {
 	loadNext: () => Promise<void>;
 	/** 已经加载出来的行（副本，调用方改不到内部状态） */
 	rows: () => T[];
+	/** 已经翻到第几页（「搜全部」的进度要用） */
+	pages: () => number;
 	/** 这一路是否已经取完（没有更多页了） */
 	exhausted: () => boolean;
+	/** 这一路是**到了页数上限**才停的（还可能更早的内容没取到） */
+	capped: () => boolean;
 	/** 这一路的数据源说记录被隐藏了（发帖页签的 hidePost） */
 	hidden: () => boolean;
 }
@@ -137,6 +143,7 @@ function mountPagedList<T>(options: PagedListOptions<T>): PagedListHandle<T> {
 	let totalPages = Number.POSITIVE_INFINITY;
 	let loading = false;
 	let exhaustedFlag = false;
+	let cappedFlag = false;
 	let hiddenFlag = false;
 	/** 已经加载出来的行：合并视图与"筛完还剩几条"都要用它 */
 	const items: T[] = [];
@@ -181,10 +188,14 @@ function mountPagedList<T>(options: PagedListOptions<T>): PagedListHandle<T> {
 			}
 			options.onPage?.(result);
 
-			exhaustedFlag =
+			// 「没有更多数据」和「到了页数上限」必须分开记：
+			// 前者是"真的翻完了"，后者只是"我们不再翻了"（「搜全部」的结论要区分这两件事）
+			const noMoreData =
 				result.items.length === 0 ||
-				page >= maxPages ||
 				(page >= totalPages && Number.isFinite(totalPages));
+			const hitCap = page >= maxPages;
+			exhaustedFlag = noMoreData || hitCap;
+			cappedFlag = hitCap && !noMoreData;
 
 			if (!loaded && exhaustedFlag) {
 				// 隐藏的情况下上面已经给了原因，这里不再重复一句"没有公开的帖子"
@@ -218,7 +229,9 @@ function mountPagedList<T>(options: PagedListOptions<T>): PagedListHandle<T> {
 	return {
 		loadNext,
 		rows: () => items.slice(),
+		pages: () => page,
 		exhausted: () => exhaustedFlag,
+		capped: () => cappedFlag,
 		hidden: () => hiddenFlag,
 	};
 }
@@ -776,6 +789,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 		`<option value="">全部吧</option>` +
 		`</select>` +
 		`<input type="search" class="tb-eztb-input tb-eztb-postsearch" data-act="post-search" placeholder="在发帖 / 回复里搜内容" value="${escapeHtml(body.dataset.query ?? "")}">` +
+		`<button type="button" class="tb-eztb-minibtn" data-act="search-all" title="把两路还没加载的页都取回来再给结论；页数上限是设置里的「单个列表最多加载页数」">搜全部</button>` +
+		`<button type="button" class="tb-eztb-minibtn" data-role="search-stop" disabled title="停止继续翻页，保留已经取到的">停止</button>` +
 		`</div>` +
 		`<div class="tb-eztb-hint" data-role="filter-hint"></div>` +
 		`</div>` +
@@ -841,11 +856,24 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	const mergedNoticeEl = body.querySelector<HTMLElement>(
 		'[data-role="merged-notice"]',
 	);
+	const searchAllBtn = body.querySelector<HTMLButtonElement>(
+		'[data-act="search-all"]',
+	);
+	const searchStopBtn = body.querySelector<HTMLButtonElement>(
+		'[data-role="search-stop"]',
+	);
 	/** 已挂载的两路列表把手：合并视图要读它们的行、还能替用户继续翻页 */
 	const handles = new Map<PostSubTab, PagedListHandle<PostRow>>();
 
 	/** 搜索词（另存一份在 dataset 上，点「刷新当前页签」之后还在） */
 	let searchQuery = body.dataset.query ?? "";
+	/** 「搜全部」是否正在翻页；stopLoadingAll 让循环在当页取完后停下 */
+	let loadingAll = false;
+	let stopLoadingAll = false;
+	/** 上一轮「搜全部」的结论；改搜索词 / 筛选条件、或者又手动加载了新页就作废 */
+	let searchAllResult: SearchAllSummaryInput | null = null;
+
+	const pagesLoaded = (id: PostSubTab): number => handles.get(id)?.pages() ?? 0;
 
 	const loadedRows = (id: PostSubTab): PostRow[] =>
 		handles.get(id)?.rows() ?? [];
@@ -867,6 +895,17 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 
 	const updateHint = () => {
 		if (!filterHintEl) return;
+		if (loadingAll) {
+			filterHintEl.textContent =
+				`正在翻页：主题帖 ${pagesLoaded("topic")} 页 / 回复 ${pagesLoaded("reply")} 页` +
+				`（已加载 ${loadedRows("topic").length + loadedRows("reply").length} 条）…` +
+				`点「停止」可以只保留已经取到的。`;
+			return;
+		}
+		if (searchAllResult) {
+			filterHintEl.textContent = buildSearchAllSummary(searchAllResult);
+			return;
+		}
 		const matched = {
 			topic: loadedRows("topic").filter(matchesFilters).length,
 			reply: loadedRows("reply").filter(matchesFilters).length,
@@ -877,6 +916,66 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 			matched,
 			loadedTotal: loadedRows("topic").length + loadedRows("reply").length,
 		});
+	};
+
+	/** 「搜全部」跑完：把结论记下来（翻了几页、看了多少条、命中多少、是否真的翻完） */
+	const summarizeSearchAll = () => {
+		searchAllResult = {
+			query: searchQuery,
+			pages: { topic: pagesLoaded("topic"), reply: pagesLoaded("reply") },
+			loaded: {
+				topic: loadedRows("topic").length,
+				reply: loadedRows("reply").length,
+			},
+			matched: {
+				topic: loadedRows("topic").filter(matchesFilters).length,
+				reply: loadedRows("reply").filter(matchesFilters).length,
+			},
+			// 只有"真的没有更多数据"才算翻完；到页数上限停的要说清可能还有更早的
+			complete: POST_SUBTABS.every((item) => {
+				const handle = handles.get(item.id);
+				return !handle || (handle.exhausted() && !handle.capped());
+			}),
+			pageLimit: getSettings().maxPagesPerList,
+		};
+	};
+
+	/**
+	 * 把两路还没加载的页都取回来，然后给结论。
+
+	 * 请求顺序完全走原来的限速队列，间隔与手动点「加载更多」一样；
+	 * 页数上限就是设置里的「单个列表最多加载页数」（每路各算）。
+	 * 「停止」只是让循环在**当页取完**后不再发新请求，已经取到的都保留。
+	 */
+	const loadAllPages = async () => {
+		if (loadingAll) return;
+		loadingAll = true;
+		stopLoadingAll = false;
+		searchAllResult = null;
+		if (searchStopBtn) searchStopBtn.disabled = false;
+		if (searchAllBtn) searchAllBtn.disabled = true;
+		updateHint();
+		try {
+			await Promise.all(
+				POST_SUBTABS.map(async (item) => {
+					const handle = handles.get(item.id);
+					if (!handle) return;
+					while (!stopLoadingAll && !handle.exhausted()) {
+						const before = handle.rows().length;
+						await handle.loadNext();
+						updateHint();
+						// 防呆：既没进展也没翻完（理论上不会发生）就别在这里空转
+						if (handle.rows().length === before && !handle.exhausted()) break;
+					}
+				}),
+			);
+		} finally {
+			loadingAll = false;
+			if (searchStopBtn) searchStopBtn.disabled = true;
+			if (searchAllBtn) searchAllBtn.disabled = false;
+			summarizeSearchAll();
+			applyFilters();
+		}
 	};
 
 	/**
@@ -974,13 +1073,30 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 
 	filterSelect?.addEventListener("change", () => {
 		forumFilter = filterSelect.value;
+		searchAllResult = null;
 		applyFilters();
 	});
 
 	searchInput?.addEventListener("input", () => {
 		searchQuery = searchInput.value;
 		body.dataset.query = searchQuery;
+		// 条件变了，上一轮「搜全部」的结论作废，回到普通提示
+		searchAllResult = null;
 		applyFilters();
+	});
+
+	// 回车 = 把没加载的页也翻完再给结论（打字时只筛已加载的行，不会发请求）
+	searchInput?.addEventListener("keydown", (event) => {
+		if (event.key !== "Enter") return;
+		event.preventDefault();
+		void loadAllPages();
+	});
+
+	searchAllBtn?.addEventListener("click", () => {
+		void loadAllPages();
+	});
+	searchStopBtn?.addEventListener("click", () => {
+		stopLoadingAll = true;
 	});
 
 	mergedMoreBtn?.addEventListener("click", () => {
@@ -1054,6 +1170,8 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 					pending.delete(id);
 					failures.delete(id);
 					loadedAny.add(id);
+					// 手动「加载更多」又添了新页：上一轮「搜全部」的结论不再代表全部，作废
+					if (!loadingAll) searchAllResult = null;
 					counts = mergeForumCounts(counts, countPostsByForum(rows));
 					updatePie();
 				},

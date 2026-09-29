@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.8.3
+// @version             1.8.4
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -30918,6 +30918,14 @@ ${endStackCall}`;
     }
     return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
   }
+  function buildSearchAllSummary(input) {
+    const query = input.query.trim();
+    const loadedTotal = input.loaded.topic + input.loaded.reply;
+    const matchedTotal = input.matched.topic + input.matched.reply;
+    const scope3 = input.complete ? `已翻完主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页` : `翻到上限（每路最多 ${input.pageLimit} 页）时仍有更早的没加载，已翻主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页`;
+    const hit = matchedTotal === 0 ? `没有命中` : `命中 ${matchedTotal} 条（主题帖 ${input.matched.topic} · 回复 ${input.matched.reply}）`;
+    return `搜索「${query}」：${scope3}，共 ${loadedTotal} 条，${hit}。`;
+  }
   function buildForumListHtml(counts, open) {
     const stats = buildForumStats(counts);
     if (stats.length < 2) return "";
@@ -31012,6 +31020,7 @@ ${endStackCall}`;
     let totalPages = Number.POSITIVE_INFINITY;
     let loading = false;
     let exhaustedFlag = false;
+    let cappedFlag = false;
     let hiddenFlag = false;
     const items = [];
     const refreshFooter = () => {
@@ -31049,7 +31058,10 @@ ${endStackCall}`;
           )}</div>`;
         }
         options.onPage?.(result);
-        exhaustedFlag = result.items.length === 0 || page >= maxPages || page >= totalPages && Number.isFinite(totalPages);
+        const noMoreData = result.items.length === 0 || page >= totalPages && Number.isFinite(totalPages);
+        const hitCap = page >= maxPages;
+        exhaustedFlag = noMoreData || hitCap;
+        cappedFlag = hitCap && !noMoreData;
         if (!loaded && exhaustedFlag) {
           if (!result.hidden) {
             listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
@@ -31078,7 +31090,9 @@ ${endStackCall}`;
     return {
       loadNext,
       rows: () => items.slice(),
+      pages: () => page,
       exhausted: () => exhaustedFlag,
+      capped: () => cappedFlag,
       hidden: () => hiddenFlag
     };
   }
@@ -31426,7 +31440,7 @@ ${endStackCall}`;
     body.innerHTML = // 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
     `<div class="tb-eztb-piestat"></div><div class="tb-eztb-postbar"><div class="tb-eztb-postbar-row"><span class="tb-eztb-postbar-label">显示</span><span class="tb-eztb-modetabs" role="tablist">` + POST_MODES.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-modetab${item.id === mode ? " active" : ""}" data-postmode="${item.id}" title="${item.title}">${item.label}</button>`
-    ).join("") + `</span><span class="tb-eztb-postbar-label">只看</span><select class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter"><option value="">全部吧</option></select><input type="search" class="tb-eztb-input tb-eztb-postsearch" data-act="post-search" placeholder="在发帖 / 回复里搜内容" value="${escapeHtml(body.dataset.query ?? "")}"></div><div class="tb-eztb-hint" data-role="filter-hint"></div></div><div class="tb-eztb-postview" data-mode="${mode}"><div class="tb-eztb-splitview"><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
+    ).join("") + `</span><span class="tb-eztb-postbar-label">只看</span><select class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter"><option value="">全部吧</option></select><input type="search" class="tb-eztb-input tb-eztb-postsearch" data-act="post-search" placeholder="在发帖 / 回复里搜内容" value="${escapeHtml(body.dataset.query ?? "")}"><button type="button" class="tb-eztb-minibtn" data-act="search-all" title="把两路还没加载的页都取回来再给结论；页数上限是设置里的「单个列表最多加载页数」">搜全部</button><button type="button" class="tb-eztb-minibtn" data-role="search-stop" disabled title="停止继续翻页，保留已经取到的">停止</button></div><div class="tb-eztb-hint" data-role="filter-hint"></div></div><div class="tb-eztb-postview" data-mode="${mode}"><div class="tb-eztb-splitview"><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-subtab${item.id === active2 ? " active" : ""}" data-subtab="${item.id}">${item.label}</button>`
     ).join("") + `</div>` + POST_SUBTABS.map(
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
@@ -31460,8 +31474,18 @@ ${endStackCall}`;
     const mergedNoticeEl = body.querySelector(
       '[data-role="merged-notice"]'
     );
+    const searchAllBtn = body.querySelector(
+      '[data-act="search-all"]'
+    );
+    const searchStopBtn = body.querySelector(
+      '[data-role="search-stop"]'
+    );
     const handles = /* @__PURE__ */ new Map();
     let searchQuery = body.dataset.query ?? "";
+    let loadingAll = false;
+    let stopLoadingAll = false;
+    let searchAllResult = null;
+    const pagesLoaded = (id) => handles.get(id)?.pages() ?? 0;
     const loadedRows = (id) => handles.get(id)?.rows() ?? [];
     const matchesForum = (forumName) => !forumFilter || (forumName.trim() || UNKNOWN_FORUM) === forumFilter;
     const matchesFilters = (post) => matchesForum(post.forumName) && postMatchesQuery(post, searchQuery);
@@ -31474,6 +31498,14 @@ ${endStackCall}`;
     };
     const updateHint = () => {
       if (!filterHintEl) return;
+      if (loadingAll) {
+        filterHintEl.textContent = `正在翻页：主题帖 ${pagesLoaded("topic")} 页 / 回复 ${pagesLoaded("reply")} 页（已加载 ${loadedRows("topic").length + loadedRows("reply").length} 条）…点「停止」可以只保留已经取到的。`;
+        return;
+      }
+      if (searchAllResult) {
+        filterHintEl.textContent = buildSearchAllSummary(searchAllResult);
+        return;
+      }
       const matched = {
         topic: loadedRows("topic").filter(matchesFilters).length,
         reply: loadedRows("reply").filter(matchesFilters).length
@@ -31484,6 +31516,55 @@ ${endStackCall}`;
         matched,
         loadedTotal: loadedRows("topic").length + loadedRows("reply").length
       });
+    };
+    const summarizeSearchAll = () => {
+      searchAllResult = {
+        query: searchQuery,
+        pages: { topic: pagesLoaded("topic"), reply: pagesLoaded("reply") },
+        loaded: {
+          topic: loadedRows("topic").length,
+          reply: loadedRows("reply").length
+        },
+        matched: {
+          topic: loadedRows("topic").filter(matchesFilters).length,
+          reply: loadedRows("reply").filter(matchesFilters).length
+        },
+        // 只有"真的没有更多数据"才算翻完；到页数上限停的要说清可能还有更早的
+        complete: POST_SUBTABS.every((item) => {
+          const handle = handles.get(item.id);
+          return !handle || handle.exhausted() && !handle.capped();
+        }),
+        pageLimit: getSettings().maxPagesPerList
+      };
+    };
+    const loadAllPages = async () => {
+      if (loadingAll) return;
+      loadingAll = true;
+      stopLoadingAll = false;
+      searchAllResult = null;
+      if (searchStopBtn) searchStopBtn.disabled = false;
+      if (searchAllBtn) searchAllBtn.disabled = true;
+      updateHint();
+      try {
+        await Promise.all(
+          POST_SUBTABS.map(async (item) => {
+            const handle = handles.get(item.id);
+            if (!handle) return;
+            while (!stopLoadingAll && !handle.exhausted()) {
+              const before2 = handle.rows().length;
+              await handle.loadNext();
+              updateHint();
+              if (handle.rows().length === before2 && !handle.exhausted()) break;
+            }
+          })
+        );
+      } finally {
+        loadingAll = false;
+        if (searchStopBtn) searchStopBtn.disabled = true;
+        if (searchAllBtn) searchAllBtn.disabled = false;
+        summarizeSearchAll();
+        applyFilters();
+      }
     };
     const renderMerged = () => {
       if (!mergedListEl) return;
@@ -31545,12 +31626,25 @@ ${endStackCall}`;
     };
     filterSelect?.addEventListener("change", () => {
       forumFilter = filterSelect.value;
+      searchAllResult = null;
       applyFilters();
     });
     searchInput?.addEventListener("input", () => {
       searchQuery = searchInput.value;
       body.dataset.query = searchQuery;
+      searchAllResult = null;
       applyFilters();
+    });
+    searchInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      void loadAllPages();
+    });
+    searchAllBtn?.addEventListener("click", () => {
+      void loadAllPages();
+    });
+    searchStopBtn?.addEventListener("click", () => {
+      stopLoadingAll = true;
     });
     mergedMoreBtn?.addEventListener("click", () => {
       void (async () => {
@@ -31611,6 +31705,7 @@ ${endStackCall}`;
             pending4.delete(id);
             failures2.delete(id);
             loadedAny.add(id);
+            if (!loadingAll) searchAllResult = null;
             counts = mergeForumCounts(counts, countPostsByForum(rows));
             updatePie();
           },

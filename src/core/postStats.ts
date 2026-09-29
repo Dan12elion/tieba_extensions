@@ -203,6 +203,40 @@ export function buildPostFilterHint(input: PostFilterHintInput): string {
 	return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
 }
 
+export interface SearchAllSummaryInput {
+	query: string;
+	/** 已经翻到第几页（两路各算） */
+	pages: { topic: number; reply: number };
+	/** 已经拿到多少条（两路各算） */
+	loaded: { topic: number; reply: number };
+	/** 命中多少条（两路各算） */
+	matched: { topic: number; reply: number };
+	/** 两路是否都翻到底了；false = 到页数上限就停了，可能还有更早的没搜到 */
+	complete: boolean;
+	/** 页数上限（设置里的「单个列表最多加载页数」） */
+	pageLimit: number;
+}
+
+/**
+ * 「搜全部」跑完之后的结论。
+
+ * 关键是把**样本说清楚**：翻了几页、一共看了多少条、命中多少条，
+ * 以及"到上限停了"还是"真的翻完了"——不然"没搜到"会被误读成"他没发过"。
+ */
+export function buildSearchAllSummary(input: SearchAllSummaryInput): string {
+	const query = input.query.trim();
+	const loadedTotal = input.loaded.topic + input.loaded.reply;
+	const matchedTotal = input.matched.topic + input.matched.reply;
+	const scope = input.complete
+		? `已翻完主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页`
+		: `翻到上限（每路最多 ${input.pageLimit} 页）时仍有更早的没加载，已翻主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页`;
+	const hit =
+		matchedTotal === 0
+			? `没有命中`
+			: `命中 ${matchedTotal} 条（主题帖 ${input.matched.topic} · 回复 ${input.matched.reply}）`;
+	return `搜索「${query}」：${scope}，共 ${loadedTotal} 条，${hit}。`;
+}
+
 /**
  * 「查看全部 N 个吧」按钮 + 展开后的完整列表。
 

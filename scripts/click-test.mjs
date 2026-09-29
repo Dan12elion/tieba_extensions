@@ -108,7 +108,9 @@ const PAGE = `<!doctype html>
     compositionRules: '⚠️测试名单 | | | | ${TEST_USER_ID}\\n🧪隐藏关注 | | ${HIDDEN_FORUM_KEYWORD}',
     compositionAuto: true,
     compositionMaxPerPage: 5,
-    compositionCacheDays: 1
+    compositionCacheDays: 1,
+    // 「搜全部」会把每路都翻到上限，测试里把上限压到 3 页，别真去翻几十页
+    maxPagesPerList: 3
   } };
   window.GM_getValue = function (k, d) { return (k in __store) ? __store[k] : d; };
   window.GM_setValue = function (k, v) { __store[k] = v; };
@@ -850,8 +852,43 @@ const PAGE = `<!doctype html>
         search.dispatchEvent(new Event('input'));
         add('搜索：清空搜索词后所有行都回来', keptRows().length === allRows.length,
             allRows.length + ' 行');
-        add('阶段 10 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-        finish();
+
+        // ── 「搜全部」：把没加载的页也翻完，再给结论 ──
+        var searchAllBtn = pane.querySelector('[data-act="search-all"]');
+        var stopBtn = pane.querySelector('[data-role="search-stop"]');
+        var topicBefore = rowsIn(subPane('topic')).length;
+        add('（阶段 10）搜索框旁有「搜全部」和「停止」按钮', !!searchAllBtn && !!stopBtn, '');
+        if (!searchAllBtn || !stopBtn) { finish(); return; }
+
+        var hintText = function () {
+          var el = pane.querySelector('[data-role="filter-hint"]');
+          return el ? String(el.textContent) : '';
+        };
+        var settled = function () { return /已翻完|翻到上限/.test(hintText()); };
+
+        search.value = needle;
+        search.dispatchEvent(new Event('input'));
+        searchAllBtn.click();
+        until(settled, function (done) {
+          var topicAfter = rowsIn(subPane('topic')).length;
+          add('「搜全部」自动把没加载的页翻完（行数确实变多了）',
+              done && topicAfter > topicBefore, topicBefore + ' → ' + topicAfter + ' 行');
+          add('「搜全部」的结论写明了翻了几页、看了多少条、命中多少',
+              settled() && /共 \\d+ 条/.test(hintText()) && /命中/.test(hintText()), hintText());
+          add('「搜全部」跑完后「停止」按钮回到禁用（不会一直亮着）', stopBtn.disabled, '');
+
+          // 回车是同一个入口
+          search.value = '';
+          search.dispatchEvent(new Event('input'));
+          search.value = needle;
+          search.dispatchEvent(new Event('input'));
+          search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          until(settled, function (again) {
+            add('回车也能触发「搜全部」', again, hintText());
+            add('阶段 10 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+            finish();
+          }, 300);
+        }, 300);
       };
 
       mergedBtn.click();

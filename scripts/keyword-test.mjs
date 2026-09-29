@@ -758,6 +758,7 @@ console.log("筛选与搜索");
 	const {
 		buildForumFilterOptionsHtml,
 		buildPostFilterHint,
+		buildSearchAllSummary,
 		postMatchesQuery,
 		mergePostRows,
 	} = postStats;
@@ -880,6 +881,50 @@ console.log("筛选与搜索");
 			);
 			return rows.length === 2 && rows[0].kind === "topic";
 		})(),
+	);
+
+	// 「搜全部」的结论（把没加载的页也翻完之后再说话）
+	check(
+		"搜全部结论：翻完时说清翻了几页、看了多少条、命中多少",
+		buildSearchAllSummary({
+			query: "原神",
+			pages: { topic: 3, reply: 1 },
+			loaded: { topic: 180, reply: 12 },
+			matched: { topic: 4, reply: 1 },
+			complete: true,
+			pageLimit: 50,
+		}) ===
+			"搜索「原神」：已翻完主题帖 3 页、回复 1 页，共 192 条，命中 5 条（主题帖 4 · 回复 1）。",
+		buildSearchAllSummary({
+			query: "原神",
+			pages: { topic: 3, reply: 1 },
+			loaded: { topic: 180, reply: 12 },
+			matched: { topic: 4, reply: 1 },
+			complete: true,
+			pageLimit: 50,
+		}),
+	);
+	check(
+		"搜全部结论：到上限停了必须说「还有更早的没加载」，不能装作翻完了",
+		buildSearchAllSummary({
+			query: "原神",
+			pages: { topic: 3, reply: 3 },
+			loaded: { topic: 180, reply: 180 },
+			matched: { topic: 1, reply: 0 },
+			complete: false,
+			pageLimit: 3,
+		}).includes("翻到上限（每路最多 3 页）时仍有更早的没加载"),
+	);
+	check(
+		"搜全部结论：一条都没命中时明说「没有命中」，不给「他没发过」这种结论",
+		buildSearchAllSummary({
+			query: "原神",
+			pages: { topic: 2, reply: 1 },
+			loaded: { topic: 120, reply: 12 },
+			matched: { topic: 0, reply: 0 },
+			complete: true,
+			pageLimit: 50,
+		}).includes("共 132 条，没有命中"),
 	);
 }
 
