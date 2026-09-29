@@ -752,10 +752,15 @@ console.log("签到号判定");
 	);
 }
 
-// ── 「发帖」页签里的按吧筛选 ──────────────────────────────────────────
-console.log("按吧筛选");
+// ── 「发帖」页签里的按吧筛选 / 内容搜索 / 合并视图 ────────────────────
+console.log("筛选与搜索");
 {
-	const { buildForumFilterOptionsHtml, buildForumFilterHint } = postStats;
+	const {
+		buildForumFilterOptionsHtml,
+		buildPostFilterHint,
+		postMatchesQuery,
+		mergePostRows,
+	} = postStats;
 
 	const options = buildForumFilterOptionsHtml(
 		{ 百度: 2, 贴吧: 1, 未知贴吧: 3 },
@@ -783,21 +788,98 @@ console.log("按吧筛选");
 		buildForumFilterOptionsHtml({ '"><img src=x>吧': 1 }, ""),
 	);
 	check(
-		"提示：选中某个吧时给出主题帖 / 回复的条数",
-		buildForumFilterHint("百度", { topic: 3, reply: 5 }) ===
-			"筛选「百度」：主题帖 3 个 · 回复 5 条",
-		buildForumFilterHint("百度", { topic: 3, reply: 5 }),
+		"提示：只看某个吧时给出主题帖 / 回复的条数",
+		buildPostFilterHint({
+			forum: "百度",
+			query: "",
+			matched: { topic: 3, reply: 5 },
+			loadedTotal: 60,
+		}) === "筛选「百度」：主题帖 3 个 · 回复 5 条",
+		buildPostFilterHint({
+			forum: "百度",
+			query: "",
+			matched: { topic: 3, reply: 5 },
+			loadedTotal: 60,
+		}),
 	);
 	check(
 		"提示：这个吧一条都没有时要明说，而不是显示 0 条",
-		buildForumFilterHint("百度", { topic: 0, reply: 0 }) ===
-			"筛选「百度」：该用户在这个吧没有发帖或回复",
-		buildForumFilterHint("百度", { topic: 0, reply: 0 }),
+		buildPostFilterHint({
+			forum: "百度",
+			query: "",
+			matched: { topic: 0, reply: 0 },
+			loadedTotal: 12,
+		}) === "筛选「百度」：该用户在这个吧没有发帖或回复",
 	);
 	check(
-		"提示：不筛选（全部吧）时返回空串，界面上不留一行废话",
-		buildForumFilterHint("", { topic: 9, reply: 9 }) === "",
-		JSON.stringify(buildForumFilterHint("", { topic: 9, reply: 9 })),
+		"提示：只搜索时写明搜索词与命中条数",
+		buildPostFilterHint({
+			forum: "",
+			query: "原神",
+			matched: { topic: 1, reply: 2 },
+			loadedTotal: 60,
+		}) === "搜索「原神」：主题帖 1 个 · 回复 2 条",
+	);
+	check(
+		"提示：搜索没命中时说清是「已加载的 N 条里没有命中」，不能说成「他没发过」",
+		buildPostFilterHint({
+			forum: "",
+			query: "原神",
+			matched: { topic: 0, reply: 0 },
+			loadedTotal: 60,
+		}) === "搜索「原神」：已加载的 60 条里没有命中",
+	);
+	check(
+		"提示：筛选与搜索同时有时，两个条件都写出来",
+		buildPostFilterHint({
+			forum: "百度",
+			query: "原神",
+			matched: { topic: 1, reply: 0 },
+			loadedTotal: 60,
+		}) === "筛选「百度」+ 搜索「原神」：主题帖 1 个 · 回复 0 条",
+	);
+	check(
+		"提示：既不筛也不搜时返回空串，界面上不留一行废话",
+		buildPostFilterHint({
+			forum: "",
+			query: "",
+			matched: { topic: 9, reply: 9 },
+			loadedTotal: 18,
+		}) === "",
+	);
+	check(
+		"搜索：标题或正文命中即可，大小写不敏感、首尾空白忽略",
+		postMatchesQuery({ title: "关于原神", preview: "" }, " 原神 ") === true &&
+			postMatchesQuery({ title: "", preview: "今天聊 Java" }, "java") ===
+				true &&
+			postMatchesQuery({ title: "原神", preview: "" }, "星铁") === false,
+	);
+	check(
+		"搜索：空搜索词一律算命中（等于没筛）",
+		postMatchesQuery({ title: "原神", preview: "" }, "   ") === true,
+	);
+	check(
+		"合并：主题帖与回复按时间倒序合成一个列表",
+		(function () {
+			const rows = mergePostRows(
+				[
+					{ kind: "topic", createTime: 30 },
+					{ kind: "topic", createTime: 10 },
+				],
+				[{ kind: "reply", createTime: 20 }],
+			);
+			return rows.map((row) => row.createTime).join(",") === "30,20,10";
+		})(),
+	);
+	check(
+		"合并：时间相同也不丢行（稳定排序，主题帖排在前面）",
+		(function () {
+			const rows = mergePostRows(
+				[{ kind: "topic", createTime: 5 }],
+				[{ kind: "reply", createTime: 5 }],
+			);
+			return rows.length === 2 && rows[0].kind === "topic";
+		})(),
 	);
 }
 

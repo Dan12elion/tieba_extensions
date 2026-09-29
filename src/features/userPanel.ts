@@ -22,13 +22,15 @@ import {
 } from "../core/replyFloor.ts";
 import {
 	type ForumCounts,
-	buildForumFilterHint,
 	buildForumFilterOptionsHtml,
 	buildForumListHtml,
 	buildForumPieSvg,
 	buildPieNotes,
+	buildPostFilterHint,
 	countPostsByForum,
+	mergePostRows,
 	mergeForumCounts,
+	postMatchesQuery,
 	postRowSubParts,
 } from "../core/postStats.ts";
 import { type ForumActivity, loadForumActivity } from "../core/forumActivity.ts";
@@ -97,8 +99,25 @@ interface PagedListOptions<T> {
 	onPage?: (result: PageResult<T>) => void;
 }
 
+/**
+ * 分页列表的把手。
+
+ * 「发帖」页签的**合并查询**要读两路 feed 已经加载出来的行，还要能替用户继续翻页，
+ * 所以列表挂载时把这两件事交出来；分开查询的界面行为完全不变。
+ */
+export interface PagedListHandle<T> {
+	/** 再取一页（内部有 loading 守卫，重复调用不会并发） */
+	loadNext: () => Promise<void>;
+	/** 已经加载出来的行（副本，调用方改不到内部状态） */
+	rows: () => T[];
+	/** 这一路是否已经取完（没有更多页了） */
+	exhausted: () => boolean;
+	/** 这一路的数据源说记录被隐藏了（发帖页签的 hidePost） */
+	hidden: () => boolean;
+}
+
 /** 分页列表：一次只取一页，点"加载更多"再取下一页。 */
-function mountPagedList<T>(options: PagedListOptions<T>): void {
+function mountPagedList<T>(options: PagedListOptions<T>): PagedListHandle<T> {
 	const settings = getSettings();
 	const maxPages = Math.max(1, settings.maxPagesPerList);
 
@@ -117,6 +136,10 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 	let loaded = 0;
 	let totalPages = Number.POSITIVE_INFINITY;
 	let loading = false;
+	let exhaustedFlag = false;
+	let hiddenFlag = false;
+	/** 已经加载出来的行：合并视图与"筛完还剩几条"都要用它 */
+	const items: T[] = [];
 
 	const refreshFooter = () => {
 		const summary = options.summaryText?.(loaded, totalPages);
@@ -137,6 +160,7 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 			const result = await options.loadPage(page + 1);
 			page += 1;
 			loaded += result.items.length;
+			items.push(...result.items);
 			if (result.totalPages && result.totalPages > 0) {
 				totalPages = result.totalPages;
 			}
@@ -150,26 +174,27 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 
 			// 数据被隐藏时说清楚原因：不要显示成"该用户没有公开的主题帖"
 			if (result.hidden) {
+				hiddenFlag = true;
 				noticeEl.innerHTML = `<div class="tb-eztb-warn">${escapeHtml(
 					options.hiddenText ?? options.emptyText,
 				)}</div>`;
 			}
 			options.onPage?.(result);
 
-			const exhausted =
+			exhaustedFlag =
 				result.items.length === 0 ||
 				page >= maxPages ||
 				(page >= totalPages && Number.isFinite(totalPages));
 
-			if (!loaded && exhausted) {
+			if (!loaded && exhaustedFlag) {
 				// 隐藏的情况下上面已经给了原因，这里不再重复一句"没有公开的帖子"
 				if (!result.hidden) {
 					listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
 				}
 			}
 
-			moreBtn.disabled = exhausted;
-			moreBtn.textContent = exhausted ? "没有更多了" : "加载更多";
+			moreBtn.disabled = exhaustedFlag;
+			moreBtn.textContent = exhaustedFlag ? "没有更多了" : "加载更多";
 		} catch (error) {
 			const message = errorMessage(error);
 			options.onError?.(error);
@@ -189,6 +214,13 @@ function mountPagedList<T>(options: PagedListOptions<T>): void {
 		void loadNext();
 	});
 	void loadNext();
+
+	return {
+		loadNext,
+		rows: () => items.slice(),
+		exhausted: () => exhaustedFlag,
+		hidden: () => hiddenFlag,
+	};
 }
 
 function renderUserRow(user: {
@@ -569,10 +601,17 @@ function renderPostRow(post: PostRow): string {
 	// 行上带吧名（空吧名归到「未知贴吧」，与饼图/签到统计同一套口径），
 	// 「只看某个吧」的筛选直接读它，不再重新解析副标题里的吧名标签。
 	const forum = String(post.forumName ?? "").trim() || UNKNOWN_FORUM;
+	// 搜索用的可搜文本（标题 + 正文摘要，小写）：分开视图的行是增量插进 DOM 的，
+	// 逐行判定只能靠行上带一份，不能在筛选时回头解析 HTML。
+	const searchText = `${post.title ?? ""} ${post.preview ?? ""}`
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim();
 	// 副标题由纯函数拼（吧名标签 / 楼中楼的回复对象 / 回复正文），见 core/postStats.ts
 	const subParts = postRowSubParts(post);
 	return (
-		`<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
+		// data-time 是原始时间戳（合并视图按它倒序，测试也按它断言顺序）
+		`<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" data-search="${escapeHtml(searchText)}" data-time="${post.createTime}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer">` +
 		`<span class="tb-eztb-row-main">` +
 		`<span class="tb-eztb-row-title">` +
 		`<span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>` +
@@ -634,6 +673,22 @@ function bindFloorButtons(root: HTMLElement): void {
 
 type PostSubTab = "topic" | "reply";
 
+/** 「发帖」页签的两种看法：分开（两个列表各自翻页）/ 合并（合成一个列表） */
+type PostMode = "split" | "merged";
+
+const POST_MODES: Array<{ id: PostMode; label: string; title: string }> = [
+	{
+		id: "split",
+		label: "分开",
+		title: "主题帖与回复各占一个列表，各自翻页",
+	},
+	{
+		id: "merged",
+		label: "合并",
+		title: "主题帖与回复合成一个列表（按时间倒序，跨 feed 的顺序是近似的）",
+	},
+];
+
 const POST_SUBTABS: Array<{
 	id: PostSubTab;
 	label: string;
@@ -663,9 +718,9 @@ function mountPostsSubList(
 	onRows: (rows: PostRow[]) => void,
 	/** 这一路取数失败时通知「发帖」页签（否则错误只在被隐藏的子页签里，用户看不见） */
 	onError: (message: string) => void,
-): void {
+): PagedListHandle<PostRow> {
 	const spec = POST_SUBTABS.find((item) => item.id === subTab)!;
-	mountPagedList<PostRow>({
+	return mountPagedList<PostRow>({
 		body: pane,
 		emptyText: spec.emptyText,
 		hiddenText: HIDDEN_POSTS_NOTE,
@@ -699,19 +754,33 @@ function mountPostsSubList(
  */
 function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	const active: PostSubTab = body.dataset.subtab === "reply" ? "reply" : "topic";
+	/** 分开 / 合并记在 dataset 上：点「刷新当前页签」之后保持用户选的那种 */
+	let mode: PostMode = body.dataset.postmode === "merged" ? "merged" : "split";
 
 	body.innerHTML =
 		// 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
 		`<div class="tb-eztb-piestat"></div>` +
-		// 按吧筛选：只作用于下面两个子页签的列表；饼图仍然是全量
-		// （把饼图也筛成"只有一个吧"，那张图就没有信息量了）
-		`<div class="tb-eztb-postfilter">` +
-		`<label class="tb-eztb-postfilter-label" for="tb-eztb-forumfilter">只看某个吧</label>` +
-		`<select id="tb-eztb-forumfilter" class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter">` +
+		// 工具条：显示方式（分开 / 合并）+ 按吧筛选 + 内容搜索。
+		// 筛选与搜索只作用于下面的列表；饼图始终是全量（筛成一段没有信息量）。
+		`<div class="tb-eztb-postbar">` +
+		`<div class="tb-eztb-postbar-row">` +
+		`<span class="tb-eztb-postbar-label">显示</span>` +
+		`<span class="tb-eztb-modetabs" role="tablist">` +
+		POST_MODES.map(
+			(item) =>
+				`<button type="button" role="tab" class="tb-eztb-modetab${item.id === mode ? " active" : ""}" data-postmode="${item.id}" title="${item.title}">${item.label}</button>`,
+		).join("") +
+		`</span>` +
+		`<span class="tb-eztb-postbar-label">只看</span>` +
+		`<select class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter">` +
 		`<option value="">全部吧</option>` +
 		`</select>` +
-		`<span class="tb-eztb-hint" data-role="filter-hint"></span>` +
+		`<input type="search" class="tb-eztb-input tb-eztb-postsearch" data-act="post-search" placeholder="在发帖 / 回复里搜内容" value="${escapeHtml(body.dataset.query ?? "")}">` +
 		`</div>` +
+		`<div class="tb-eztb-hint" data-role="filter-hint"></div>` +
+		`</div>` +
+		`<div class="tb-eztb-postview" data-mode="${mode}">` +
+		`<div class="tb-eztb-splitview">` +
 		`<div class="tb-eztb-subtabs" role="tablist">` +
 		POST_SUBTABS.map(
 			(item) =>
@@ -721,7 +790,16 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 		POST_SUBTABS.map(
 			(item) =>
 				`<div class="tb-eztb-subpane${item.id === active ? " active" : ""}" data-subpane="${item.id}"></div>`,
-		).join("");
+		).join("") +
+		`</div>` +
+		// 合并视图：两路 feed 已加载的行按时间倒序合成一个列表，翻页时两路各取下一页
+		`<div class="tb-eztb-mergedview">` +
+		`<div class="tb-eztb-notice" data-role="merged-notice"></div>` +
+		`<div class="tb-eztb-list" data-role="merged-list"></div>` +
+		`<button class="tb-eztb-more" data-role="merged-more" disabled>加载中…</button>` +
+		`<div class="tb-eztb-hint" data-role="merged-hint"></div>` +
+		`</div>` +
+		`</div>`;
 
 	let counts: ForumCounts = {};
 	/** 展开"全部吧"列表的状态：面板重渲染会重建 DOM，状态得存在这里 */
@@ -744,39 +822,133 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 	const filterSelect = body.querySelector<HTMLSelectElement>(
 		'[data-act="forum-filter"]',
 	);
+	const searchInput = body.querySelector<HTMLInputElement>(
+		'[data-act="post-search"]',
+	);
 	const filterHintEl = body.querySelector<HTMLElement>(
 		'[data-role="filter-hint"]',
 	);
+	const viewEl = body.querySelector<HTMLElement>(".tb-eztb-postview");
+	const mergedListEl = body.querySelector<HTMLElement>(
+		'[data-role="merged-list"]',
+	);
+	const mergedMoreBtn = body.querySelector<HTMLButtonElement>(
+		'[data-role="merged-more"]',
+	);
+	const mergedHintEl = body.querySelector<HTMLElement>(
+		'[data-role="merged-hint"]',
+	);
+	const mergedNoticeEl = body.querySelector<HTMLElement>(
+		'[data-role="merged-notice"]',
+	);
+	/** 已挂载的两路列表把手：合并视图要读它们的行、还能替用户继续翻页 */
+	const handles = new Map<PostSubTab, PagedListHandle<PostRow>>();
 
-	/** 某个子页签里当前可见（没被筛掉）的行数 */
-	const visibleRows = (subTab: PostSubTab): number =>
-		Array.from(
-			body.querySelectorAll<HTMLElement>(
-				`.tb-eztb-subpane[data-subpane="${subTab}"] .tb-eztb-row`,
-			),
-		).filter((row) => !row.classList.contains("tb-eztb-filtered-out")).length;
+	/** 搜索词（另存一份在 dataset 上，点「刷新当前页签」之后还在） */
+	let searchQuery = body.dataset.query ?? "";
+
+	const loadedRows = (id: PostSubTab): PostRow[] =>
+		handles.get(id)?.rows() ?? [];
+
+	const matchesForum = (forumName: string): boolean =>
+		!forumFilter || (forumName.trim() || UNKNOWN_FORUM) === forumFilter;
+
+	const matchesFilters = (post: PostRow): boolean =>
+		matchesForum(post.forumName) && postMatchesQuery(post, searchQuery);
+
+	/** 分开视图的行是**增量**插进 DOM 的，只能逐行按 data-forum / data-search 判定 */
+	const rowMatchesFilters = (row: HTMLElement): boolean => {
+		if (forumFilter && (row.dataset.forum ?? UNKNOWN_FORUM) !== forumFilter) {
+			return false;
+		}
+		const needle = searchQuery.trim().toLowerCase();
+		return !needle || (row.dataset.search ?? "").includes(needle);
+	};
+
+	const updateHint = () => {
+		if (!filterHintEl) return;
+		const matched = {
+			topic: loadedRows("topic").filter(matchesFilters).length,
+			reply: loadedRows("reply").filter(matchesFilters).length,
+		};
+		filterHintEl.textContent = buildPostFilterHint({
+			forum: forumFilter,
+			query: searchQuery,
+			matched,
+			loadedTotal: loadedRows("topic").length + loadedRows("reply").length,
+		});
+	};
 
 	/**
-	 * 应用筛选：只切行的显隐（DOM 里保留全部行），所以翻页新加载出来的行也会被同一套规则筛。
+	 * 合并视图：把两路**已经加载出来的**行按时间倒序合成一个列表。
+
+	 * 两条 feed 的页码互不相干（§4.3），所以跨 feed 的时间顺序只能是近似的——
+	 * 按钮的 title 与文档里都写明了这一点；点「加载更多」时两路各取下一页。
+	 */
+	const renderMerged = () => {
+		if (!mergedListEl) return;
+		const topicLoaded = loadedRows("topic");
+		const replyLoaded = loadedRows("reply");
+		const loadedTotal = topicLoaded.length + replyLoaded.length;
+		const rows = mergePostRows(topicLoaded, replyLoaded).filter(matchesFilters);
+		mergedListEl.innerHTML = rows.length
+			? rows.map(renderPostRow).join("")
+			: `<div class="tb-eztb-empty">${escapeHtml(
+					loadedTotal
+						? "没有符合筛选条件的发帖或回复"
+						: "还没有加载到发帖或回复",
+				)}</div>`;
+		if (mergedNoticeEl) {
+			const hiddenAll = POST_SUBTABS.every((item) =>
+				handles.get(item.id)?.hidden(),
+			);
+			mergedNoticeEl.innerHTML =
+				hiddenAll && !loadedTotal
+					? `<div class="tb-eztb-warn">${escapeHtml(HIDDEN_POSTS_NOTE)}</div>`
+					: "";
+		}
+		bindFloorButtons(mergedListEl);
+
+		const loading = POST_SUBTABS.some((item) => pending.has(item.id));
+		const done = POST_SUBTABS.every((item) => handles.get(item.id)?.exhausted());
+		const failed = POST_SUBTABS.map((item) => failures.get(item.id)).filter(
+			(message): message is string => !!message,
+		);
+		if (mergedHintEl) {
+			mergedHintEl.textContent = [
+				`已加载 ${topicLoaded.length} 个主题帖 + ${replyLoaded.length} 条回复`,
+				rows.length !== loadedTotal ? `当前显示 ${rows.length} 条` : "",
+				loading ? "还有数据在加载…" : "",
+				done && failed.length ? `部分数据没取到：${failed.join("；")}` : "",
+			]
+				.filter(Boolean)
+				.join(" · ");
+		}
+		if (mergedMoreBtn) {
+			mergedMoreBtn.disabled = loading || done;
+			mergedMoreBtn.textContent = loading
+				? "加载中…"
+				: done
+					? "没有更多了"
+					: "加载更多";
+		}
+	};
+
+	/**
+	 * 筛选 / 搜索变化后统一走这里：分开视图只切行的显隐（DOM 里保留全部行，所以翻页新来的行
+	 * 也会被同一套规则筛），合并视图重建列表，最后更新那行提示。
 	 * 用 class 而不是 `hidden` 属性——行是 flex 布局，`hidden` 的 display 会被样式表覆盖。
 	 */
-	const applyForumFilter = () => {
+	const applyFilters = () => {
 		for (const item of POST_SUBTABS) {
 			for (const row of body.querySelectorAll<HTMLElement>(
 				`.tb-eztb-subpane[data-subpane="${item.id}"] .tb-eztb-row`,
 			)) {
-				const matched =
-					!forumFilter ||
-					(row.dataset.forum ?? UNKNOWN_FORUM) === forumFilter;
-				row.classList.toggle("tb-eztb-filtered-out", !matched);
+				row.classList.toggle("tb-eztb-filtered-out", !rowMatchesFilters(row));
 			}
 		}
-		if (filterHintEl) {
-			filterHintEl.textContent = buildForumFilterHint(forumFilter, {
-				topic: visibleRows("topic"),
-				reply: visibleRows("reply"),
-			});
-		}
+		renderMerged();
+		updateHint();
 	};
 
 	/**
@@ -802,8 +974,43 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 
 	filterSelect?.addEventListener("change", () => {
 		forumFilter = filterSelect.value;
-		applyForumFilter();
+		applyFilters();
 	});
+
+	searchInput?.addEventListener("input", () => {
+		searchQuery = searchInput.value;
+		body.dataset.query = searchQuery;
+		applyFilters();
+	});
+
+	mergedMoreBtn?.addEventListener("click", () => {
+		void (async () => {
+			// 两路各取下一页（各自有 loading 守卫；某一路取完了就自己空转）
+			await Promise.all(
+				POST_SUBTABS.map(
+					(item) => handles.get(item.id)?.loadNext() ?? Promise.resolve(),
+				),
+			);
+			renderMerged();
+			updateHint();
+		})();
+	});
+
+	// 显示方式：分开（两个列表各自翻页）/ 合并（合成一个列表）
+	for (const button of body.querySelectorAll<HTMLElement>("[data-postmode]")) {
+		button.addEventListener("click", () => {
+			const next: PostMode =
+				button.dataset.postmode === "merged" ? "merged" : "split";
+			if (next === mode) return;
+			mode = next;
+			body.dataset.postmode = mode;
+			if (viewEl) viewEl.dataset.mode = mode;
+			for (const item of body.querySelectorAll<HTMLElement>("[data-postmode]")) {
+				item.classList.toggle("active", item.dataset.postmode === mode);
+			}
+			applyFilters();
+		});
+	}
 
 	const updatePie = () => {
 		if (!pieEl) return;
@@ -824,7 +1031,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 				updatePie();
 			});
 		refreshForumFilter();
-		applyForumFilter();
+		applyFilters();
 	};
 	updatePie();
 
@@ -838,7 +1045,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 			`.tb-eztb-subpane[data-subpane="${id}"]`,
 		);
 		if (pane) {
-			mountPostsSubList(
+			const handle = mountPostsSubList(
 				pane,
 				identity,
 				id,
@@ -856,6 +1063,7 @@ function renderPostsTab(body: HTMLElement, identity: Identity): void {
 					updatePie();
 				},
 			);
+			handles.set(id, handle);
 		}
 	};
 

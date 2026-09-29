@@ -325,11 +325,29 @@ export const STYLE_TEXT = `${THEME_VARS}
 .tb-eztb-tag-reply{background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;border:1px solid var(--tb-eztb-border-muted);}
 .tb-eztb-tag-sub{background:var(--tb-eztb-warn-bg-soft) !important;color:var(--tb-eztb-warn-text-strong) !important;border:1px solid var(--tb-eztb-warn-border);}
 /* 「发帖」页签里的两个子页签（主题帖 / 回复）：两个 feed 各自分页，互不影响 */
-/* 按吧筛选：只筛下面两个列表，饼图仍然统计全部（把饼图筛成一段没有信息量）。
-   选择器带上前缀是为了盖过 .tb-eztb-input 的 width:100%（同优先级时后者会赢）。 */
-.tb-eztb-postfilter{display:flex;align-items:center;gap:8px;margin:0 0 10px;flex-wrap:wrap;}
-.tb-eztb-postfilter-label{font-size:12px;color:var(--tb-eztb-text-muted) !important;white-space:nowrap;}
-.tb-eztb-postfilter .tb-eztb-forumfilter{width:auto;max-width:240px;padding:4px 8px;font-size:12px;}
+/* 「发帖」页签的工具条：显示方式（分开 / 合并）+ 只看某个吧 + 内容搜索。
+   只筛下面的列表，饼图仍然统计全部（把饼图筛成一段没有信息量）。
+   选择器带 .tb-eztb-postbar 前缀是为了盖过 .tb-eztb-input 的 width:100%（同优先级时后者会赢）。 */
+.tb-eztb-postbar{margin:0 0 10px;}
+.tb-eztb-postbar-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.tb-eztb-postbar-label{font-size:12px;color:var(--tb-eztb-text-muted) !important;white-space:nowrap;}
+.tb-eztb-modetabs{display:inline-flex;gap:4px;}
+.tb-eztb-modetab{
+  padding:3px 12px;border:1px solid var(--tb-eztb-border-input);border-radius:999px;cursor:pointer;
+  background:var(--tb-eztb-surface-soft) !important;color:var(--tb-eztb-text-muted) !important;
+  font:inherit;font-size:12px;line-height:20px;white-space:nowrap;
+}
+.tb-eztb-modetab:hover{color:var(--tb-eztb-accent) !important;border-color:var(--tb-eztb-accent-border);}
+.tb-eztb-modetab.active{
+  background:var(--tb-eztb-accent-bg) !important;border-color:var(--tb-eztb-accent);
+  color:var(--tb-eztb-accent) !important;font-weight:600;
+}
+.tb-eztb-postbar .tb-eztb-forumfilter{width:auto;max-width:220px;padding:4px 8px;font-size:12px;}
+.tb-eztb-postbar .tb-eztb-postsearch{width:auto;flex:1 1 160px;max-width:260px;padding:4px 8px;font-size:12px;}
+.tb-eztb-postbar .tb-eztb-hint{margin-top:6px;}
+/* 分开 / 合并：同一时刻只显示一种视图 */
+.tb-eztb-postview[data-mode="split"] .tb-eztb-mergedview{display:none !important;}
+.tb-eztb-postview[data-mode="merged"] .tb-eztb-splitview{display:none !important;}
 /* 被筛掉的行只藏起来（DOM 里留着），翻页新加载的行走同一套筛选规则 */
 .tb-eztb-row.tb-eztb-filtered-out{display:none !important;}
 .tb-eztb-subtabs{display:flex;gap:6px;margin:0 0 10px;}

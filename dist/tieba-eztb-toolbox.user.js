@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.8.2
+// @version             1.8.3
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -30899,12 +30899,24 @@ ${endStackCall}`;
     });
     return `<option value=""${selected ? "" : " selected"}>全部吧</option>` + options.join("");
   }
-  function buildForumFilterHint(forum, counts) {
-    if (!forum) return "";
-    if (counts.topic + counts.reply === 0) {
-      return `筛选「${forum}」：该用户在这个吧没有发帖或回复`;
+  function postMatchesQuery(post, query) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return `${post.title ?? ""} ${post.preview ?? ""}`.toLowerCase().includes(needle);
+  }
+  function mergePostRows(topicRows, replyRows) {
+    return [...topicRows, ...replyRows].sort((a, b) => b.createTime - a.createTime);
+  }
+  function buildPostFilterHint(input) {
+    const forum = input.forum.trim();
+    const query = input.query.trim();
+    if (!forum && !query) return "";
+    const label = forum && query ? `筛选「${forum}」+ 搜索「${query}」` : forum ? `筛选「${forum}」` : `搜索「${query}」`;
+    const { topic, reply } = input.matched;
+    if (topic + reply === 0) {
+      return query ? `${label}：已加载的 ${input.loadedTotal} 条里没有命中` : `${label}：该用户在这个吧没有发帖或回复`;
     }
-    return `筛选「${forum}」：主题帖 ${counts.topic} 个 · 回复 ${counts.reply} 条`;
+    return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
   }
   function buildForumListHtml(counts, open) {
     const stats = buildForumStats(counts);
@@ -30999,6 +31011,9 @@ ${endStackCall}`;
     let loaded = 0;
     let totalPages = Number.POSITIVE_INFINITY;
     let loading = false;
+    let exhaustedFlag = false;
+    let hiddenFlag = false;
+    const items = [];
     const refreshFooter = () => {
       const summary5 = options.summaryText?.(loaded, totalPages);
       const parts2 = [];
@@ -31017,6 +31032,7 @@ ${endStackCall}`;
         const result = await options.loadPage(page + 1);
         page += 1;
         loaded += result.items.length;
+        items.push(...result.items);
         if (result.totalPages && result.totalPages > 0) {
           totalPages = result.totalPages;
         }
@@ -31027,19 +31043,20 @@ ${endStackCall}`;
           );
         }
         if (result.hidden) {
+          hiddenFlag = true;
           noticeEl.innerHTML = `<div class="tb-eztb-warn">${escapeHtml(
             options.hiddenText ?? options.emptyText
           )}</div>`;
         }
         options.onPage?.(result);
-        const exhausted = result.items.length === 0 || page >= maxPages || page >= totalPages && Number.isFinite(totalPages);
-        if (!loaded && exhausted) {
+        exhaustedFlag = result.items.length === 0 || page >= maxPages || page >= totalPages && Number.isFinite(totalPages);
+        if (!loaded && exhaustedFlag) {
           if (!result.hidden) {
             listEl.innerHTML = `<div class="tb-eztb-empty">${escapeHtml(options.emptyText)}</div>`;
           }
         }
-        moreBtn.disabled = exhausted;
-        moreBtn.textContent = exhausted ? "没有更多了" : "加载更多";
+        moreBtn.disabled = exhaustedFlag;
+        moreBtn.textContent = exhaustedFlag ? "没有更多了" : "加载更多";
       } catch (error) {
         const message = errorMessage(error);
         options.onError?.(error);
@@ -31058,6 +31075,12 @@ ${endStackCall}`;
       void loadNext();
     });
     void loadNext();
+    return {
+      loadNext,
+      rows: () => items.slice(),
+      exhausted: () => exhaustedFlag,
+      hidden: () => hiddenFlag
+    };
   }
   function renderUserRow(user) {
     const display = user.name_show || user.name || "贴吧用户";
@@ -31311,8 +31334,12 @@ ${endStackCall}`;
   function renderPostRow(post) {
     const isReply = post.kind !== "topic";
     const forum = String(post.forumName ?? "").trim() || UNKNOWN_FORUM;
+    const searchText = `${post.title ?? ""} ${post.preview ?? ""}`.toLowerCase().replace(/\s+/g, " ").trim();
     const subParts = postRowSubParts(post);
-    return `<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`;
+    return (
+      // data-time 是原始时间戳（合并视图按它倒序，测试也按它断言顺序）
+      `<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" data-search="${escapeHtml(searchText)}" data-time="${post.createTime}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`
+    );
   }
   function bindFloorButtons(root) {
     for (const button of Array.from(
@@ -31346,6 +31373,18 @@ ${endStackCall}`;
       });
     }
   }
+  var POST_MODES = [
+    {
+      id: "split",
+      label: "分开",
+      title: "主题帖与回复各占一个列表，各自翻页"
+    },
+    {
+      id: "merged",
+      label: "合并",
+      title: "主题帖与回复合成一个列表（按时间倒序，跨 feed 的顺序是近似的）"
+    }
+  ];
   var POST_SUBTABS = [
     {
       id: "topic",
@@ -31362,7 +31401,7 @@ ${endStackCall}`;
   ];
   function mountPostsSubList(pane, identity4, subTab, onRows, onError3) {
     const spec = POST_SUBTABS.find((item) => item.id === subTab);
-    mountPagedList({
+    return mountPagedList({
       body: pane,
       emptyText: spec.emptyText,
       hiddenText: HIDDEN_POSTS_NOTE,
@@ -31383,12 +31422,15 @@ ${endStackCall}`;
   }
   function renderPostsTab(body, identity4) {
     const active2 = body.dataset.subtab === "reply" ? "reply" : "topic";
+    let mode = body.dataset.postmode === "merged" ? "merged" : "split";
     body.innerHTML = // 占比饼图：按"发帖都发在哪些吧"统计，随已加载的行更新
-    `<div class="tb-eztb-piestat"></div><div class="tb-eztb-postfilter"><label class="tb-eztb-postfilter-label" for="tb-eztb-forumfilter">只看某个吧</label><select id="tb-eztb-forumfilter" class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter"><option value="">全部吧</option></select><span class="tb-eztb-hint" data-role="filter-hint"></span></div><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
+    `<div class="tb-eztb-piestat"></div><div class="tb-eztb-postbar"><div class="tb-eztb-postbar-row"><span class="tb-eztb-postbar-label">显示</span><span class="tb-eztb-modetabs" role="tablist">` + POST_MODES.map(
+      (item) => `<button type="button" role="tab" class="tb-eztb-modetab${item.id === mode ? " active" : ""}" data-postmode="${item.id}" title="${item.title}">${item.label}</button>`
+    ).join("") + `</span><span class="tb-eztb-postbar-label">只看</span><select class="tb-eztb-input tb-eztb-forumfilter" data-act="forum-filter"><option value="">全部吧</option></select><input type="search" class="tb-eztb-input tb-eztb-postsearch" data-act="post-search" placeholder="在发帖 / 回复里搜内容" value="${escapeHtml(body.dataset.query ?? "")}"></div><div class="tb-eztb-hint" data-role="filter-hint"></div></div><div class="tb-eztb-postview" data-mode="${mode}"><div class="tb-eztb-splitview"><div class="tb-eztb-subtabs" role="tablist">` + POST_SUBTABS.map(
       (item) => `<button type="button" role="tab" class="tb-eztb-subtab${item.id === active2 ? " active" : ""}" data-subtab="${item.id}">${item.label}</button>`
     ).join("") + `</div>` + POST_SUBTABS.map(
       (item) => `<div class="tb-eztb-subpane${item.id === active2 ? " active" : ""}" data-subpane="${item.id}"></div>`
-    ).join("");
+    ).join("") + `</div><div class="tb-eztb-mergedview"><div class="tb-eztb-notice" data-role="merged-notice"></div><div class="tb-eztb-list" data-role="merged-list"></div><button class="tb-eztb-more" data-role="merged-more" disabled>加载中…</button><div class="tb-eztb-hint" data-role="merged-hint"></div></div></div>`;
     let counts = {};
     let listOpen = false;
     let forumFilter = "";
@@ -31399,29 +31441,94 @@ ${endStackCall}`;
     const filterSelect = body.querySelector(
       '[data-act="forum-filter"]'
     );
+    const searchInput = body.querySelector(
+      '[data-act="post-search"]'
+    );
     const filterHintEl = body.querySelector(
       '[data-role="filter-hint"]'
     );
-    const visibleRows = (subTab) => Array.from(
-      body.querySelectorAll(
-        `.tb-eztb-subpane[data-subpane="${subTab}"] .tb-eztb-row`
-      )
-    ).filter((row) => !row.classList.contains("tb-eztb-filtered-out")).length;
-    const applyForumFilter = () => {
+    const viewEl = body.querySelector(".tb-eztb-postview");
+    const mergedListEl = body.querySelector(
+      '[data-role="merged-list"]'
+    );
+    const mergedMoreBtn = body.querySelector(
+      '[data-role="merged-more"]'
+    );
+    const mergedHintEl = body.querySelector(
+      '[data-role="merged-hint"]'
+    );
+    const mergedNoticeEl = body.querySelector(
+      '[data-role="merged-notice"]'
+    );
+    const handles = /* @__PURE__ */ new Map();
+    let searchQuery = body.dataset.query ?? "";
+    const loadedRows = (id) => handles.get(id)?.rows() ?? [];
+    const matchesForum = (forumName) => !forumFilter || (forumName.trim() || UNKNOWN_FORUM) === forumFilter;
+    const matchesFilters = (post) => matchesForum(post.forumName) && postMatchesQuery(post, searchQuery);
+    const rowMatchesFilters = (row) => {
+      if (forumFilter && (row.dataset.forum ?? UNKNOWN_FORUM) !== forumFilter) {
+        return false;
+      }
+      const needle = searchQuery.trim().toLowerCase();
+      return !needle || (row.dataset.search ?? "").includes(needle);
+    };
+    const updateHint = () => {
+      if (!filterHintEl) return;
+      const matched = {
+        topic: loadedRows("topic").filter(matchesFilters).length,
+        reply: loadedRows("reply").filter(matchesFilters).length
+      };
+      filterHintEl.textContent = buildPostFilterHint({
+        forum: forumFilter,
+        query: searchQuery,
+        matched,
+        loadedTotal: loadedRows("topic").length + loadedRows("reply").length
+      });
+    };
+    const renderMerged = () => {
+      if (!mergedListEl) return;
+      const topicLoaded = loadedRows("topic");
+      const replyLoaded = loadedRows("reply");
+      const loadedTotal = topicLoaded.length + replyLoaded.length;
+      const rows = mergePostRows(topicLoaded, replyLoaded).filter(matchesFilters);
+      mergedListEl.innerHTML = rows.length ? rows.map(renderPostRow).join("") : `<div class="tb-eztb-empty">${escapeHtml(
+        loadedTotal ? "没有符合筛选条件的发帖或回复" : "还没有加载到发帖或回复"
+      )}</div>`;
+      if (mergedNoticeEl) {
+        const hiddenAll = POST_SUBTABS.every(
+          (item) => handles.get(item.id)?.hidden()
+        );
+        mergedNoticeEl.innerHTML = hiddenAll && !loadedTotal ? `<div class="tb-eztb-warn">${escapeHtml(HIDDEN_POSTS_NOTE)}</div>` : "";
+      }
+      bindFloorButtons(mergedListEl);
+      const loading = POST_SUBTABS.some((item) => pending4.has(item.id));
+      const done7 = POST_SUBTABS.every((item) => handles.get(item.id)?.exhausted());
+      const failed = POST_SUBTABS.map((item) => failures2.get(item.id)).filter(
+        (message) => !!message
+      );
+      if (mergedHintEl) {
+        mergedHintEl.textContent = [
+          `已加载 ${topicLoaded.length} 个主题帖 + ${replyLoaded.length} 条回复`,
+          rows.length !== loadedTotal ? `当前显示 ${rows.length} 条` : "",
+          loading ? "还有数据在加载…" : "",
+          done7 && failed.length ? `部分数据没取到：${failed.join("；")}` : ""
+        ].filter(Boolean).join(" · ");
+      }
+      if (mergedMoreBtn) {
+        mergedMoreBtn.disabled = loading || done7;
+        mergedMoreBtn.textContent = loading ? "加载中…" : done7 ? "没有更多了" : "加载更多";
+      }
+    };
+    const applyFilters = () => {
       for (const item of POST_SUBTABS) {
         for (const row of body.querySelectorAll(
           `.tb-eztb-subpane[data-subpane="${item.id}"] .tb-eztb-row`
         )) {
-          const matched = !forumFilter || (row.dataset.forum ?? UNKNOWN_FORUM) === forumFilter;
-          row.classList.toggle("tb-eztb-filtered-out", !matched);
+          row.classList.toggle("tb-eztb-filtered-out", !rowMatchesFilters(row));
         }
       }
-      if (filterHintEl) {
-        filterHintEl.textContent = buildForumFilterHint(forumFilter, {
-          topic: visibleRows("topic"),
-          reply: visibleRows("reply")
-        });
-      }
+      renderMerged();
+      updateHint();
     };
     const refreshForumFilter = () => {
       if (!filterSelect) return;
@@ -31438,8 +31545,37 @@ ${endStackCall}`;
     };
     filterSelect?.addEventListener("change", () => {
       forumFilter = filterSelect.value;
-      applyForumFilter();
+      applyFilters();
     });
+    searchInput?.addEventListener("input", () => {
+      searchQuery = searchInput.value;
+      body.dataset.query = searchQuery;
+      applyFilters();
+    });
+    mergedMoreBtn?.addEventListener("click", () => {
+      void (async () => {
+        await Promise.all(
+          POST_SUBTABS.map(
+            (item) => handles.get(item.id)?.loadNext() ?? Promise.resolve()
+          )
+        );
+        renderMerged();
+        updateHint();
+      })();
+    });
+    for (const button of body.querySelectorAll("[data-postmode]")) {
+      button.addEventListener("click", () => {
+        const next4 = button.dataset.postmode === "merged" ? "merged" : "split";
+        if (next4 === mode) return;
+        mode = next4;
+        body.dataset.postmode = mode;
+        if (viewEl) viewEl.dataset.mode = mode;
+        for (const item of body.querySelectorAll("[data-postmode]")) {
+          item.classList.toggle("active", item.dataset.postmode === mode);
+        }
+        applyFilters();
+      });
+    }
     const updatePie = () => {
       if (!pieEl) return;
       const notes = buildPieNotes(
@@ -31456,7 +31592,7 @@ ${endStackCall}`;
         updatePie();
       });
       refreshForumFilter();
-      applyForumFilter();
+      applyFilters();
     };
     updatePie();
     const mounted = /* @__PURE__ */ new Set();
@@ -31467,7 +31603,7 @@ ${endStackCall}`;
         `.tb-eztb-subpane[data-subpane="${id}"]`
       );
       if (pane) {
-        mountPostsSubList(
+        const handle = mountPostsSubList(
           pane,
           identity4,
           id,
@@ -31484,6 +31620,7 @@ ${endStackCall}`;
             updatePie();
           }
         );
+        handles.set(id, handle);
       }
     };
     const activate = (id) => {
@@ -31999,11 +32136,29 @@ ${endStackCall}`;
 .tb-eztb-tag-reply{background:var(--tb-eztb-chip) !important;color:var(--tb-eztb-text-muted) !important;border:1px solid var(--tb-eztb-border-muted);}
 .tb-eztb-tag-sub{background:var(--tb-eztb-warn-bg-soft) !important;color:var(--tb-eztb-warn-text-strong) !important;border:1px solid var(--tb-eztb-warn-border);}
 /* 「发帖」页签里的两个子页签（主题帖 / 回复）：两个 feed 各自分页，互不影响 */
-/* 按吧筛选：只筛下面两个列表，饼图仍然统计全部（把饼图筛成一段没有信息量）。
-   选择器带上前缀是为了盖过 .tb-eztb-input 的 width:100%（同优先级时后者会赢）。 */
-.tb-eztb-postfilter{display:flex;align-items:center;gap:8px;margin:0 0 10px;flex-wrap:wrap;}
-.tb-eztb-postfilter-label{font-size:12px;color:var(--tb-eztb-text-muted) !important;white-space:nowrap;}
-.tb-eztb-postfilter .tb-eztb-forumfilter{width:auto;max-width:240px;padding:4px 8px;font-size:12px;}
+/* 「发帖」页签的工具条：显示方式（分开 / 合并）+ 只看某个吧 + 内容搜索。
+   只筛下面的列表，饼图仍然统计全部（把饼图筛成一段没有信息量）。
+   选择器带 .tb-eztb-postbar 前缀是为了盖过 .tb-eztb-input 的 width:100%（同优先级时后者会赢）。 */
+.tb-eztb-postbar{margin:0 0 10px;}
+.tb-eztb-postbar-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.tb-eztb-postbar-label{font-size:12px;color:var(--tb-eztb-text-muted) !important;white-space:nowrap;}
+.tb-eztb-modetabs{display:inline-flex;gap:4px;}
+.tb-eztb-modetab{
+  padding:3px 12px;border:1px solid var(--tb-eztb-border-input);border-radius:999px;cursor:pointer;
+  background:var(--tb-eztb-surface-soft) !important;color:var(--tb-eztb-text-muted) !important;
+  font:inherit;font-size:12px;line-height:20px;white-space:nowrap;
+}
+.tb-eztb-modetab:hover{color:var(--tb-eztb-accent) !important;border-color:var(--tb-eztb-accent-border);}
+.tb-eztb-modetab.active{
+  background:var(--tb-eztb-accent-bg) !important;border-color:var(--tb-eztb-accent);
+  color:var(--tb-eztb-accent) !important;font-weight:600;
+}
+.tb-eztb-postbar .tb-eztb-forumfilter{width:auto;max-width:220px;padding:4px 8px;font-size:12px;}
+.tb-eztb-postbar .tb-eztb-postsearch{width:auto;flex:1 1 160px;max-width:260px;padding:4px 8px;font-size:12px;}
+.tb-eztb-postbar .tb-eztb-hint{margin-top:6px;}
+/* 分开 / 合并：同一时刻只显示一种视图 */
+.tb-eztb-postview[data-mode="split"] .tb-eztb-mergedview{display:none !important;}
+.tb-eztb-postview[data-mode="merged"] .tb-eztb-splitview{display:none !important;}
 /* 被筛掉的行只藏起来（DOM 里留着），翻页新加载的行走同一套筛选规则 */
 .tb-eztb-row.tb-eztb-filtered-out{display:none !important;}
 .tb-eztb-subtabs{display:flex;gap:6px;margin:0 0 10px;}

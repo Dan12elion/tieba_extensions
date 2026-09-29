@@ -695,7 +695,11 @@ const PAGE = `<!doctype html>
       until(function () {
         var pane = inPanel('.tb-eztb-pane[data-pane="posts"]');
         var sel = pane ? pane.querySelector('[data-act="forum-filter"]') : null;
-        return !!sel && sel.options.length > 1;
+        // 等**两路都停稳**再记基线：只等主题帖的话，回复那一路会在断言中途到齐，
+        // 行数就变了（合并视图渲染的同一批行也会被 .tb-eztb-row 选中，所以下面一律按子页签限定作用域）
+        return !!sel && sel.options.length > 1 &&
+          rowsIn(subPane('topic')).length > 0 && rowsIn(subPane('reply')).length > 0 &&
+          subPaneSettled('topic') && subPaneSettled('reply');
       }, function (ready) {
         var pane = inPanel('.tb-eztb-pane[data-pane="posts"]');
         var sel = pane.querySelector('[data-act="forum-filter"]');
@@ -706,10 +710,14 @@ const PAGE = `<!doctype html>
             sel.options[0].value === '' && sel.value === '', sel.options[0].textContent);
 
         var forum = sel.options[1].value;
-        var allRows = pane.querySelectorAll('.tb-eztb-row').length;
+        var splitRows = function () {
+          return Array.prototype.slice.call(
+            pane.querySelectorAll('.tb-eztb-subpane[data-subpane] .tb-eztb-row'));
+        };
+        var allRows = splitRows().length;
         sel.value = forum;
         sel.dispatchEvent(new Event('change'));
-        var rows = Array.prototype.slice.call(pane.querySelectorAll('.tb-eztb-row'));
+        var rows = splitRows();
         var matched = rows.filter(function (r) { return r.getAttribute('data-forum') === forum; });
         var kept = rows.filter(function (r) { return !r.classList.contains('tb-eztb-filtered-out'); });
         add('按吧筛选：只有这个吧的行留在列表里（两个子页签一起筛）',
@@ -761,13 +769,135 @@ const PAGE = `<!doctype html>
                 landed && visible.length === 1 && visible[0] === 'forums',
                 '可见页签=' + visible.join(','));
             add('阶段 9 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-            finish();
+            phaseMergeAndSearch();
           }, 200);
         }, 200);
       }, 200);
     }, 200);
   }
 
+  /**
+   * 阶段 10：合并查询（主题帖 + 回复合成一个列表）与内容搜索。
+   */
+  function phaseMergeAndSearch() {
+    var closeOld = inPanel('.tb-eztb-close');
+    if (closeOld) closeOld.click();
+    var pagerBtn = document.querySelector('#pager-post .tb-eztb-btn');
+    if (!pagerBtn) { finish(); return; }
+    pagerBtn.click();
+    var postsTab = inPanel('.tb-eztb-tab[data-tab="posts"]');
+    if (!postsTab) { finish(); return; }
+    postsTab.click();
+
+    until(function () {
+      return rowsIn(subPane('topic')).length > 0 && rowsIn(subPane('reply')).length > 0;
+    }, function (bothFeeds) {
+      var pane = inPanel('.tb-eztb-pane[data-pane="posts"]');
+      var splitBtn = pane.querySelector('.tb-eztb-modetab[data-postmode="split"]');
+      var mergedBtn = pane.querySelector('.tb-eztb-modetab[data-postmode="merged"]');
+      var topicRows = rowsIn(subPane('topic')).length;
+      var replyRows = rowsIn(subPane('reply')).length;
+      add('（阶段 10）发帖页签有「分开 / 合并」两个按钮', !!splitBtn && !!mergedBtn, '');
+      add('（阶段 10）两路 feed 都加载出来了（合并的前提）', bothFeeds,
+          '主题帖 ' + topicRows + ' / 回复 ' + replyRows);
+      if (!splitBtn || !mergedBtn || !bothFeeds) { finish(); return; }
+      add('（阶段 10）默认是「分开」',
+          splitBtn.classList.contains('active') && !mergedBtn.classList.contains('active'), '');
+
+      // 合并之后要做的几步（合并 → 加载更多 → 切回分开 → 搜索），写成具名函数便于串接
+      var continueWithSearch = function () {
+        splitBtn.click();
+        add('切回「分开」后两个子页签还在，行数没有变少',
+            visibleSubPanes().length === 1 &&
+              rowsIn(subPane('topic')).length >= topicRows &&
+              rowsIn(subPane('reply')).length >= replyRows,
+            '主题帖 ' + rowsIn(subPane('topic')).length + ' / 回复 ' + rowsIn(subPane('reply')).length);
+
+        var search = pane.querySelector('[data-act="post-search"]');
+        add('（阶段 10）发帖页签有内容搜索框', !!search, '');
+        if (!search) { finish(); return; }
+        var firstRow = subPane('topic').querySelector('.tb-eztb-row');
+        var haystack = firstRow ? (firstRow.getAttribute('data-search') || '') : '';
+        var needle = haystack.slice(0, 8).trim();
+        add('（阶段 10）能拿到用来搜的样本文本', needle.length >= 2, '样本=' + needle);
+        if (needle.length < 2) { finish(); return; }
+
+        var allRows = Array.prototype.slice.call(pane.querySelectorAll('.tb-eztb-subpane .tb-eztb-row'));
+        var keptRows = function () {
+          return allRows.filter(function (r) { return !r.classList.contains('tb-eztb-filtered-out'); });
+        };
+        var hintEl = pane.querySelector('[data-role="filter-hint"]');
+
+        search.value = needle;
+        search.dispatchEvent(new Event('input'));
+        var expected = allRows.filter(function (r) {
+          return (r.getAttribute('data-search') || '').indexOf(needle) >= 0;
+        });
+        add('搜索：只留下包含搜索词的行（两个子页签一起筛）',
+            expected.length > 0 && keptRows().length === expected.length,
+            '保留 ' + keptRows().length + ' / 应留 ' + expected.length + ' / 总 ' + allRows.length);
+        add('搜索：提示里写明了搜索词与命中条数',
+            !!hintEl && hintEl.textContent.indexOf(needle) >= 0 && /搜索/.test(hintEl.textContent),
+            hintEl ? hintEl.textContent : '(没有提示)');
+
+        search.value = 'zzz这个搜索词不存在zzz';
+        search.dispatchEvent(new Event('input'));
+        add('搜索：搜不到时一条不剩，并说明是「已加载的 N 条里没有命中」',
+            keptRows().length === 0 && !!hintEl && /没有命中/.test(hintEl.textContent),
+            keptRows().length + ' 行 / ' + (hintEl ? hintEl.textContent : ''));
+
+        search.value = '';
+        search.dispatchEvent(new Event('input'));
+        add('搜索：清空搜索词后所有行都回来', keptRows().length === allRows.length,
+            allRows.length + ' 行');
+        add('阶段 10 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+        finish();
+      };
+
+      mergedBtn.click();
+      var mergedView = pane.querySelector('.tb-eztb-mergedview');
+      var mergedList = pane.querySelector('[data-role="merged-list"]');
+      var mergedRows = rowsIn(mergedList);
+      var kinds = kindCounts(mergedList);
+      add('切到「合并」后只看得到合并列表（分开的两个子页签隐藏）',
+          mergedView.getBoundingClientRect().height > 0 && visibleSubPanes().length === 0,
+          '可见子页签 ' + visibleSubPanes().length + ' 个');
+      add('合并列表把主题帖与回复放在同一个列表里',
+          mergedRows.length === topicRows + replyRows && kinds['主题'] > 0 && kinds['回复'] > 0,
+          '合并 ' + mergedRows.length + ' 行 = 主题帖 ' + topicRows + ' + 回复 ' + replyRows);
+      add('合并列表按时间倒序（用行上的 data-time 判定）',
+          (function () {
+            var times = Array.prototype.map.call(mergedList.querySelectorAll('.tb-eztb-row'), function (r) {
+              return Number(r.getAttribute('data-time'));
+            });
+            for (var i = 1; i < times.length; i += 1) {
+              if (times[i - 1] < times[i]) return false;
+            }
+            return times.length > 1;
+          })(),
+          '时间戳非递增');
+      var mergedHint = pane.querySelector('[data-role="merged-hint"]');
+      add('合并视图的提示写明了两路各加载了多少',
+          // 注意：这段是写在 Node 的模板字符串里的，正则里的反斜杠要写双份——
+          // 单个反斜杠会被 Node 吃掉一层，断言就永远匹配不上（见 HANDOFF §5 #11）
+          !!mergedHint && /已加载 \\d+ 个主题帖 \\+ \\d+ 条回复/.test(mergedHint.textContent),
+          mergedHint ? mergedHint.textContent : '(没有提示)');
+
+      var moreBtn = pane.querySelector('[data-role="merged-more"]');
+      var before = mergedRows.length;
+      if (!moreBtn || moreBtn.disabled) {
+        add('合并视图有可点的「加载更多」按钮', false, moreBtn ? String(moreBtn.textContent) : '(没有按钮)');
+        continueWithSearch();
+        return;
+      }
+      moreBtn.click();
+      until(function () { return rowsIn(mergedList).length > before; }, function (grew) {
+        add('合并视图的「加载更多」会同时把两路往后翻', grew,
+            before + ' → ' + rowsIn(mergedList).length + ' 行');
+        continueWithSearch();
+      }, 300);
+    }, 300);
+  }
   /**
    * 阶段 6：页面上的成分标记。
    *

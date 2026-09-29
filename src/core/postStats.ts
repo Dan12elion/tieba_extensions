@@ -13,7 +13,7 @@
  */
 
 import { countPostsByForum } from "./activityRule.ts";
-import type { PostKind } from "./userPost.ts";
+import type { PostKind, PostRow } from "./userPost.ts";
 
 /** 吧名 → 条数 */
 export type ForumCounts = Record<string, number>;
@@ -138,19 +138,69 @@ export function buildForumFilterOptionsHtml(
 }
 
 /**
- * 筛选提示：选中某个吧时说明筛的是谁、命中多少条；这个吧一条也没有就明说。
+ * 这一行是否命中搜索词。
 
- * 不筛选（全部吧）时返回空串，界面上不留一行废话。
+ * 只看**标题 + 正文摘要**（用户要的是"发帖或回复里有没有这句话"），大小写不敏感，
+ * 首尾空白忽略；搜索词为空时一律算命中（等于没筛）。
  */
-export function buildForumFilterHint(
-	forum: string,
-	counts: { topic: number; reply: number },
-): string {
-	if (!forum) return "";
-	if (counts.topic + counts.reply === 0) {
-		return `筛选「${forum}」：该用户在这个吧没有发帖或回复`;
+export function postMatchesQuery(
+	post: Pick<PostRow, "title" | "preview">,
+	query: string,
+): boolean {
+	const needle = query.trim().toLowerCase();
+	if (!needle) return true;
+	return `${post.title ?? ""} ${post.preview ?? ""}`
+		.toLowerCase()
+		.includes(needle);
+}
+
+/**
+ * 「合并查询」用的行序：主题帖 + 回复按时间倒序。
+
+ * 两条 feed 的页码本来互不相干（见 §4.3），所以这里只是把**已经加载出来的**行
+ * 归并成一个列表，跨 feed 的时间顺序是近似的——面板里也是这么写的。
+ * `Array.prototype.sort` 是稳定排序，同一秒的行会保持"主题帖在前"的原始顺序。
+ */
+export function mergePostRows(
+	topicRows: PostRow[],
+	replyRows: PostRow[],
+): PostRow[] {
+	return [...topicRows, ...replyRows].sort((a, b) => b.createTime - a.createTime);
+}
+
+export interface PostFilterHintInput {
+	/** 「只看某个吧」选中的吧名，空串 = 不筛 */
+	forum: string;
+	/** 搜索词，空串 = 不搜 */
+	query: string;
+	/** 筛 + 搜之后还剩多少条 */
+	matched: { topic: number; reply: number };
+	/** 已加载的总条数（两路相加），只有"一条都没命中"时才用得上 */
+	loadedTotal: number;
+}
+
+/**
+ * 筛选/搜索的说明文字：写清筛的是谁、命中多少条；一条都没有就明说。
+
+ * 既没筛也没搜时返回空串，界面上不留一行废话。
+ */
+export function buildPostFilterHint(input: PostFilterHintInput): string {
+	const forum = input.forum.trim();
+	const query = input.query.trim();
+	if (!forum && !query) return "";
+	const label =
+		forum && query
+			? `筛选「${forum}」+ 搜索「${query}」`
+			: forum
+				? `筛选「${forum}」`
+				: `搜索「${query}」`;
+	const { topic, reply } = input.matched;
+	if (topic + reply === 0) {
+		return query
+			? `${label}：已加载的 ${input.loadedTotal} 条里没有命中`
+			: `${label}：该用户在这个吧没有发帖或回复`;
 	}
-	return `筛选「${forum}」：主题帖 ${counts.topic} 个 · 回复 ${counts.reply} 条`;
+	return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
 }
 
 /**
