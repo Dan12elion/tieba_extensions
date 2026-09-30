@@ -399,6 +399,21 @@ export const STYLE_TEXT = `${THEME_VARS}
 }
 /* 行里连一个标记都放不下时的兜底：一个小圆点，颜色仍然区分规则 */
 .tb-eztb-badge-dot{padding:0 5px;font-size:10px;line-height:17px;}
+/* 「证据不足」：没有命中、但这次的数据不足以判定。用中性灰，不参与规则配色，
+   免得看起来像"命中了某条规则"（HANDOFF §9.2）。 */
+.tb-eztb-badge-insufficient{
+  color:var(--tb-eztb-text-muted) !important;
+  background:var(--tb-eztb-chip) !important;
+  border-color:var(--tb-eztb-border-input);
+  border-style:solid;
+  font-weight:500;
+}
+/* 键盘可达：徽章自己是 span（用 button 会被 .btn-wrapper 的样式带跑），
+   所以显式给一圈焦点环，键盘用户才看得出焦点在哪。 */
+.tb-eztb-badge:focus-visible,.tb-eztb-btn:focus-visible{
+  outline:2px solid var(--tb-eztb-accent);
+  outline-offset:1px;
+}
 
 /* 面板「成分」页签 */
 .tb-eztb-hits{display:flex;flex-direction:column;gap:10px;}

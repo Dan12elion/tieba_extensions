@@ -14,7 +14,7 @@
 import { countPostsByForum } from "./activityRule.ts";
 import { type KvEntry, createKvCache } from "./kvCache.ts";
 import { loadReplyPage, loadTopicPage } from "./userPost.ts";
-import { errorMessage } from "./util.ts";
+import { describeRequestError } from "./errno.ts";
 
 const CACHE_KEY = "tbEztbToolboxForumActivityV1";
 const CACHE_MAX = 300;
@@ -79,7 +79,7 @@ export async function loadForumActivity(
 		hidden = hidden || page.hidden;
 		rows.push(...page.rows);
 	} catch (error) {
-		failed.push(`主题帖：${errorMessage(error)}`);
+		failed.push(`主题帖：${describeRequestError(error, "签到检测·主题帖")}`);
 	}
 	try {
 		const page = await loadReplyPage(uid, 1);
@@ -87,7 +87,7 @@ export async function loadForumActivity(
 		hidden = hidden || page.hidden;
 		rows.push(...page.rows);
 	} catch (error) {
-		failed.push(`回复：${errorMessage(error)}`);
+		failed.push(`回复：${describeRequestError(error, "签到检测·回复")}`);
 	}
 
 	const value: ForumActivity = {

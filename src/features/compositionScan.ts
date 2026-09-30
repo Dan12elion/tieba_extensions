@@ -31,7 +31,7 @@ import { resolveIdentity } from "../core/identity.ts";
 import { log } from "../core/log.ts";
 import { getSettings, hasBduss } from "../core/settings.ts";
 import type { UserRef } from "../page/adapters.ts";
-import { clearBadges, renderBadges } from "../page/badges.ts";
+import { clearBadges, renderBadges, renderInsufficientBadge } from "../page/badges.ts";
 
 export interface CompositionCheckResult {
 	hits: CompositionHit[];
@@ -49,7 +49,11 @@ const emptyStat = (): CompositionScanStat => ({
 	forumsRecovered: 0,
 	topics: 0,
 	replies: 0,
+	topicPages: 0,
+	replyPages: 0,
+	hidden: false,
 	failed: [],
+	verdict: { insufficient: false, note: "" },
 });
 
 /** 页面内已经登记过的按钮：key → 按钮集合（同一个用户可能在页面上出现多次） */
@@ -81,14 +85,25 @@ function maxPerPage(): number {
 	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }
 
-function applyToButtons(key: string, hits: CompositionHit[]): void {
+function applyToButtons(
+	key: string,
+	hits: CompositionHit[],
+	stat?: CompositionScanStat,
+): void {
 	const ref = refsByKey.get(key);
 	const buttons = buttonsByKey.get(key);
 	if (!ref || !buttons) return;
 	for (const button of buttons) {
 		if (!button.isConnected) continue;
-		if (hits.length) renderBadges(button, hits, ref);
-		else clearBadges(button);
+		if (hits.length) {
+			renderBadges(button, hits, ref);
+		} else if (stat?.verdict?.insufficient) {
+			// 「没有命中」与「数据没拿到」要分开：对方设了隐私时页面上什么都不显示，
+			// 会被读成"这人很干净"（HANDOFF §9.2）。这里挂一个中性标记说明原因。
+			renderInsufficientBadge(button, ref, stat.verdict.note);
+		} else {
+			clearBadges(button);
+		}
 	}
 }
 
@@ -112,7 +127,7 @@ export async function checkUser(
 	if (!options.force && key) {
 		const cached = readCompositionCache(key, rulesHash());
 		if (cached) {
-			applyToButtons(key, cached.hits);
+			applyToButtons(key, cached.hits, cached.stat);
 			return { hits: cached.hits, stat: cached.stat, fromCache: true };
 		}
 	}
@@ -127,6 +142,7 @@ export async function checkUser(
 			profileForums: identity.profile?.likeForum ?? [],
 		},
 		rules,
+		{ pages: getSettings().compositionPages },
 	);
 
 	if (key) {
@@ -136,7 +152,7 @@ export async function checkUser(
 			stat: detection.stat,
 		});
 		checkedKeys.add(key);
-		applyToButtons(key, detection.hits);
+		applyToButtons(key, detection.hits, detection.stat);
 	}
 
 	return { hits: detection.hits, stat: detection.stat, fromCache: false };

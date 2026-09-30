@@ -11,6 +11,7 @@ export type PanelTabId =
 	| "profile"
 	| "composition"
 	| "follow"
+	| "mutual"
 	| "forums"
 	| "fans"
 	| "posts";
@@ -19,6 +20,7 @@ export const PANEL_TABS: ReadonlyArray<{ id: PanelTabId; label: string }> = [
 	{ id: "profile", label: "资料" },
 	{ id: "composition", label: "成分" },
 	{ id: "follow", label: "关注的人" },
+	{ id: "mutual", label: "共同关注" },
 	{ id: "forums", label: "关注的吧" },
 	{ id: "fans", label: "粉丝" },
 	{ id: "posts", label: "发帖" },

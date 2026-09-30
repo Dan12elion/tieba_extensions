@@ -16,7 +16,8 @@
 import { getComments } from "tieba.js";
 import { callSdkLoose } from "./identity.ts";
 import { type KvEntry, createKvCache } from "./kvCache.ts";
-import { errorMessage, toNumber } from "./util.ts";
+import { toNumber } from "./util.ts";
+import { describeRequestError } from "./errno.ts";
 
 const CACHE_KEY = "tbEztbToolboxReplyFloorV1";
 const CACHE_MAX = 800;
@@ -116,6 +117,6 @@ export async function fetchReplyFloor(
 		);
 		return { floor: entry.floor, excerpt: entry.excerpt, via: "request" };
 	} catch (error) {
-		return { reason: errorMessage(error) };
+		return { reason: describeRequestError(error, "查楼层") };
 	}
 }

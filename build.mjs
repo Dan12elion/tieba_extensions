@@ -82,6 +82,10 @@ ${[
 	metaLine("grant", "GM_setValue"),
 	metaLine("grant", "GM_registerMenuCommand"),
 	metaLine("connect", "tiebac.baidu.com"),
+	// 「校验 BDUSS」要问贴吧自己的「我是谁」端点（/f/user/json_userinfo）。
+	// 大多数情况下它与页面同源、不需要跨域授权，但显式声明后，
+	// 在非同源页面（测试页、快照页）上也能正常工作。
+	metaLine("connect", "tieba.baidu.com"),
 	metaLine("compatible", "chrome"),
 	metaLine("compatible", "edge"),
 	metaLine("incompatible", "firefox"),
@@ -177,6 +181,12 @@ async function main() {
 		legalComments: "eof",
 		write: false,
 		banner: { js: BANNER },
+		// 把版本号编译进产物：诊断报告要写出"这份报告是哪个版本给的"，
+		// 否则用户报障时我们连他装的是哪一版都不知道（元数据在运行期读不到，
+		// 拿它得申请 GM_info 权限，不值得）。
+		define: {
+			__EZTB_VERSION__: JSON.stringify(pkg.version),
+		},
 		plugins: [shimPlugin],
 		logLevel: "info",
 	};

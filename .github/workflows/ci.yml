@@ -74,6 +74,12 @@ jobs:
         working-directory: repo
         run: node scripts/keyword-test.mjs
 
+      # 三处版本号（package.json / 产物 @version / CHANGELOG）必须一致。
+      # 产物在仓库里且用户按版本号收更新，所以这条和「产物同步」是一对。
+      - name: 版本一致性
+        working-directory: repo
+        run: node scripts/version.mjs
+
   browser-suites:
     name: 真机测试（手动触发）
     # click-test / page-test 走无头 Edge，脚本里的路径是 Windows 的；

@@ -1,0 +1,125 @@
+name: 缺陷报告
+description: 报告「查询」按钮、面板、成分标记等功能的异常。界面类问题必须附「诊断当前页面」的报告。
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 提交前请先看这几行
+
+        - 先读 [README](https://github.com/Dan12elion/tieba_extensions/blob/main/README.md) 里的「**尚未验证**」与各处「**已知限制**」：
+          带 BDUSS 的鉴权接口（关注的吧 / 粉丝 / 发帖）与真实页面上的按钮注入**还没有在真机上验证过**；
+          「对方隐藏了发帖记录」「没有用户名的账号查不到吧内等级」是**贴吧自身的限制**，不是缺陷。
+        - **界面相关的报障必须附诊断报告**（下面第 1 项）。按钮不出、点不动、被遮挡、成分标记折行这类问题，
+          没有报告基本定位不了——报告里已经带了选择器命中数、关键约束自检与最近的日志。
+        - 旧的 `tieba-eztb-follow.user.js` 请先卸载：它已经失效，还会和本脚本互相抢 DOM 标记。
+        - **请勿粘贴 BDUSS 或 cookie**：那是账号登录凭据，不要分享。诊断报告与日志不会带凭据，可以整段贴全文。
+        - 更细的排障说明见 [HANDOFF.md 的「需要用户配合的事」](https://github.com/Dan12elion/tieba_extensions/blob/main/HANDOFF.md)。
+
+  - type: textarea
+    id: diagnostic_report
+    attributes:
+      label: 诊断报告全文（必填）
+      description: >-
+        在出问题的页面上点脚本菜单「eztb：诊断当前页面」，面板出来后点「复制报告」，把全文原样粘贴到这里。
+        报告含页面 URL、各扫描器的选择器命中数、已注入按钮数、在飞请求数、按钮 pointer-events / z-index /
+        徽章折行等关键约束自检、存储写入失败记录、熔断状态、未收录错误码与最近的日志——排障基本靠它。
+      placeholder: |
+        ===== eztb 诊断报告 =====
+        （把「复制报告」按钮复制到的内容整段粘贴到这里，不要删减）
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: script_version
+    attributes:
+      label: 脚本版本（必填）
+      description: >-
+        在油猴 / Violentmonkey 面板的脚本列表里看这条脚本的版本号，或看产物元数据里的 @version；
+        诊断报告开头一般也带着版本号。改完脚本请重装后再复测，旧版本的报告没法用。
+      placeholder: "例如：1.8.4"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 浏览器与脚本管理器（必填）
+      description: 浏览器名称与版本 + 脚本管理器（Tampermonkey / Violentmonkey）与版本，两个都要写。
+      placeholder: "例如：Edge 141.0.3537.57 + Tampermonkey 5.3.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: page_type
+    attributes:
+      label: 出问题的页面（必填）
+      description: 问题出现在哪一类页面？选「其它」时请在「复现步骤」里写明页面 URL。
+      options:
+        - 新版帖子页
+        - 旧版帖子页
+        - 吧列表页
+        - 用户主页
+        - 其它
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: legacy_script
+    attributes:
+      label: 是否装过旧脚本 tieba-eztb-follow.user.js（必填）
+      description: >-
+        它与本脚本共用 DOM 标记、会互相抢注入，而且按钮早已失效。第一项是必须勾的确认，
+        第二项只在你的脚本管理器里确实还装着它时勾选（勾了建议先卸载再复测）。
+      options:
+        - label: 我已在脚本管理器里核对过这个条目（无论装没装过，都请勾这一项）
+          required: true
+        - label: 我的脚本管理器里仍然装着 tieba-eztb-follow.user.js（未卸载）
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤（必填）
+      description: 从打开哪个页面开始，点到哪一步会出问题。能稳定复现的最好；只偶然出现一次也请写明当时在做什么。
+      placeholder: |
+        1. 打开 https://tieba.baidu.com/p/...
+        2. 点某个用户名旁的「查询」
+        3. 切到「关注的吧」页签
+        4. ……
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望看到什么（必填）
+      placeholder: "例如：每个用户名旁都出现「查询」按钮，点开能切到「发帖」页签。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际看到什么（必填）
+      description: 现象写具体一点（有没有按钮、面板停在哪一步、报了什么错），有截图可以直接拖进来。
+      placeholder: "例如：新版帖子页一个按钮都没有，控制台也没有红色报错。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: console_errors
+    attributes:
+      label: 控制台报错（可选）
+      description: 按 F12 打开开发者工具的 Console，把红色报错整段贴过来即可；没有就留空。
+      placeholder: |
+        （F12 → Console，把红色报错整段粘贴到这里）
+      render: shell
+    validations:
+      required: false

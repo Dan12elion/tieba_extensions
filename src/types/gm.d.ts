@@ -1,5 +1,8 @@
 /** 油猴（Tampermonkey / Violentmonkey）API 声明，只声明本脚本用到的部分。 */
 
+/** 构建期由 build.mjs 注入的版本号（等于 package.json 的 version） */
+declare const __EZTB_VERSION__: string;
+
 interface GMXhrResponse {
 	status: number;
 	statusText: string;

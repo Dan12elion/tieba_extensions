@@ -8,6 +8,7 @@
  * 这里统一用 GM_xmlhttpRequest 实现，绕开 CORS 与混合内容限制。
  */
 import { DEFAULT_TIMEOUT, gmRequest } from "../core/gmhttp.ts";
+import { withRequestPolicy } from "../core/netPolicy.ts";
 
 export type Dispatcher = unknown;
 
@@ -74,14 +75,25 @@ export async function request(
 	url: string | URL,
 	options: RequestOptions = {},
 ): Promise<RequestResult> {
-	const response = await gmRequest({
-		method: options.method ?? "GET",
-		url: upgradeToHttps(String(url)),
-		headers: normalizeHeaders(options.headers),
-		data: (options.body ?? null) as string | FormData | Blob | null,
-		responseType: "arraybuffer",
-		timeout: DEFAULT_TIMEOUT,
-	});
+	/*
+	 * 所有 SDK 的 HTTP 都从这里出去，所以重试与熔断挂在**这一层**：
+	 * 调用方（各取数模块）不用各自实现一遍，也不会漏掉某条路径。
+	 * 重试仍在调用方给的那个限速名额里（调用方用 requestQueue 包住整次 SDK 调用），
+	 * 退避时间比默认间隔长，所以不会变成"绕过限速的密集请求"。
+	 */
+	const target = upgradeToHttps(String(url));
+	const response = await withRequestPolicy(
+		() =>
+			gmRequest({
+				method: options.method ?? "GET",
+				url: target,
+				headers: normalizeHeaders(options.headers),
+				data: (options.body ?? null) as string | FormData | Blob | null,
+				responseType: "arraybuffer",
+				timeout: DEFAULT_TIMEOUT,
+			}),
+		`请求 ${target}`,
+	);
 
 	const raw = response.response;
 	const buffer =

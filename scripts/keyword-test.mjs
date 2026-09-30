@@ -40,6 +40,10 @@ await bundle("src/core/composition.ts", "composition.mjs");
 const postStats = await bundle("src/core/postStats.ts", "postStats.mjs");
 const activityRule = await bundle("src/core/activityRule.ts", "activityRule.mjs");
 const panelTabs = await bundle("src/core/panelTabs.ts", "panelTabs.mjs");
+// 错误码翻译与请求策略都是纯逻辑（后者用注入的时钟），一起在这里钉住
+const errno = await bundle("src/core/errno.ts", "errno.mjs");
+const netPolicy = await bundle("src/core/netPolicy.ts", "netPolicy.mjs");
+const mutual = await bundle("src/core/mutualFollows.ts", "mutualFollows.mjs");
 
 const {
 	parseRules,
@@ -934,10 +938,15 @@ console.log("页签注册表");
 	const { PANEL_TABS, DEFAULT_PANEL_TAB, normalizePanelTabId } = panelTabs;
 	check(
 		"六个页签的 id 与标签都齐（面板、设置、存储共用这一份）",
-		PANEL_TABS.length === 6 &&
+		PANEL_TABS.length === 7 &&
 			PANEL_TABS.map((tab) => tab.id).join(",") ===
-				"profile,composition,follow,forums,fans,posts",
+				"profile,composition,follow,mutual,forums,fans,posts",
 		JSON.stringify(PANEL_TABS),
+	);
+	check(
+		"「共同关注」排在「关注的人」后面（同一个话题挨着）",
+		PANEL_TABS[3].id === "mutual" && PANEL_TABS[3].label === "共同关注",
+		JSON.stringify(PANEL_TABS.map((tab) => tab.label)),
 	);
 	check(
 		"默认页签是「资料」",
@@ -951,6 +960,440 @@ console.log("页签注册表");
 			normalizePanelTabId(undefined) === "profile" &&
 			normalizePanelTabId(123) === "profile" &&
 			normalizePanelTabId("fans") === "fans",
+	);
+}
+
+// ── 贴吧错误码翻译 ────────────────────────────────────────────────────
+console.log("贴吧错误码翻译");
+{
+	const {
+		KNOWN_ERRNO,
+		formatServerError,
+		describeRequestError,
+		recentUnknownErrno,
+		clearUnknownErrno,
+		recordUnknownErrno,
+	} = errno;
+
+	check(
+		"已实测过的码给出人话说明，并带上错误码与贴吧自己的 errmsg",
+		formatServerError(300000, "服务繁忙").includes("300000") &&
+			formatServerError(300000, "服务繁忙").includes("服务繁忙") &&
+			formatServerError(300000, "服务繁忙").includes(KNOWN_ERRNO[300000].hint) &&
+			!formatServerError(300000, "服务繁忙").includes("未收录"),
+		formatServerError(300000, "服务繁忙"),
+	);
+	check(
+		"每个收录的码都必须写明出处（不许凭空猜含义）",
+		Object.values(KNOWN_ERRNO).every(
+			(note) => typeof note.observed === "string" && note.observed.length > 10,
+		),
+	);
+	check(
+		"没见过的码原样显示，并标明未收录",
+		formatServerError(123456, "") ===
+			"贴吧接口返回错误 123456（贴吧没有给出说明文字）（未收录的错误码，已记进诊断日志）",
+		formatServerError(123456, ""),
+	);
+
+	clearUnknownErrno();
+	check("没有遇到未收录的码时缓冲是空的", recentUnknownErrno().length === 0);
+	describeRequestError({ code: 999999, msg: "?" }, "主题帖");
+	const unknown = recentUnknownErrno();
+	check(
+		"遇到未收录的码会记一条（诊断报告据此收集证据）",
+		unknown.length === 1 && unknown[0].includes("errno=999999") && unknown[0].includes("主题帖"),
+		JSON.stringify(unknown),
+	);
+	describeRequestError({ code: 300000, msg: "" }, "主题帖");
+	check(
+		"已收录的码不往缓冲里记（不制造噪音）",
+		recentUnknownErrno().length === 1,
+		JSON.stringify(recentUnknownErrno()),
+	);
+	recordUnknownErrno(1, "x", "y");
+	clearUnknownErrno();
+	check("缓冲可以清空", recentUnknownErrno().length === 0);
+
+	check(
+		"SDK 的业务错误对象被翻译成中文",
+		describeRequestError({ code: 300000, msg: "" }, "发帖").includes("贴吧接口返回错误 300000"),
+	);
+	check(
+		"网络层错误各有各的说法（超时 / 连不上 / 取消）",
+		describeRequestError({ kind: "timeout" }).includes("超时") &&
+			describeRequestError({ kind: "network" }).includes("连不上") &&
+			describeRequestError({ kind: "abort" }) === "请求已取消",
+	);
+	check(
+		"普通 Error 原样透传 message",
+		describeRequestError(new Error("尚未设置 BDUSS")) === "尚未设置 BDUSS",
+	);
+}
+
+// ── 请求重试与熔断 ────────────────────────────────────────────────────
+console.log("请求重试与熔断");
+{
+	const {
+		withRequestPolicy,
+		isRetryableError,
+		breakerSnapshot,
+		resetBreaker,
+		RequestPausedError,
+		RETRY_MAX_ATTEMPTS,
+		RETRY_BASE_DELAY_MS,
+		BREAKER_FAILURE_THRESHOLD,
+		BREAKER_COOLDOWN_MS,
+	} = netPolicy;
+
+	check(
+		"只有网络类错误才重试（业务错误码重试没有意义）",
+		isRetryableError({ kind: "network" }) &&
+			isRetryableError({ kind: "timeout" }) &&
+			isRetryableError({ _tag: "FetchError" }) &&
+			!isRetryableError({ code: 300000, msg: "" }) &&
+			!isRetryableError(new Error("x")),
+	);
+
+	// 注入时钟：测试不真的等 2 秒
+	const makeClock = () => {
+		let now = 1_000_000;
+		const slept = [];
+		return {
+			now: () => now,
+			sleep: async (ms) => {
+				slept.push(ms);
+				now += ms;
+			},
+			slept,
+			advance: (ms) => {
+				now += ms;
+			},
+		};
+	};
+
+	{
+		resetBreaker();
+		const clock = makeClock();
+		let attempts = 0;
+		const result = await withRequestPolicy(
+			async () => {
+				attempts += 1;
+				if (attempts < 3) throw { kind: "network" };
+				return "ok";
+			},
+			"测试请求",
+			clock,
+		);
+		check("网络错误会重试到成功", result === "ok" && attempts === 3, `尝试 ${attempts} 次`);
+		check(
+			"退避是指数增长（第一次 700ms、第二次 1400ms）",
+			clock.slept.join(",") === `${RETRY_BASE_DELAY_MS},${RETRY_BASE_DELAY_MS * 2}`,
+			clock.slept.join(","),
+		);
+		check(
+			"重试成功后失败计数清零",
+			breakerSnapshot(clock.now()).consecutiveFailures === 0,
+		);
+	}
+
+	{
+		resetBreaker();
+		const clock = makeClock();
+		let attempts = 0;
+		let caught = null;
+		try {
+			await withRequestPolicy(
+				async () => {
+					attempts += 1;
+					throw { code: 300000, msg: "" };
+				},
+				"测试请求",
+				clock,
+			);
+		} catch (error) {
+			caught = error;
+		}
+		check(
+			"业务错误码只试一次就放弃（不浪费请求）",
+			attempts === 1 && caught?.code === 300000,
+			`尝试 ${attempts} 次`,
+		);
+		check("业务错误也算一次失败（计入熔断）", breakerSnapshot(clock.now()).consecutiveFailures === 1);
+	}
+
+	{
+		resetBreaker();
+		const clock = makeClock();
+		const fail = () =>
+			withRequestPolicy(
+				async () => {
+					throw { kind: "network" };
+				},
+				"测试请求",
+				clock,
+			);
+		for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i += 1) {
+			await fail().catch(() => {});
+		}
+		const snapshot = breakerSnapshot(clock.now());
+		check(
+			`连续失败 ${BREAKER_FAILURE_THRESHOLD} 次后熔断`,
+			snapshot.open && snapshot.remainingMs === BREAKER_COOLDOWN_MS,
+			JSON.stringify(snapshot),
+		);
+
+		let attempts = 0;
+		let caught = null;
+		try {
+			await withRequestPolicy(
+				async () => {
+					attempts += 1;
+					return "unreachable";
+				},
+				"测试请求",
+				clock,
+			);
+		} catch (error) {
+			caught = error;
+		}
+		check(
+			"熔断期间请求被立刻挡回去（连一次都不发）",
+			caught instanceof RequestPausedError && attempts === 0,
+			`attempts=${attempts}`,
+		);
+		check(
+			"被挡回去的请求会被计数（诊断报告要显示）",
+			breakerSnapshot(clock.now()).pausedRequests === 1,
+		);
+		check(
+			"熔断的错误信息里写明了怎么办",
+			caught.message.includes("诊断当前页面") && caught.message.includes("重置熔断"),
+			caught.message,
+		);
+
+		clock.advance(BREAKER_COOLDOWN_MS);
+		const afterCooldown = await withRequestPolicy(
+			async () => "recovered",
+			"测试请求",
+			clock,
+		);
+		check(
+			"冷却时间过去后自动恢复，且计数清零",
+			afterCooldown === "recovered" &&
+				!breakerSnapshot(clock.now()).open &&
+				breakerSnapshot(clock.now()).consecutiveFailures === 0,
+		);
+	}
+}
+
+// ── 共同关注（交集）与规则校验器 ──────────────────────────────────────
+console.log("共同关注（交集）");
+{
+	const { followKey, intersectFollows, buildMutualSummary } = mutual;
+
+	check(
+		"认人优先用 id，其次 portrait（去掉 query），最后才是名字",
+		followKey({ id: 12, portrait: "tb.1.x", name: "甲" }) === "id:12" &&
+			followKey({ portrait: "tb.1.x?t=1", name: "甲" }) === "portrait:tb.1.x" &&
+			followKey({ name: "甲" }) === "name:甲" &&
+			followKey(null) === "",
+	);
+
+	const mine = [
+		{ id: 1, name: "甲" },
+		{ id: 2, name: "乙" },
+		{ id: 3, name: "丙" },
+	];
+	const theirs = [
+		{ id: 9, name: "己" },
+		{ id: 2, name: "乙" },
+		{ id: 3, name: "丙" },
+		{ id: 2, name: "乙（重复出现）" },
+	];
+	const result = intersectFollows(mine, theirs);
+	check(
+		"交集按对方的顺序给出，且去重",
+		result.common.map((user) => user.id).join(",") === "2,3",
+		JSON.stringify(result.common.map((user) => user.id)),
+	);
+	check("按 id 比上的不算「按名字」", result.byName === 0, String(result.byName));
+
+	const byName = intersectFollows([{ name: "甲" }], [{ name: "甲" }, { name: "乙" }]);
+	check(
+		"没有 id / portrait 时按用户名比，并计数（结论里要提示可能有同名）",
+		byName.common.length === 1 && byName.byName === 1,
+		`common=${byName.common.length} byName=${byName.byName}`,
+	);
+	check(
+		"两边都没人时不报错",
+		intersectFollows([], []).common.length === 0,
+	);
+
+	const summary = buildMutualSummary({
+		common: 2,
+		byName: 1,
+		mineRead: 60,
+		minePages: 3,
+		theirsRead: 40,
+		theirsPages: 2,
+		capped: true,
+	});
+	check(
+		"结论必须写明读了多少页、多少人（不然会被读成「一共只有这么多」）",
+		summary.includes("共同关注 2 人") &&
+			summary.includes("读了 60 人（3 页）") &&
+			summary.includes("读了 40 人（2 页）"),
+		summary,
+	);
+	check(
+		"靠名字比上时要提示可能有同名",
+		summary.includes("按用户名比上"),
+		summary,
+	);
+	check(
+		"到了页数上限要写明「可能还有没比对到的」",
+		summary.includes("可能还有没比对到的"),
+		summary,
+	);
+	check(
+		"没到上限时不留这句废话",
+		!buildMutualSummary({
+			common: 0,
+			mineRead: 20,
+			minePages: 1,
+			theirsRead: 20,
+			theirsPages: 1,
+		}).includes("可能还有没比对到的"),
+	);
+}
+
+console.log("规则校验器（行号级报错）");
+{
+	const { parseRulesDetailed, parseRules } = await import(
+		pathToFileURL(outFile).href
+	);
+
+	const text = [
+		"# 注释行不算问题",
+		"",
+		"🎮原神 | 原神 | 原神吧",
+		"只有名字",
+		"🎮原神 | 重复同名 | 另一个吧",
+		"🎁抽奖 | 互动 抽奖",
+		"🚫矛盾 | 原神 | | 原神",
+		"🛒七段 | a | b | c | d | e | f",
+		"| 没有名称",
+	].join("\n");
+	const { rules, issues } = parseRulesDetailed(text);
+
+	check("解析出的规则条数不变（容错策略没改）", rules.length === 4, `共 ${rules.length} 条`);
+	check(
+		"parseRules 与 parseRulesDetailed 的结果一致（老调用方不受影响）",
+		JSON.stringify(parseRules(text)) === JSON.stringify(rules),
+	);
+	const byLine = (n) => issues.filter((issue) => issue.line === n);
+	check(
+		"只有名称没有条件的行会点出行号",
+		byLine(4).some((issue) => issue.message.includes("没有任何条件")),
+		JSON.stringify(byLine(4)),
+	);
+	check(
+		"同名规则会指出与第几行重复",
+		byLine(5).some((issue) => issue.message.includes("第 3 行")),
+		JSON.stringify(byLine(5)),
+	);
+	check(
+		"关键词里的空格会被提示（脚本不按空格切分）",
+		byLine(6).some((issue) => issue.message.includes("不按空格切分")),
+		JSON.stringify(byLine(6)),
+	);
+	check(
+		"同一个词同时在关键词与排除词里会被提示（那条证据永远被自己否决）",
+		byLine(7).some((issue) => issue.message.includes("永远会被自己否决")),
+		JSON.stringify(byLine(7)),
+	);
+	check(
+		"超过 6 段会提示第 7 段起被忽略",
+		byLine(8).some((issue) => issue.message.includes("第 7 段起会被忽略")),
+		JSON.stringify(byLine(8)),
+	);
+	check(
+		"没有名称的行是错误级，并指出行号",
+		byLine(9).some((issue) => issue.level === "error"),
+		JSON.stringify(byLine(9)),
+	);
+	check(
+		"注释行 / 空行不产生问题（不制造噪音）",
+		byLine(1).length === 0 && byLine(2).length === 0,
+	);
+	check(
+		"干净的规则表零问题",
+		parseRulesDetailed("🎮原神 | 原神,米哈游 | 原神吧").issues.length === 0,
+		JSON.stringify(parseRulesDetailed("🎮原神 | 原神,米哈游 | 原神吧").issues),
+	);
+}
+
+console.log("「没有命中」还是「证据不足」");
+{
+	const { compositionVerdict } = await import(pathToFileURL(outFile).href);
+	const base = {
+		hits: 0,
+		failed: [],
+		hidden: false,
+		needForums: true,
+		needPosts: true,
+		forums: 5,
+		posts: 60,
+	};
+
+	check(
+		"真的有数据却没命中 → 不是证据不足（这才可以不挂标记）",
+		!compositionVerdict(base).insufficient,
+	);
+	check(
+		"有命中就不掺「证据不足」",
+		!compositionVerdict({ ...base, hits: 2, failed: ["主题帖：xxx"] }).insufficient,
+	);
+	check(
+		"取数失败 → 证据不足，并列出缺的是哪几路",
+		compositionVerdict({
+			...base,
+			failed: ["主题帖：网络错误", "回复：超时"],
+		}).note.includes("有 2 路数据没取到") &&
+			compositionVerdict({ ...base, failed: ["主题帖：网络错误"] }).note.includes("主题帖"),
+		compositionVerdict({ ...base, failed: ["主题帖：网络错误"] }).note,
+	);
+	check(
+		"对方隐藏发帖 → 证据不足，且说清是「私密」",
+		compositionVerdict({ ...base, hidden: true, posts: 0 }).note.includes("私密"),
+		compositionVerdict({ ...base, hidden: true, posts: 0 }).note,
+	);
+	check(
+		"规则要用发帖、却一条都没读到 → 证据不足（不是「没有命中」）",
+		compositionVerdict({ ...base, posts: 0 }).note.includes("一条发帖记录都没读到"),
+		compositionVerdict({ ...base, posts: 0 }).note,
+	);
+	check(
+		"规则要用关注的吧、列表却是空的 → 证据不足",
+		compositionVerdict({ ...base, needPosts: false, posts: 0, forums: 0 }).note.includes(
+			"关注贴吧列表是空的",
+		),
+		compositionVerdict({ ...base, needPosts: false, posts: 0, forums: 0 }).note,
+	);
+	check(
+		"规则里没用到的东西为空，不算证据不足",
+		!compositionVerdict({
+			...base,
+			needForums: false,
+			forums: 0,
+			needPosts: true,
+			posts: 60,
+		}).insufficient,
+	);
+	check(
+		"结论里必须写明「这不等于没有命中」",
+		compositionVerdict({ ...base, posts: 0 }).note.includes("不等于"),
 	);
 }
 

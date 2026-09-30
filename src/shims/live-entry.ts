@@ -15,6 +15,9 @@ export {
 	getPanel,
 } from "tieba.js";
 
+// 「校验 BDUSS」要用到的鉴权接口：无效凭据下它们会回 errno，正好当面量清楚
+export { getFans, getFollow, getUserInfo } from "tieba.js";
+
 // 仅供 scripts/live-test.mjs 的探查：直接引用 SDK 生成的编解码器
 export { UserPostReqIdl } from "eztb-internal/userpost-req";
 export { UserPostResIdl } from "eztb-internal/userpost-res";

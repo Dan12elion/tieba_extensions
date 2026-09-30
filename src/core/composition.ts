@@ -73,21 +73,59 @@ function splitList(value: string | undefined): string[] {
 	return out;
 }
 
+/** 规则文本里的问题（解析时收集，设置面板按行号展示） */
+export interface RuleIssue {
+	/** 行号，从 1 开始（用户在设置面板里看到的行号） */
+	line: number;
+	/** 原始那一行（截断到 60 字，只用于展示） */
+	text: string;
+	level: "error" | "warn";
+	message: string;
+}
+
+export interface ParsedRules {
+	rules: CompositionRule[];
+	issues: RuleIssue[];
+}
+
 /**
- * 解析规则文本。
+ * 解析规则文本，并**逐行收集问题**。
  *
- * 容错策略：空行 / 注释行 / 只有名称没有条件的行直接忽略；同名规则只保留第一条。
- * 这样用户从别处粘一份带说明的规则进来，也不会把整张表弄坏。
+ * 为什么要收集而不是默默忽略：解析本身是容错的（注释、空行、缺条件的行都会被跳过），
+ * 但用户看到的是"规则写了却没生效"。以前唯一的反馈是"没命中"，
+ * 现在设置面板能直接说"第 7 行只有名称没有条件，被忽略了"（IMPROVEMENTS §5 的规则生态）。
  */
-export function parseRules(text: string): CompositionRule[] {
+export function parseRulesDetailed(text: string): ParsedRules {
 	const rules: CompositionRule[] = [];
-	const seen = new Set<string>();
-	for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+	const issues: RuleIssue[] = [];
+	const seen = new Map<string, number>();
+	const lines = String(text ?? "").split(/\r?\n/);
+
+	lines.forEach((rawLine, index) => {
+		const lineNumber = index + 1;
 		const line = rawLine.trim();
-		if (!line || line.startsWith("#")) continue;
+		if (!line || line.startsWith("#")) return;
+		const brief = line.length > 60 ? `${line.slice(0, 60)}…` : line;
 		const parts = line.split("|").map((part) => part.trim());
 		const name = parts[0];
-		if (!name) continue;
+		if (!name) {
+			issues.push({
+				line: lineNumber,
+				text: brief,
+				level: "error",
+				message: "这一行没有名称（`|` 前面是空的），整行被忽略。",
+			});
+			return;
+		}
+		if (parts.length > 6) {
+			issues.push({
+				line: lineNumber,
+				text: brief,
+				level: "warn",
+				message: `这一行有 ${parts.length} 段，第 7 段起会被忽略（格式只有 6 段）。`,
+			});
+		}
+
 		const rule: CompositionRule = {
 			name,
 			postKeywords: splitList(parts[1]),
@@ -96,20 +134,79 @@ export function parseRules(text: string): CompositionRule[] {
 			uids: splitList(parts[4]),
 			postForumKeywords: splitList(parts[5]),
 		};
+
+		// 关键词里带空格：不按空格切分是**故意**的，但用户常常是想写两个词
+		for (const [field, values] of [
+			["发帖关键词", rule.postKeywords],
+			["关注的吧关键词", rule.forumKeywords],
+			["排除关键词", rule.excludes],
+			["发帖所在吧关键词", rule.postForumKeywords],
+		] as const) {
+			const spaced = values.find((value) => /\s/.test(value));
+			if (spaced) {
+				issues.push({
+					line: lineNumber,
+					text: brief,
+					level: "warn",
+					message: `${field}里的「${spaced}」带空格。脚本**不按空格切分**关键词，它会被当成一个整词；如果那是两个词，请用逗号分开。`,
+				});
+			}
+		}
+
+		const overlap = rule.postKeywords.filter((keyword) =>
+			rule.excludes.some((item) => item.toLowerCase() === keyword.toLowerCase()),
+		);
+		if (overlap.length) {
+			issues.push({
+				line: lineNumber,
+				text: brief,
+				level: "warn",
+				message: `「${overlap.join("、")}」同时出现在发帖关键词与排除关键词里，这条证据永远会被自己否决。`,
+			});
+		}
+
 		if (
 			!rule.postKeywords.length &&
 			!rule.forumKeywords.length &&
 			!rule.postForumKeywords.length &&
 			!rule.uids.length
 		) {
-			continue;
+			issues.push({
+				line: lineNumber,
+				text: brief,
+				level: "warn",
+				message: "这一行只有名称，没有任何条件，被忽略了（至少要有发帖关键词 / 关注的吧 / 名单 / 发帖所在吧 之一）。",
+			});
+			return;
 		}
+
 		const key = name.toLowerCase();
-		if (seen.has(key)) continue;
-		seen.add(key);
+		const firstLine = seen.get(key);
+		if (firstLine !== undefined) {
+			issues.push({
+				line: lineNumber,
+				text: brief,
+				level: "warn",
+				message: `与第 ${firstLine} 行的规则同名，只保留第一条。`,
+			});
+			return;
+		}
+		seen.set(key, lineNumber);
 		rules.push(rule);
-	}
-	return rules;
+	});
+
+	return { rules, issues };
+}
+
+/**
+ * 解析规则文本。
+ *
+ * 容错策略：空行 / 注释行 / 只有名称没有条件的行直接忽略；同名规则只保留第一条。
+ * 这样用户从别处粘一份带说明的规则进来，也不会把整张表弄坏。
+ * 需要"告诉用户哪一行有问题"时用 `parseRulesDetailed()`。
+ */
+export function parseRules(text: string): CompositionRule[] {
+	return parseRulesDetailed(text).rules;
 }
 
 /** 规则内容的指纹：用来判断缓存是不是上一版规则的产物。 */
@@ -305,6 +402,77 @@ export function matchComposition(
 	}
 
 	return hits;
+}
+
+/**
+ * 「这次到底是没有命中，还是数据没拿到」。
+ *
+ * 起因（HANDOFF §9.2）：对方设了隐私、或者 BDUSS 失效时，取数会失败，
+ * 于是页面上**什么标记都没有**——用户会读成「这人很干净」。
+ * 这两件事必须分开说，所以把判断抽成纯函数放在这里（离线可测）：
+ *   - 有命中 → 那就是命中，不掺"证据不足"；
+ *   - 没有命中但**有数据没拿到 / 样本为空 / 对方隐藏了发帖** → 证据不足，
+ *     界面上给一个中性标记，并写清缺的是什么；
+ *   - 都不是 → 真的没命中（这才可以不挂标记）。
+ */
+export interface CompositionVerdictInput {
+	/** 命中的规则条数 */
+	hits: number;
+	/** 取数失败的原因（每个数据源一条） */
+	failed: string[];
+	/** 对方把发帖记录设为私密（hidePost=1） */
+	hidden: boolean;
+	/** 规则里用到了「关注的吧」 */
+	needForums: boolean;
+	/** 规则里用到了发帖（发帖关键词 / 发帖所在吧） */
+	needPosts: boolean;
+	/** 实际读到的吧数 */
+	forums: number;
+	/** 实际读到的发帖条数（主题帖 + 回复 + 楼中楼） */
+	posts: number;
+}
+
+export interface CompositionVerdict {
+	insufficient: boolean;
+	/** 给人看的一句话；insufficient 为 false 时是空串 */
+	note: string;
+}
+
+export function compositionVerdict(
+	input: CompositionVerdictInput,
+): CompositionVerdict {
+	if (input.hits > 0) return { insufficient: false, note: "" };
+
+	const reasons: string[] = [];
+	if (input.failed.length) {
+		reasons.push(
+			`有 ${input.failed.length} 路数据没取到（${input.failed
+				.map((item) => item.split("：")[0])
+				.join("、")}）`,
+		);
+	}
+	if (input.hidden) reasons.push("对方把发帖记录设为私密");
+	if (
+		input.needPosts &&
+		!input.hidden &&
+		input.failed.length === 0 &&
+		input.posts === 0
+	) {
+		reasons.push("一条发帖记录都没读到");
+	}
+	if (
+		input.needForums &&
+		input.failed.length === 0 &&
+		input.forums === 0
+	) {
+		reasons.push("关注贴吧列表是空的（对方可能隐藏了它）");
+	}
+
+	if (!reasons.length) return { insufficient: false, note: "" };
+	return {
+		insufficient: true,
+		note: `证据不足：${reasons.join("；")}。这不等于「没有命中」。`,
+	};
 }
 
 /**

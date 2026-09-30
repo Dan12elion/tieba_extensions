@@ -292,6 +292,15 @@ export interface PieFeedState {
 	 * 是错的——后者会让用户以为整路都没算进去。
 	 */
 	hasRows?: boolean;
+	/**
+	 * 取数失败发生在第几页（1 = 第一页就没取到）。
+	 *
+	 * 有了它才能把提示写到**页**上：用户报过「饼图里的回复条数少一截」，
+	 * 只说"后续页没取到"没法判断是第 2 页还是第 9 页出了问题（也就没法决定要不要重试）。
+	 */
+	failedPage?: number;
+	/** 失败之前已经成功取到几页 */
+	loadedPages?: number;
 }
 
 /**
@@ -318,10 +327,23 @@ export function buildPieNotes(states: PieFeedState[]): string {
 	}
 	for (const state of failed) {
 		const reason = escapeHtml(state.error ?? "");
+		if (!state.hasRows) {
+			// 第一页就没取到：整路的条数都不在饼图里
+			const page = state.failedPage ?? 1;
+			parts.push(
+				`<div class="tb-eztb-warn">「${state.label}」的第 ${page} 页就没取到（饼图里缺这一路的条数）：${reason}</div>`,
+			);
+			continue;
+		}
+		// 前面几页算进去了，只是后续某一页失败——写清是哪一页，别让人以为整路都缺
+		const detail =
+			state.failedPage === undefined
+				? "后续页没取到"
+				: state.loadedPages
+					? `第 ${state.failedPage} 页没取到（前 ${state.loadedPages} 页已经计入饼图）`
+					: `第 ${state.failedPage} 页没取到`;
 		parts.push(
-			state.hasRows
-				? `<div class="tb-eztb-warn">「${state.label}」的后续页没取到（饼图只统计到已经加载出来的那部分）：${reason}</div>`
-				: `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${reason}</div>`,
+			`<div class="tb-eztb-warn">「${state.label}」的${detail}（饼图只统计到已经加载出来的那部分）：${reason}</div>`,
 		);
 	}
 	return parts.join("");

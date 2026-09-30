@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.8.4
+// @version             1.9.0
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -14,6 +14,7 @@
 // @grant               GM_setValue
 // @grant               GM_registerMenuCommand
 // @connect             tiebac.baidu.com
+// @connect             tieba.baidu.com
 // @compatible          chrome
 // @compatible          edge
 // @incompatible        firefox
@@ -377,6 +378,7 @@
     { id: "profile", label: "资料" },
     { id: "composition", label: "成分" },
     { id: "follow", label: "关注的人" },
+    { id: "mutual", label: "共同关注" },
     { id: "forums", label: "关注的吧" },
     { id: "fans", label: "粉丝" },
     { id: "posts", label: "发帖" }
@@ -397,9 +399,12 @@
     compositionRules: "",
     compositionAuto: true,
     compositionMaxPerPage: 20,
+    compositionPages: 1,
     compositionCacheDays: 3,
     signInLevelThreshold: 6,
-    defaultTab: DEFAULT_PANEL_TAB
+    defaultTab: DEFAULT_PANEL_TAB,
+    rememberLastTab: false,
+    selfIdentity: ""
   };
   var cache2 = null;
   function clampNumber(value, fallback, min4, max6 = Number.POSITIVE_INFINITY) {
@@ -436,6 +441,12 @@
         1,
         200
       ),
+      compositionPages: clampNumber(
+        raw.compositionPages,
+        DEFAULT_SETTINGS.compositionPages,
+        1,
+        10
+      ),
       compositionCacheDays: clampNumber(
         raw.compositionCacheDays,
         DEFAULT_SETTINGS.compositionCacheDays,
@@ -448,7 +459,9 @@
         1,
         18
       ),
-      defaultTab: normalizePanelTabId(raw.defaultTab)
+      defaultTab: normalizePanelTabId(raw.defaultTab),
+      rememberLastTab: raw.rememberLastTab === true,
+      selfIdentity: readString(raw.selfIdentity, DEFAULT_SETTINGS.selfIdentity).trim()
     };
   }
   var MIGRATIONS = {
@@ -611,10 +624,6 @@
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
   }
-  function errorMessage(error) {
-    if (error instanceof Error) return error.message;
-    return String(error);
-  }
 
   // src/core/composition.ts
   var LIST_SEPARATOR = /[,，;；]+/;
@@ -642,15 +651,35 @@
     }
     return out;
   }
-  function parseRules(text) {
+  function parseRulesDetailed(text) {
     const rules = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const issues2 = [];
+    const seen = /* @__PURE__ */ new Map();
+    const lines = String(text ?? "").split(/\r?\n/);
+    lines.forEach((rawLine, index) => {
+      const lineNumber = index + 1;
       const line = rawLine.trim();
-      if (!line || line.startsWith("#")) continue;
+      if (!line || line.startsWith("#")) return;
+      const brief = line.length > 60 ? `${line.slice(0, 60)}…` : line;
       const parts2 = line.split("|").map((part) => part.trim());
       const name = parts2[0];
-      if (!name) continue;
+      if (!name) {
+        issues2.push({
+          line: lineNumber,
+          text: brief,
+          level: "error",
+          message: "这一行没有名称（`|` 前面是空的），整行被忽略。"
+        });
+        return;
+      }
+      if (parts2.length > 6) {
+        issues2.push({
+          line: lineNumber,
+          text: brief,
+          level: "warn",
+          message: `这一行有 ${parts2.length} 段，第 7 段起会被忽略（格式只有 6 段）。`
+        });
+      }
       const rule = {
         name,
         postKeywords: splitList(parts2[1]),
@@ -659,15 +688,60 @@
         uids: splitList(parts2[4]),
         postForumKeywords: splitList(parts2[5])
       };
+      for (const [field, values3] of [
+        ["发帖关键词", rule.postKeywords],
+        ["关注的吧关键词", rule.forumKeywords],
+        ["排除关键词", rule.excludes],
+        ["发帖所在吧关键词", rule.postForumKeywords]
+      ]) {
+        const spaced3 = values3.find((value) => /\s/.test(value));
+        if (spaced3) {
+          issues2.push({
+            line: lineNumber,
+            text: brief,
+            level: "warn",
+            message: `${field}里的「${spaced3}」带空格。脚本**不按空格切分**关键词，它会被当成一个整词；如果那是两个词，请用逗号分开。`
+          });
+        }
+      }
+      const overlap = rule.postKeywords.filter(
+        (keyword) => rule.excludes.some((item) => item.toLowerCase() === keyword.toLowerCase())
+      );
+      if (overlap.length) {
+        issues2.push({
+          line: lineNumber,
+          text: brief,
+          level: "warn",
+          message: `「${overlap.join("、")}」同时出现在发帖关键词与排除关键词里，这条证据永远会被自己否决。`
+        });
+      }
       if (!rule.postKeywords.length && !rule.forumKeywords.length && !rule.postForumKeywords.length && !rule.uids.length) {
-        continue;
+        issues2.push({
+          line: lineNumber,
+          text: brief,
+          level: "warn",
+          message: "这一行只有名称，没有任何条件，被忽略了（至少要有发帖关键词 / 关注的吧 / 名单 / 发帖所在吧 之一）。"
+        });
+        return;
       }
       const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const firstLine = seen.get(key);
+      if (firstLine !== void 0) {
+        issues2.push({
+          line: lineNumber,
+          text: brief,
+          level: "warn",
+          message: `与第 ${firstLine} 行的规则同名，只保留第一条。`
+        });
+        return;
+      }
+      seen.set(key, lineNumber);
       rules.push(rule);
-    }
-    return rules;
+    });
+    return { rules, issues: issues2 };
+  }
+  function parseRules(text) {
+    return parseRulesDetailed(text).rules;
   }
   function hashRules(text) {
     const normalized = JSON.stringify(parseRules(text));
@@ -776,6 +850,27 @@
       });
     }
     return hits;
+  }
+  function compositionVerdict(input) {
+    if (input.hits > 0) return { insufficient: false, note: "" };
+    const reasons = [];
+    if (input.failed.length) {
+      reasons.push(
+        `有 ${input.failed.length} 路数据没取到（${input.failed.map((item) => item.split("：")[0]).join("、")}）`
+      );
+    }
+    if (input.hidden) reasons.push("对方把发帖记录设为私密");
+    if (input.needPosts && !input.hidden && input.failed.length === 0 && input.posts === 0) {
+      reasons.push("一条发帖记录都没读到");
+    }
+    if (input.needForums && input.failed.length === 0 && input.forums === 0) {
+      reasons.push("关注贴吧列表是空的（对方可能隐藏了它）");
+    }
+    if (!reasons.length) return { insufficient: false, note: "" };
+    return {
+      insufficient: true,
+      note: `证据不足：${reasons.join("；")}。这不等于「没有命中」。`
+    };
   }
   function highlightKeywords(text, keywords) {
     const source = String(text ?? "");
@@ -17959,6 +18054,93 @@ ${endStackCall}`;
     _client = client;
   }
 
+  // src/core/netPolicy.ts
+  var RETRY_MAX_ATTEMPTS = 3;
+  var RETRY_BASE_DELAY_MS = 700;
+  var BREAKER_FAILURE_THRESHOLD = 5;
+  var BREAKER_COOLDOWN_MS = 3e4;
+  var RequestPausedError = class extends Error {
+    constructor(remainingMs) {
+      super(
+        `连续 ${BREAKER_FAILURE_THRESHOLD} 次请求失败，已暂停请求约 ${Math.ceil(remainingMs / 1e3)} 秒；可在「诊断当前页面」里点「重置熔断」立即恢复`
+      );
+      this.name = "RequestPausedError";
+      this.remainingMs = remainingMs;
+    }
+  };
+  function isRetryableError(error) {
+    if (!error || typeof error !== "object") return false;
+    const kind = error.kind;
+    if (kind === "network" || kind === "timeout") return true;
+    const tag = error._tag;
+    if (tag === "FetchError") return true;
+    return error.name === "FetchError";
+  }
+  var consecutiveFailures = 0;
+  var openUntil = 0;
+  var pausedRequests = 0;
+  function breakerSnapshot(now = Date.now()) {
+    const remainingMs = Math.max(0, openUntil - now);
+    return {
+      open: remainingMs > 0,
+      consecutiveFailures,
+      openUntil,
+      remainingMs,
+      pausedRequests,
+      threshold: BREAKER_FAILURE_THRESHOLD,
+      cooldownMs: BREAKER_COOLDOWN_MS
+    };
+  }
+  function recordRequestSuccess() {
+    consecutiveFailures = 0;
+    openUntil = 0;
+  }
+  function recordRequestFailure(now = Date.now()) {
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= BREAKER_FAILURE_THRESHOLD && openUntil <= now) {
+      openUntil = now + BREAKER_COOLDOWN_MS;
+    }
+  }
+  function resetBreaker() {
+    consecutiveFailures = 0;
+    openUntil = 0;
+    pausedRequests = 0;
+  }
+  async function withRequestPolicy(task, label = "请求", deps = {}) {
+    const now = deps.now ?? Date.now;
+    const sleep5 = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    for (let attempt = 1; ; attempt += 1) {
+      const snapshot = breakerSnapshot(now());
+      if (snapshot.open) {
+        pausedRequests += 1;
+        throw new RequestPausedError(snapshot.remainingMs);
+      }
+      try {
+        const result = await task();
+        recordRequestSuccess();
+        return result;
+      } catch (error) {
+        if (isRetryableError(error) && attempt < RETRY_MAX_ATTEMPTS) {
+          const delay3 = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+          log.warn(
+            `${label}失败（第 ${attempt}/${RETRY_MAX_ATTEMPTS} 次尝试），${delay3}ms 后重试`,
+            error
+          );
+          await sleep5(delay3);
+          continue;
+        }
+        recordRequestFailure(now());
+        const after3 = breakerSnapshot(now());
+        if (after3.open) {
+          log.warn(
+            `已连续失败 ${after3.consecutiveFailures} 次，暂停请求 ${Math.round(after3.cooldownMs / 1e3)} 秒`
+          );
+        }
+        throw error;
+      }
+    }
+  }
+
   // src/shims/undici.ts
   var Agent = class {
     constructor(_options) {
@@ -17983,14 +18165,18 @@ ${endStackCall}`;
     return headers;
   }
   async function request2(url, options = {}) {
-    const response = await gmRequest({
-      method: options.method ?? "GET",
-      url: upgradeToHttps(String(url)),
-      headers: normalizeHeaders(options.headers),
-      data: options.body ?? null,
-      responseType: "arraybuffer",
-      timeout: DEFAULT_TIMEOUT
-    });
+    const target = upgradeToHttps(String(url));
+    const response = await withRequestPolicy(
+      () => gmRequest({
+        method: options.method ?? "GET",
+        url: target,
+        headers: normalizeHeaders(options.headers),
+        data: options.body ?? null,
+        responseType: "arraybuffer",
+        timeout: DEFAULT_TIMEOUT
+      }),
+      `请求 ${target}`
+    );
     const raw = response.response;
     const buffer = raw instanceof ArrayBuffer ? raw : raw instanceof Uint8Array ? raw.buffer.slice(
       raw.byteOffset,
@@ -29702,18 +29888,89 @@ ${endStackCall}`;
     return (await loadReplyPage(uid, page)).rows;
   }
 
+  // src/core/errno.ts
+  var KNOWN_ERRNO = {
+    3e5: {
+      hint: "贴吧这次没有把数据交出来；同一个请求重试有时能成功",
+      observed: "HANDOFF §5 #18 / #26：实测出现在取某个用户的发帖记录时（同一 uid 有时正常、有时回 300000）"
+    }
+  };
+  var UNKNOWN_MAX = 20;
+  var unknownErrno = [];
+  function recordUnknownErrno(code, msg, where) {
+    const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${where} → errno=${code}${msg ? ` errmsg=${JSON.stringify(msg)}` : ""}`;
+    unknownErrno.push(line);
+    if (unknownErrno.length > UNKNOWN_MAX) {
+      unknownErrno.splice(0, unknownErrno.length - UNKNOWN_MAX);
+    }
+  }
+  function recentUnknownErrno() {
+    return unknownErrno.slice();
+  }
+  function formatServerError(code, msg) {
+    const numeric = Number(code);
+    const note = Number.isFinite(numeric) ? KNOWN_ERRNO[numeric] : void 0;
+    const tail = msg && String(msg).trim() ? `：${String(msg).trim()}` : "（贴吧没有给出说明文字）";
+    if (note) return `贴吧接口返回错误 ${code}${tail} —— ${note.hint}`;
+    return `贴吧接口返回错误 ${code}${tail}（未收录的错误码，已记进诊断日志）`;
+  }
+  function asServerError(error) {
+    if (!error || typeof error !== "object") return null;
+    const code = error.code;
+    if (typeof code !== "number" || !Number.isFinite(code)) return null;
+    const msg = error.msg;
+    return { code, msg: typeof msg === "string" ? msg : "" };
+  }
+  function describeRequestError(error, where = "请求") {
+    const serverError = asServerError(error);
+    if (serverError) {
+      if (!(serverError.code in KNOWN_ERRNO)) {
+        recordUnknownErrno(serverError.code, serverError.msg, where);
+      }
+      return formatServerError(serverError.code, serverError.msg);
+    }
+    const kind = error?.kind;
+    if (kind === "timeout") {
+      return "请求超时：贴吧接口 30 秒内没有回应（网络慢或被限流，稍后再试）";
+    }
+    if (kind === "network") {
+      return "网络错误：连不上贴吧接口（检查网络或代理，必要时重新登录贴吧）";
+    }
+    if (kind === "abort") return "请求已取消";
+    if (kind === "unavailable") {
+      return error instanceof Error ? error.message : "当前环境不支持 GM_xmlhttpRequest，请检查脚本管理器";
+    }
+    if (error instanceof Error) return error.message;
+    if (error === void 0 || error === null) return "未知错误";
+    return String(error);
+  }
+
   // src/core/compositionDetect.ts
-  async function detectComposition(target, rules) {
+  function normalizePages(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 1) return 1;
+    return Math.min(Math.floor(num), 10);
+  }
+  async function detectComposition(target, rules, options = {}) {
+    const pages = normalizePages(options.pages ?? 1);
     const stat = {
       forums: 0,
       forumsRecovered: 0,
       topics: 0,
       replies: 0,
-      failed: []
+      topicPages: 0,
+      replyPages: 0,
+      hidden: false,
+      failed: [],
+      verdict: { insufficient: false, note: "" }
     };
     const posts = [];
     let forums = [];
-    if (rules.some((rule) => rule.forumKeywords.length)) {
+    const needForums = rules.some((rule) => rule.forumKeywords.length);
+    const needPosts = rules.some(
+      (rule) => rule.postKeywords.length || rule.postForumKeywords.length
+    );
+    if (needForums) {
       try {
         const loaded = await loadUserForums(
           target.id,
@@ -29723,49 +29980,65 @@ ${endStackCall}`;
         stat.forums = forums.length;
         stat.forumsRecovered = loaded.recovered;
       } catch (error) {
-        stat.failed.push(`关注的吧：${errorMessage(error)}`);
+        stat.failed.push(`关注的吧：${describeRequestError(error, "成分·关注的吧")}`);
       }
     }
-    const needPosts = rules.some(
-      (rule) => rule.postKeywords.length || rule.postForumKeywords.length
-    );
     if (needPosts) {
-      try {
-        const rows = await loadTopicRows(target.id, 1);
-        stat.topics = rows.length;
-        for (const row of rows) {
-          posts.push({
-            title: row.title,
-            preview: row.preview,
-            kind: "topic",
-            forumName: row.forumName
-          });
+      for (let page = 1; page <= pages; page += 1) {
+        try {
+          const result = await loadTopicPage(target.id, page);
+          stat.topicPages = page;
+          stat.topics += result.rows.length;
+          stat.hidden = stat.hidden || result.hidden;
+          for (const row of result.rows) {
+            posts.push({
+              title: row.title,
+              preview: row.preview,
+              kind: "topic",
+              forumName: row.forumName
+            });
+          }
+          if (!result.rows.length) break;
+        } catch (error) {
+          stat.failed.push(`主题帖：${describeRequestError(error, "成分·主题帖")}`);
+          break;
         }
-      } catch (error) {
-        stat.failed.push(`主题帖：${errorMessage(error)}`);
       }
-      try {
-        const rows = await loadReplyRows(target.id, 1);
-        stat.replies = rows.length;
-        for (const row of rows) {
-          posts.push({
-            title: row.title,
-            preview: row.preview,
-            kind: row.kind === "sub" ? "sub" : "reply",
-            forumName: row.forumName
-          });
+      for (let page = 1; page <= pages; page += 1) {
+        try {
+          const result = await loadReplyPage(target.id, page);
+          stat.replyPages = page;
+          stat.replies += result.rows.length;
+          stat.hidden = stat.hidden || result.hidden;
+          for (const row of result.rows) {
+            posts.push({
+              title: row.title,
+              preview: row.preview,
+              kind: row.kind === "sub" ? "sub" : "reply",
+              forumName: row.forumName
+            });
+          }
+          if (!result.rows.length) break;
+        } catch (error) {
+          stat.failed.push(`回复：${describeRequestError(error, "成分·回复")}`);
+          break;
         }
-      } catch (error) {
-        stat.failed.push(`回复：${errorMessage(error)}`);
       }
     }
-    return {
-      hits: matchComposition(
-        { uid: target.uid, userId: target.id, forums, posts },
-        rules
-      ),
-      stat
-    };
+    const hits = matchComposition(
+      { uid: target.uid, userId: target.id, forums, posts },
+      rules
+    );
+    stat.verdict = compositionVerdict({
+      hits: hits.length,
+      failed: stat.failed,
+      hidden: stat.hidden,
+      needForums,
+      needPosts,
+      forums: stat.forums,
+      posts: stat.topics + stat.replies
+    });
+    return { hits, stat };
   }
 
   // src/page/badges.ts
@@ -29789,6 +30062,8 @@ ${endStackCall}`;
     badge.textContent = hit.rule.name;
     badge.style.setProperty("--tb-eztb-badge-hue", String(badgeHue(hit.rule.name)));
     badge.title = hitsTooltip(hit);
+    badge.tabIndex = 0;
+    badge.setAttribute("role", "button");
     badgeRefs.set(badge, ref);
     return badge;
   }
@@ -29829,6 +30104,8 @@ ${endStackCall}`;
       more.className = `${BADGE_CLASS} tb-eztb-badge-more`;
       more.textContent = `+${hits.length - shown.length}`;
       more.title = hits.slice(shown.length).map((hit) => `${hit.rule.name}：${hit.summary}`).join("\n");
+      more.tabIndex = 0;
+      more.setAttribute("role", "button");
       badgeRefs.set(more, ref);
       if (tryAppend(more)) break;
       const last3 = shown.length ? container.lastElementChild : null;
@@ -29845,6 +30122,40 @@ ${endStackCall}`;
         String(badgeHue(hits[0].rule.name))
       );
       dot.title = hits.map(hitsTooltip).join("\n\n");
+      dot.tabIndex = 0;
+      dot.setAttribute("role", "button");
+      badgeRefs.set(dot, ref);
+      container.appendChild(dot);
+    }
+  }
+  var INSUFFICIENT_TEXT = "证据不足";
+  function renderInsufficientBadge(button, ref, note) {
+    clearBadges(button);
+    if (!button.isConnected) return;
+    const container = document.createElement("span");
+    container.className = BADGES_CLASS;
+    container.dataset.count = "0";
+    container.dataset.insufficient = "1";
+    button.insertAdjacentElement("afterend", container);
+    const tooltip = `${note}
+（没有命中任何规则，但本次的数据不足以判定）
+点击查看详情`;
+    const badge = document.createElement("span");
+    badge.className = `${BADGE_CLASS} tb-eztb-badge-insufficient`;
+    badge.textContent = INSUFFICIENT_TEXT;
+    badge.title = tooltip;
+    badge.tabIndex = 0;
+    badge.setAttribute("role", "button");
+    badgeRefs.set(badge, ref);
+    container.appendChild(badge);
+    if (container.getBoundingClientRect().width > availableSlack(button)) {
+      container.removeChild(badge);
+      const dot = document.createElement("span");
+      dot.className = `${BADGE_CLASS} tb-eztb-badge-dot tb-eztb-badge-insufficient`;
+      dot.textContent = "●";
+      dot.title = tooltip;
+      dot.tabIndex = 0;
+      dot.setAttribute("role", "button");
       badgeRefs.set(dot, ref);
       container.appendChild(dot);
     }
@@ -29856,7 +30167,11 @@ ${endStackCall}`;
     forumsRecovered: 0,
     topics: 0,
     replies: 0,
-    failed: []
+    topicPages: 0,
+    replyPages: 0,
+    hidden: false,
+    failed: [],
+    verdict: { insufficient: false, note: "" }
   });
   var buttonsByKey = /* @__PURE__ */ new Map();
   var refsByKey = /* @__PURE__ */ new Map();
@@ -29877,14 +30192,19 @@ ${endStackCall}`;
     const value = Number(getSettings().compositionMaxPerPage);
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
   }
-  function applyToButtons(key, hits) {
+  function applyToButtons(key, hits, stat) {
     const ref = refsByKey.get(key);
     const buttons = buttonsByKey.get(key);
     if (!ref || !buttons) return;
     for (const button of buttons) {
       if (!button.isConnected) continue;
-      if (hits.length) renderBadges(button, hits, ref);
-      else clearBadges(button);
+      if (hits.length) {
+        renderBadges(button, hits, ref);
+      } else if (stat?.verdict?.insufficient) {
+        renderInsufficientBadge(button, ref, stat.verdict.note);
+      } else {
+        clearBadges(button);
+      }
     }
   }
   async function checkUser(ref, options = {}) {
@@ -29898,7 +30218,7 @@ ${endStackCall}`;
     if (!options.force && key) {
       const cached4 = readCompositionCache(key, rulesHash());
       if (cached4) {
-        applyToButtons(key, cached4.hits);
+        applyToButtons(key, cached4.hits, cached4.stat);
         return { hits: cached4.hits, stat: cached4.stat, fromCache: true };
       }
     }
@@ -29911,7 +30231,8 @@ ${endStackCall}`;
         // profile 里带着关注贴吧名单，交给检测去补齐 / 恢复隐藏的部分
         profileForums: identity4.profile?.likeForum ?? []
       },
-      rules
+      rules,
+      { pages: getSettings().compositionPages }
     );
     if (key) {
       writeCompositionCache(key, {
@@ -29920,7 +30241,7 @@ ${endStackCall}`;
         stat: detection.stat
       });
       checkedKeys.add(key);
-      applyToButtons(key, detection.hits);
+      applyToButtons(key, detection.hits, detection.stat);
     }
     return { hits: detection.hits, stat: detection.stat, fromCache: false };
   }
@@ -29989,6 +30310,116 @@ ${endStackCall}`;
     }
   }
 
+  // src/core/bdussCheck.ts
+  var BDUSS_PROBE_URL = "https://tieba.baidu.com/f/user/json_userinfo";
+  var INVALID_PROBE = "eztb-invalid-probe";
+  function pickAccountName(payload) {
+    if (!payload || typeof payload !== "object") return void 0;
+    const record = payload;
+    const containers = [
+      record,
+      record.data,
+      record.user,
+      record.userinfo
+    ];
+    for (const container of containers) {
+      if (!container || typeof container !== "object") continue;
+      for (const key of ["user_name", "username", "name_show", "name"]) {
+        const value = container[key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+    }
+    return void 0;
+  }
+  async function whoAmI(bduss) {
+    const response = await requestQueue.run(
+      () => gmRequest({
+        method: "GET",
+        url: BDUSS_PROBE_URL,
+        headers: {
+          ...bduss ? { Cookie: `BDUSS=${bduss}` } : {},
+          Referer: "https://tieba.baidu.com/"
+        },
+        responseType: "text",
+        timeout: 15e3
+      })
+    );
+    const raw = response.response;
+    const text = (typeof raw === "string" ? raw : raw === void 0 || raw === null ? "" : String(raw)).trim();
+    if (!text || text === "null") return { loggedIn: false };
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { loggedIn: false };
+    }
+    if (!parsed || typeof parsed !== "object") return { loggedIn: false };
+    return { loggedIn: true, account: pickAccountName(parsed) };
+  }
+  async function checkBduss(bduss) {
+    const value = bduss.trim();
+    const checkedAt = Date.now();
+    if (!value) {
+      return {
+        status: "empty",
+        message: "还没有填 BDUSS，先粘贴凭据再校验。",
+        checkedAt
+      };
+    }
+    let browser;
+    let probe;
+    try {
+      browser = await whoAmI(null);
+      probe = await whoAmI(INVALID_PROBE);
+    } catch (error) {
+      return {
+        status: "error",
+        message: `校验没能完成：${error instanceof Error ? error.message : String(error)}`,
+        checkedAt
+      };
+    }
+    const headerIgnored = probe.loggedIn;
+    let real;
+    try {
+      real = await whoAmI(value);
+    } catch (error) {
+      return {
+        status: "error",
+        message: `校验没能完成：${error instanceof Error ? error.message : String(error)}`,
+        checkedAt
+      };
+    }
+    if (real.loggedIn && !headerIgnored) {
+      return {
+        status: "ok",
+        account: real.account,
+        message: `校验通过：这份 BDUSS 当前有效${real.account ? `（账号「${real.account}」）` : ""}。`,
+        checkedAt
+      };
+    }
+    if (headerIgnored) {
+      const browserName = browser.account ? `「${browser.account}」` : "（没认出来是谁）";
+      return {
+        status: "unknown",
+        account: browser.account,
+        message: `无法确认你粘贴的这份 BDUSS：这个脚本管理器不接受脚本设置的 Cookie 头，请求用的是浏览器自己的登录状态（当前登录${browserName}）。请改用能直接查询的方式确认（比如随便点一个用户的「查询」，能出数据就说明凭据没问题）。`,
+        checkedAt
+      };
+    }
+    if (browser.loggedIn) {
+      return {
+        status: "invalid",
+        message: "校验没通过：贴吧没有认下这份 BDUSS（无效或已过期）。请重新复制一次；注意别把前后的空格或不相关的 cookie 一起粘进来。",
+        checkedAt
+      };
+    }
+    return {
+      status: "invalid",
+      message: "校验没通过：这个端点没有把凭据认下来。可能是这份 BDUSS 无效/已过期，也可能是脚本管理器没有发送脚本设置的 Cookie 头、且浏览器当前未登录贴吧。两种情况下查询都会失败，建议先按 F12 → Application → Cookies 重新复制一份。",
+      checkedAt
+    };
+  }
+
   // src/core/forumLevel.ts
   var CACHE_KEY3 = "tbEztbToolboxForumLevelV1";
   var CACHE_MAX3 = 500;
@@ -30053,7 +30484,7 @@ ${endStackCall}`;
           return { level, via: candidate.via };
         }
       } catch (error) {
-        lastError = errorMessage(error);
+        lastError = describeRequestError(error, `查等级·${forumName}`);
       }
     }
     return {
@@ -30115,7 +30546,7 @@ ${endStackCall}`;
       );
       return { floor: entry.floor, excerpt: entry.excerpt, via: "request" };
     } catch (error) {
-      return { reason: errorMessage(error) };
+      return { reason: describeRequestError(error, "查楼层") };
     }
   }
 
@@ -30186,7 +30617,7 @@ ${endStackCall}`;
       hidden = hidden || page.hidden;
       rows.push(...page.rows);
     } catch (error) {
-      failed.push(`主题帖：${errorMessage(error)}`);
+      failed.push(`主题帖：${describeRequestError(error, "签到检测·主题帖")}`);
     }
     try {
       const page = await loadReplyPage(uid, 1);
@@ -30194,7 +30625,7 @@ ${endStackCall}`;
       hidden = hidden || page.hidden;
       rows.push(...page.rows);
     } catch (error) {
-      failed.push(`回复：${errorMessage(error)}`);
+      failed.push(`回复：${describeRequestError(error, "签到检测·回复")}`);
     }
     const value = {
       byForum: countPostsByForum(rows),
@@ -30340,8 +30771,12 @@ ${endStackCall}`;
       `<textarea id="tb-eztb-bduss" class="tb-eztb-textarea" placeholder="粘贴以 BDUSS= 开头的内容，或只粘贴值本身">${escapeHtml(current.bduss)}</textarea>`
     );
     parts2.push(
-      `<div class="tb-eztb-hint">获取方式：在已登录的贴吧页面按 F12 → Application → Cookies → tieba.baidu.com → 复制 BDUSS 的值。</div>`
+      `<div class="tb-eztb-hint">自己动手复制的三步：① 在<b>已登录</b>的贴吧页面按 F12；② 打开 Application（Chrome/Edge）/ 存储（Firefox）→ Cookies → <code>tieba.baidu.com</code>；③ 找到名为 <code>BDUSS</code> 的那一行，复制它的 Value 粘到上面。整段 <code>BDUSS=xxxx;</code> 直接粘进来也可以，脚本会自己截取。</div>`
     );
+    parts2.push(
+      `<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:0;"><button data-act="check-bduss">校验 BDUSS</button></div>`
+    );
+    parts2.push(`<div class="tb-eztb-hint" id="tb-eztb-bduss-status"></div>`);
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
     parts2.push(`<label for="tb-eztb-help">辅助获取网址</label>`);
@@ -30367,7 +30802,7 @@ ${endStackCall}`;
       `<input id="tb-eztb-maxpages" class="tb-eztb-input" type="number" min="1" step="1" value="${current.maxPagesPerList}">`
     );
     parts2.push(
-      `<div class="tb-eztb-hint">每页 20 条。</div>`
+      `<div class="tb-eztb-hint">每页 20 条。也用作「共同关注」先读几页、以及「搜全部」的页数上限。</div>`
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
@@ -30384,13 +30819,37 @@ ${endStackCall}`;
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-remember-tab">记住上次看过的页签</label>`);
+    parts2.push(`<select id="tb-eztb-remember-tab" class="tb-eztb-input">`);
+    parts2.push(
+      `<option value="1"${current.rememberLastTab ? " selected" : ""}>开启（覆盖上面的默认页签）</option>`
+    );
+    parts2.push(
+      `<option value="0"${current.rememberLastTab ? "" : " selected"}>关闭</option>`
+    );
+    parts2.push(`</select>`);
+    parts2.push(
+      `<div class="tb-eztb-hint">开着时，下次打开面板会停在你上次实际看过的那个页签；关着就一直用上面的默认页签。</div>`
+    );
+    parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-self">我自己的贴吧号（「共同关注」用）</label>`);
+    parts2.push(
+      `<input id="tb-eztb-self" class="tb-eztb-input" placeholder="贴吧号 / 用户名 / 主页链接，留空则不做共同关注比对" value="${escapeHtml(current.selfIdentity)}">`
+    );
+    parts2.push(
+      `<div class="tb-eztb-hint">填上之后，「共同关注」页签会读一次<b>你自己</b>的关注列表，再和对方的求交集（全部只读，不会关注或取关任何人）。不填时那个页签只会提示你来这里填。<br>注意：这里要填自己的<b>贴吧号</b>（面板副标题里那个，例如 523640824）或用户名；填纯数字时脚本会先按贴吧号查你。</div>`
+    );
+    parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
     parts2.push(`<label for="tb-eztb-rules">成分关键词规则</label>`);
     parts2.push(
       `<textarea id="tb-eztb-rules" class="tb-eztb-textarea tb-eztb-textarea-tall" spellcheck="false" placeholder="${escapeHtml(RULE_FORMAT_HINT)}">${escapeHtml(current.compositionRules)}</textarea>`
     );
     parts2.push(
-      `<div class="tb-eztb-hint">${escapeHtml(RULE_FORMAT_HINT)}<br>命中的用户会在用户名旁显示标记；点标记可以看命中了什么。</div>`
+      `<div class="tb-eztb-hint">${escapeHtml(RULE_FORMAT_HINT)}<br>命中的用户会在用户名旁显示标记；点标记可以看命中了什么。格式说明见仓库的 <code>docs/rules.md</code>。</div>`
     );
+    parts2.push(`<div class="tb-eztb-hint" id="tb-eztb-rules-issues"></div>`);
     parts2.push(`<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:0;">`);
     parts2.push(`<button data-act="rules-example">填入示例</button>`);
     parts2.push(`<button data-act="rules-clear">清空规则</button>`);
@@ -30413,6 +30872,15 @@ ${endStackCall}`;
     );
     parts2.push(
       `<div class="tb-eztb-hint">每个用户最多 3 个请求（关注的吧 + 主题帖 + 回复）。默认 20 人 ≈ 60 个请求，仍然按上面的间隔一个一个发。</div>`
+    );
+    parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-composition-pages">成分检测每路翻几页</label>`);
+    parts2.push(
+      `<input id="tb-eztb-composition-pages" class="tb-eztb-input" type="number" min="1" max="10" step="1" value="${current.compositionPages}">`
+    );
+    parts2.push(
+      `<div class="tb-eztb-hint">只影响「成分」判定：主题帖与回复**各**按这个页数取数（每页 60 条），默认 1 页。调大会看到更早的帖子，代价是每个用户多 (页数−1)×2 个请求；某一页取到 0 条就会提前停下。</div>`
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
@@ -30471,12 +30939,32 @@ ${endStackCall}`;
         compositionRules: rawValue("tb-eztb-rules").trim(),
         compositionAuto: value("tb-eztb-composition-auto") !== "0",
         compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
+        compositionPages: Number(value("tb-eztb-composition-pages")),
         compositionCacheDays: Number(value("tb-eztb-cachedays")),
         signInLevelThreshold: Number(value("tb-eztb-signin-level")),
-        defaultTab: normalizePanelTabId(value("tb-eztb-default-tab"))
+        defaultTab: normalizePanelTabId(value("tb-eztb-default-tab")),
+        rememberLastTab: value("tb-eztb-remember-tab") === "1",
+        selfIdentity: value("tb-eztb-self")
       };
     };
     const textarea = () => dialog.body.querySelector("#tb-eztb-rules");
+    const issuesEl = () => dialog.body.querySelector("#tb-eztb-rules-issues");
+    const refreshRuleIssues = () => {
+      const el = issuesEl();
+      if (!el) return;
+      const box = textarea();
+      const { rules, issues: issues2 } = parseRulesDetailed(box?.value ?? "");
+      if (!issues2.length) {
+        el.textContent = rules.length ? `已解析出 ${rules.length} 条规则，没有发现问题。` : "还没有可用的规则（规则表为空时不会发起任何检测请求）。";
+        el.classList.remove("tb-eztb-warn");
+        return;
+      }
+      const lines = issues2.map(
+        (issue) => `第 ${issue.line} 行${issue.level === "error" ? "（错误）" : ""}：${issue.message}`
+      );
+      el.textContent = `已解析出 ${rules.length} 条规则，有 ${issues2.length} 处要留意：` + lines.join(" ");
+      el.classList.add("tb-eztb-warn");
+    };
     const ioBox = () => dialog.body.querySelector("#tb-eztb-io");
     const ioStatus = (text) => {
       const el = dialog.body.querySelector("#tb-eztb-io-status");
@@ -30494,9 +30982,13 @@ ${endStackCall}`;
       set6("tb-eztb-rules", settings.compositionRules);
       set6("tb-eztb-composition-auto", settings.compositionAuto ? "1" : "0");
       set6("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
+      set6("tb-eztb-composition-pages", String(settings.compositionPages));
       set6("tb-eztb-cachedays", String(settings.compositionCacheDays));
       set6("tb-eztb-signin-level", String(settings.signInLevelThreshold));
       set6("tb-eztb-default-tab", settings.defaultTab);
+      set6("tb-eztb-remember-tab", settings.rememberLastTab ? "1" : "0");
+      set6("tb-eztb-self", settings.selfIdentity);
+      refreshRuleIssues();
     };
     dialog.body.querySelector('[data-act="export"]')?.addEventListener("click", () => {
       const box = ioBox();
@@ -30538,14 +31030,41 @@ ${endStackCall}`;
       rescanPage();
       ioStatus("已导入并保存（BDUSS 未改动）。");
     });
+    dialog.body.querySelector('[data-act="check-bduss"]')?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      const status = dialog.body.querySelector(
+        "#tb-eztb-bduss-status"
+      );
+      const value = readForm().bduss;
+      button.disabled = true;
+      button.textContent = "校验中…";
+      if (status) status.textContent = "正在问贴吧「当前是谁」……";
+      void checkBduss(value).then((result) => {
+        if (status) {
+          status.textContent = `${result.message}（校验时间：${new Date(result.checkedAt).toLocaleString()}）`;
+        }
+        if (result.status === "ok") invalidateClient();
+      }).catch((error) => {
+        if (status) {
+          status.textContent = `校验没能完成：${error instanceof Error ? error.message : String(error)}`;
+        }
+      }).finally(() => {
+        button.disabled = false;
+        button.textContent = "校验 BDUSS";
+      });
+    });
     dialog.body.querySelector('[data-act="rules-example"]')?.addEventListener("click", () => {
       const el = textarea();
       if (el) el.value = EXAMPLE_RULES;
+      refreshRuleIssues();
     });
     dialog.body.querySelector('[data-act="rules-clear"]')?.addEventListener("click", () => {
       const el = textarea();
       if (el) el.value = "";
+      refreshRuleIssues();
     });
+    textarea()?.addEventListener("input", refreshRuleIssues);
+    refreshRuleIssues();
     dialog.body.querySelector('[data-act="help"]')?.addEventListener("click", () => {
       const url = readForm().bdussHelpUrl;
       if (url) window.open(url, "_blank", "noopener,noreferrer");
@@ -30594,6 +31113,9 @@ ${endStackCall}`;
       options.onSaved?.();
     });
   }
+
+  // src/core/version.ts
+  var SCRIPT_VERSION = "1.9.0" ? "1.9.0" : "dev";
 
   // src/page/adapters.ts
   function parseDataField(el) {
@@ -30686,6 +31208,7 @@ ${endStackCall}`;
   var LEGACY_BUTTON_CLASS = "tb-eztb-follow-btn";
   var legacyWarned = false;
   var BUTTON_CLASS = "tb-eztb-btn";
+  var INJECTED_SELECTOR = `.${BUTTON_CLASS}, .tb-eztb-badges`;
   var TARGETS = [
     {
       selector: ".p_author_name",
@@ -30729,7 +31252,113 @@ ${endStackCall}`;
       log.warn("补回按钮失败：", error);
     }
   }
+  var pendingScan = false;
+  var pendingNodes = /* @__PURE__ */ new Set();
+  var pendingHeal = /* @__PURE__ */ new Set();
+  var currentMount = null;
+  var BATCH_MAX_ROOTS = 60;
+  function scheduleFrame(task) {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => task());
+      return;
+    }
+    setTimeout(task, 16);
+  }
+  function enqueue2(node) {
+    if (pendingNodes.has(node)) return;
+    if (pendingNodes.size > BATCH_MAX_ROOTS) {
+      pendingNodes.add(node);
+      return;
+    }
+    for (const queued of pendingNodes) {
+      if (queued.contains(node)) return;
+      if (node.contains(queued)) pendingNodes.delete(queued);
+    }
+    pendingNodes.add(node);
+  }
+  function scanSelf(node, mount2) {
+    if (node.hasAttribute?.(DONE_ATTR)) return;
+    for (const target of TARGETS) {
+      if (!node.matches?.(target.selector)) continue;
+      node.setAttribute(DONE_ATTR, "1");
+      try {
+        target.handler(node, mount2);
+      } catch (error) {
+        log.warn(`处理${target.label}失败：`, error);
+      }
+      return;
+    }
+  }
+  function flushPending() {
+    pendingScan = false;
+    const mount2 = currentMount;
+    const nodes = Array.from(pendingNodes).slice(0, BATCH_MAX_ROOTS);
+    const rest = Array.from(pendingNodes).slice(BATCH_MAX_ROOTS);
+    pendingNodes.clear();
+    const heads = Array.from(pendingHeal);
+    pendingHeal.clear();
+    if (!mount2) return;
+    for (const node of rest) pendingNodes.add(node);
+    for (const node of nodes) {
+      if (!node.isConnected) continue;
+      scanSelf(node, mount2);
+      scan(node, mount2);
+    }
+    for (const node of heads) {
+      if (node.isConnected) healHeadline(node, mount2);
+    }
+    if (pendingNodes.size) scheduleFlush();
+  }
+  function scheduleFlush() {
+    if (pendingScan) return;
+    pendingScan = true;
+    scheduleFrame(flushPending);
+  }
+  function resetPageMarks(mount2) {
+    for (const el of Array.from(document.querySelectorAll(INJECTED_SELECTOR))) {
+      el.remove();
+    }
+    for (const el of Array.from(
+      document.querySelectorAll(`[${DONE_ATTR}]`)
+    )) {
+      el.removeAttribute(DONE_ATTR);
+    }
+    pendingNodes.clear();
+    pendingHeal.clear();
+    scan(document, mount2);
+  }
+  var lastHref = "";
+  function onSoftNavigation(mount2) {
+    const href = location.href;
+    if (href === lastHref) return;
+    lastHref = href;
+    try {
+      resetPageMarks(mount2);
+    } catch (error) {
+      log.warn("软导航后重置页面标记失败：", error);
+    }
+  }
+  function watchSoftNavigation(mount2) {
+    lastHref = location.href;
+    window.addEventListener("popstate", () => onSoftNavigation(mount2));
+    window.addEventListener("hashchange", () => onSoftNavigation(mount2));
+    for (const name of ["pushState", "replaceState"]) {
+      const original = history[name];
+      if (typeof original !== "function") continue;
+      const wrapped = function(...args2) {
+        const result = original.apply(this, args2);
+        if (location.href !== lastHref) onSoftNavigation(mount2);
+        return result;
+      };
+      try {
+        history[name] = wrapped;
+      } catch (error) {
+        log.warn(`包装 history.${name} 失败（软导航后不会自动重置标记）：`, error);
+      }
+    }
+  }
   function startScanner(mount2) {
+    currentMount = mount2;
     scan(document, mount2);
     if (!legacyWarned && document.querySelector(`.${LEGACY_BUTTON_CLASS}`)) {
       legacyWarned = true;
@@ -30737,19 +31366,21 @@ ${endStackCall}`;
         "检测到旧版脚本（tieba-eztb-follow.user.js）的按钮仍在页面上。它会在每个用户名旁再插一个「查关注」按钮，且点击已失效；请在油猴里卸载它，避免重复与干扰。"
       );
     }
+    watchSoftNavigation(mount2);
     if (!window.MutationObserver) return;
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of Array.from(mutation.addedNodes)) {
           if (node.nodeType === Node.ELEMENT_NODE) {
-            scan(node, mount2);
+            enqueue2(node);
           }
         }
         const target = mutation.target;
         if (target && target.nodeType === Node.ELEMENT_NODE) {
-          healHeadline(target, mount2);
+          pendingHeal.add(target);
         }
       }
+      if (pendingNodes.size || pendingHeal.size) scheduleFlush();
     });
     observer.observe(document.body ?? document.documentElement, {
       childList: true,
@@ -30785,10 +31416,70 @@ ${endStackCall}`;
     }
     return Array.from(tally, ([className, count3]) => ({ className, count: count3 })).sort((a, b) => b.count - a.count).slice(0, 12);
   }
+  function selfCheckLines() {
+    const lines = [];
+    const buttons = Array.from(
+      document.querySelectorAll(`.${BUTTON_CLASS}`)
+    ).slice(0, 3);
+    if (!buttons.length) {
+      lines.push("  （本页还没有注入按钮，跳过）");
+      return lines;
+    }
+    const pointerOk = buttons.filter(
+      (button) => getComputedStyle(button).pointerEvents === "auto"
+    );
+    lines.push(
+      `  ${pointerOk.length === buttons.length ? "PASS" : "FAIL"} 按钮 pointer-events = auto —— ${pointerOk.length}/${buttons.length}` + (pointerOk.length === buttons.length ? "" : "（不成立就会「看得见、点不动」，坑 #1）")
+    );
+    const zOk = buttons.filter(
+      (button) => getComputedStyle(button).zIndex === "5"
+    );
+    lines.push(
+      `  ${zOk.length === buttons.length ? "PASS" : "FAIL"} 按钮 z-index = 5 —— ${zOk.length}/${buttons.length}` + (zOk.length === buttons.length ? "" : "（大于 5 会盖住本该在上面的页面弹层，坑 #3）")
+    );
+    const containers = Array.from(
+      document.querySelectorAll(`.${BADGES_CLASS}`)
+    ).slice(0, 3);
+    if (!containers.length) {
+      lines.push("  （本页没有成分徽章，跳过徽章相关的两条）");
+      return lines;
+    }
+    const nowrapOk = containers.filter(
+      (container) => getComputedStyle(container).whiteSpace.includes("nowrap")
+    );
+    lines.push(
+      `  ${nowrapOk.length === containers.length ? "PASS" : "FAIL"} 徽章容器不折行（white-space: nowrap） —— ${nowrapOk.length}/${containers.length}` + (nowrapOk.length === containers.length ? "" : "（折行会压住下面的正文，坑 #14）")
+    );
+    const fitOk = containers.filter((container) => {
+      const row = container.closest(".head-line");
+      if (!row) return true;
+      const rowBox = row.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      return box.height <= rowBox.height + 1;
+    });
+    lines.push(
+      `  ${fitOk.length === containers.length ? "PASS" : "FAIL"} 徽章待在头部行的高度内 —— ${fitOk.length}/${containers.length}`
+    );
+    return lines;
+  }
+  function breakerLines() {
+    const snapshot = breakerSnapshot();
+    if (!snapshot.open) {
+      return [
+        ` 正常（连续失败 ${snapshot.consecutiveFailures} 次；连续 ${snapshot.threshold} 次才熔断）`
+      ];
+    }
+    return [
+      ` 已暂停：连续失败 ${snapshot.consecutiveFailures} 次，约 ${Math.ceil(snapshot.remainingMs / 1e3)} 秒后自动恢复`,
+      ` 期间被挡回去的请求：${snapshot.pausedRequests} 个`
+    ];
+  }
   function buildDiagnoseReport() {
     const lines = [
       `URL: ${location.href}`,
       `标题: ${document.title}`,
+      // 用户报障时第一件要知道的事：他装的是哪一版
+      `脚本版本: ${SCRIPT_VERSION}`,
       `脚本已运行: 是`,
       "",
       "扫描器选择器命中数：",
@@ -30797,13 +31488,21 @@ ${endStackCall}`;
       `  [旧脚本遗留按钮] = ${countOf(".tb-eztb-follow-btn")}`,
       `  [已注入按钮] = ${countOf(`.${BUTTON_CLASS}`)}`,
       "",
+      "关键约束自检（这几条不成立，界面上就会出现「点不动 / 压住正文」）：",
+      ...selfCheckLines(),
+      "",
       "页面上的用户主页链接（按 class 统计）：",
       ...userLinkClasses().map((item) => `  ${item.count} × ${item.className}`),
       "",
       `在飞请求: ${inFlightCount()}`,
+      "请求熔断状态：",
+      ...breakerLines(),
       "",
       "存储写入失败记录（空 = 一切正常）：",
       ...storageIssueLines(),
+      "",
+      "贴吧返回过但本脚本还没收录的错误码（报给开发者就能补进对照表）：",
+      ...unknownErrnoLines(),
       "",
       "最近的日志（最多 20 条）：",
       ...recentLogs().slice(-20).map((line) => `  ${line}`),
@@ -30811,6 +31510,11 @@ ${endStackCall}`;
       `UA: ${navigator.userAgent}`
     ];
     return lines.join("\n");
+  }
+  function unknownErrnoLines() {
+    const unknown = recentUnknownErrno();
+    if (!unknown.length) return ["  （无）"];
+    return unknown.map((line) => `  ${line}`);
   }
   function storageIssueLines() {
     const issues2 = getStorageIssues();
@@ -30825,7 +31529,13 @@ ${endStackCall}`;
       title: "eztb 页面诊断",
       subtitleHtml: "把下面的内容整段复制发给开发者"
     });
-    dialog.body.innerHTML = `<pre class="tb-eztb-report">${escapeHtml(report)}</pre><div class="tb-eztb-actions"><button data-act="copy" class="primary">复制报告</button><button data-act="abort">中断在飞请求</button></div>`;
+    dialog.body.innerHTML = `<pre class="tb-eztb-report">${escapeHtml(report)}</pre><div class="tb-eztb-actions"><button data-act="copy" class="primary">复制报告</button><button data-act="abort">中断在飞请求</button><button data-act="reset-breaker">重置熔断</button></div>`;
+    dialog.body.querySelector('[data-act="reset-breaker"]')?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      const before2 = breakerSnapshot();
+      resetBreaker();
+      button.textContent = before2.open ? "已重置，可以继续查询" : "本来就没熔断";
+    });
     dialog.body.querySelector('[data-act="abort"]')?.addEventListener("click", (event) => {
       const button = event.currentTarget;
       const count3 = abortAllInFlight();
@@ -30844,169 +31554,79 @@ ${endStackCall}`;
     console.log("[eztb] 页面诊断\n" + report);
   }
 
-  // src/core/postStats.ts
-  function mergeForumCounts(a, b) {
-    const out = { ...a };
-    for (const [forum, count3] of Object.entries(b)) {
-      out[forum] = (out[forum] ?? 0) + count3;
+  // src/core/lastTab.ts
+  var LAST_TAB_KEY = "tbEztbToolboxLastTabV1";
+  function readLastTab() {
+    try {
+      const stored = GM_getValue(LAST_TAB_KEY, "");
+      if (typeof stored !== "string" || !stored) return null;
+      return normalizePanelTabId(stored);
+    } catch {
+      return null;
     }
-    return out;
   }
-  function totalForumCount(counts) {
-    return Object.values(counts).reduce((sum2, value) => sum2 + value, 0);
-  }
-  function postRowSubParts(post) {
-    const parts2 = [];
-    if (post.forumName) {
-      parts2.push(
-        `<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`
-      );
+  function writeLastTab(id) {
+    try {
+      GM_setValue(LAST_TAB_KEY, id);
+    } catch {
     }
-    if (post.kind === "sub" && post.replyTo) {
-      parts2.push(
-        `<span class="tb-eztb-row-replyto">↩ ${escapeHtml(post.replyTo)}</span>`
-      );
-    }
-    if (post.kind !== "topic" && post.preview) {
-      parts2.push(escapeHtml(post.preview));
-    }
-    return parts2;
-  }
-  var PIE_COLORS = [
-    "#1677ff",
-    "#e8a33d",
-    "#3fb950",
-    "#a371f7",
-    "#e5534b",
-    "#1f9ea8"
-  ];
-  var PIE_OTHER_COLOR = "#b6bcc6";
-  function buildForumStats(counts) {
-    const total = totalForumCount(counts);
-    if (!total) return [];
-    return Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([forum, count3]) => ({
-      forum,
-      count: count3,
-      fraction: count3 / total,
-      percentText: `${(count3 / total * 100).toFixed(1)}%`
-    }));
-  }
-  function buildForumFilterOptionsHtml(counts, selected) {
-    const options = buildForumStats(counts).map((stat) => {
-      const value = escapeHtml(stat.forum);
-      const isSelected = stat.forum === selected ? " selected" : "";
-      return `<option value="${value}"${isSelected}>${value}（${stat.count}）</option>`;
-    });
-    return `<option value=""${selected ? "" : " selected"}>全部吧</option>` + options.join("");
-  }
-  function postMatchesQuery(post, query) {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return true;
-    return `${post.title ?? ""} ${post.preview ?? ""}`.toLowerCase().includes(needle);
-  }
-  function mergePostRows(topicRows, replyRows) {
-    return [...topicRows, ...replyRows].sort((a, b) => b.createTime - a.createTime);
-  }
-  function buildPostFilterHint(input) {
-    const forum = input.forum.trim();
-    const query = input.query.trim();
-    if (!forum && !query) return "";
-    const label = forum && query ? `筛选「${forum}」+ 搜索「${query}」` : forum ? `筛选「${forum}」` : `搜索「${query}」`;
-    const { topic, reply } = input.matched;
-    if (topic + reply === 0) {
-      return query ? `${label}：已加载的 ${input.loadedTotal} 条里没有命中` : `${label}：该用户在这个吧没有发帖或回复`;
-    }
-    return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
-  }
-  function buildSearchAllSummary(input) {
-    const query = input.query.trim();
-    const loadedTotal = input.loaded.topic + input.loaded.reply;
-    const matchedTotal = input.matched.topic + input.matched.reply;
-    const scope3 = input.complete ? `已翻完主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页` : `翻到上限（每路最多 ${input.pageLimit} 页）时仍有更早的没加载，已翻主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页`;
-    const hit = matchedTotal === 0 ? `没有命中` : `命中 ${matchedTotal} 条（主题帖 ${input.matched.topic} · 回复 ${input.matched.reply}）`;
-    return `搜索「${query}」：${scope3}，共 ${loadedTotal} 条，${hit}。`;
-  }
-  function buildForumListHtml(counts, open) {
-    const stats = buildForumStats(counts);
-    if (stats.length < 2) return "";
-    const total = totalForumCount(counts);
-    const button = `<button type="button" class="tb-eztb-pielistbtn" data-act="pie-all">${open ? "收起" : `查看全部 ${stats.length} 个吧的占比`}</button>`;
-    if (!open) return `<div class="tb-eztb-pielistwrap">${button}</div>`;
-    const rows = stats.map(
-      (stat) => `<div class="tb-eztb-pieitem" data-forum="${escapeHtml(stat.forum)}"><span class="tb-eztb-pieitem-name" title="${escapeHtml(stat.forum)}">${escapeHtml(stat.forum)}</span><span class="tb-eztb-pieitem-bar"><i style="width:${(stat.fraction * 100).toFixed(1)}%"></i></span><b class="tb-eztb-pieitem-count">${stat.count}</b><span class="tb-eztb-pieitem-percent">${stat.percentText}</span></div>`
-    ).join("");
-    return `<div class="tb-eztb-pielistwrap">${button}<div class="tb-eztb-pielist"><div class="tb-eztb-pielist-head">共 ${stats.length} 个吧 · ${total} 条发言</div>` + rows + `</div></div>`;
-  }
-  function buildPieNotes(states) {
-    const loading = states.filter((state) => state.loading);
-    const failed = states.filter((state) => !state.loading && state.error);
-    const parts2 = [];
-    if (loading.length) {
-      const labels = loading.map((state) => `「${state.label}」`).join("、");
-      parts2.push(
-        `<div class="tb-eztb-pie-pending">${labels}的数据还在加载，下面的占比<b>还不完整</b>——到齐后会自动补上。</div>`
-      );
-    }
-    for (const state of failed) {
-      const reason = escapeHtml(state.error ?? "");
-      parts2.push(
-        state.hasRows ? `<div class="tb-eztb-warn">「${state.label}」的后续页没取到（饼图只统计到已经加载出来的那部分）：${reason}</div>` : `<div class="tb-eztb-warn">「${state.label}」的数据没取到（饼图里缺这一路的条数）：${reason}</div>`
-      );
-    }
-    return parts2.join("");
-  }
-  function buildForumSlices(counts, maxSlices = 5) {
-    const total = totalForumCount(counts);
-    if (!total) return [];
-    const ranked = Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    const head5 = ranked.slice(0, maxSlices);
-    const rest = ranked.slice(maxSlices);
-    const slices = head5.map(([forum, count3], index) => ({
-      forum,
-      label: forum,
-      count: count3,
-      color: PIE_COLORS[index % PIE_COLORS.length],
-      fraction: count3 / total,
-      percentText: `${(count3 / total * 100).toFixed(1)}%`
-    }));
-    if (rest.length) {
-      const count3 = rest.reduce((sum2, [, value]) => sum2 + value, 0);
-      slices.push({
-        forum: null,
-        label: `其它 ${rest.length} 个吧`,
-        count: count3,
-        color: PIE_OTHER_COLOR,
-        fraction: count3 / total,
-        percentText: `${(count3 / total * 100).toFixed(1)}%`
-      });
-    }
-    return slices;
-  }
-  var RADIUS = 46;
-  var STROKE = 18;
-  var CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-  function buildForumPieSvg(counts, maxSlices = 5) {
-    const slices = buildForumSlices(counts, maxSlices);
-    const total = totalForumCount(counts);
-    if (!total) {
-      return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle class="tb-eztb-pie-track" cx="60" cy="60" r="${RADIUS}" fill="none" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
-    }
-    let acc = 0;
-    const arcs = slices.filter((slice) => slice.count > 0).map((slice) => {
-      const length2 = slice.fraction * CIRCUMFERENCE;
-      const gap = CIRCUMFERENCE - length2;
-      const offset = -acc;
-      acc += length2;
-      return `<circle class="tb-eztb-pie-slice" cx="60" cy="60" r="${RADIUS}" fill="none" stroke="${slice.color}" stroke-width="${STROKE}" stroke-dasharray="${length2.toFixed(3)} ${gap.toFixed(3)}" stroke-dashoffset="${offset.toFixed(3)}" data-forum="${escapeHtml(slice.forum ?? "")}"><title>${escapeHtml(slice.label)} ${slice.count} 条（${slice.percentText}）</title></circle>`;
-    }).join("");
-    const legend = slices.map(
-      (slice) => `<span class="tb-eztb-pie-item" data-forum="${escapeHtml(slice.forum ?? "")}"><i class="tb-eztb-pie-dot" style="background:${slice.color}"></i><span class="tb-eztb-pie-label" title="${escapeHtml(slice.label)}">${escapeHtml(slice.label)}</span><b class="tb-eztb-pie-count">${slice.count}</b><span class="tb-eztb-pie-percent">${slice.percentText}</span></span>`
-    ).join("");
-    return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖都发在哪些吧"><g transform="rotate(-90 60 60)">${arcs}</g></svg><figcaption class="tb-eztb-pie-legend">${legend}<div class="tb-eztb-pie-total">已加载 ${total} 条 · ${Object.keys(counts).length} 个吧</div></figcaption></figure>`;
   }
 
-  // src/features/userPanel.ts
-  var FOLLOW_PAGE_SIZE = 20;
+  // src/features/panel/composition.ts
+  function renderCompositionTab(body, ref, force = false) {
+    body.innerHTML = `<div class="tb-eztb-loading"><div class="tb-eztb-spinner"></div>正在检测成分…</div>`;
+    const actions = (html) => `<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:12px;">${html}</div>`;
+    void (async () => {
+      let result;
+      try {
+        result = await checkUser(ref, { force });
+      } catch (error) {
+        body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(describeRequestError(error))}</div>` + actions(
+          `<button type="button" data-act="recheck" class="primary">重试</button>`
+        );
+        bindRecheck();
+        return;
+      }
+      if (result.noRules) {
+        body.innerHTML = `<div class="tb-eztb-hint">还没有配置成分关键词规则，因此没有做任何检测（也没有发出请求）。</div>` + actions(
+          `<button type="button" data-act="settings">去配置关键词</button>`
+        );
+        body.querySelector('[data-act="settings"]')?.addEventListener("click", () => openSettingsDialog());
+        return;
+      }
+      if (result.noBduss) {
+        body.innerHTML = `<div class="tb-eztb-warn">成分检测需要读取关注吧与发帖，请先设置 BDUSS。</div>` + actions(
+          `<button type="button" data-act="settings" class="primary">去设置 BDUSS</button>`
+        );
+        body.querySelector('[data-act="settings"]')?.addEventListener(
+          "click",
+          () => openSettingsDialog({ requireBduss: true })
+        );
+        return;
+      }
+      const { hits, stat } = result;
+      const statLine = `已检查：关注的吧 ${stat.forums} 个` + (stat.forumsRecovered ? `（其中 ${stat.forumsRecovered} 个来自隐藏关注贴吧的恢复）` : "") + ` · 主题帖 ${stat.topics} 条 · 回复 ${stat.replies} 条` + (result.fromCache ? "（来自缓存）" : "");
+      const rules = parseRules(getSettings().compositionRules);
+      const hitBlocks = hits.map((hit) => {
+        const evidences = hit.evidences.map((evidence) => {
+          const excerpt = evidence.excerpt ? `<div class="tb-eztb-evidence-text">${highlightKeywords(evidence.excerpt, [evidence.keyword])}</div>` : "";
+          return `<div class="tb-eztb-evidence"><span class="tb-eztb-evidence-reason">${escapeHtml(evidence.reason)}</span><span class="tb-eztb-evidence-keyword">${escapeHtml(evidence.keyword)}</span>` + excerpt + `</div>`;
+        }).join("");
+        return `<div class="tb-eztb-hit"><div class="tb-eztb-hit-head"><span class="tb-eztb-badge" style="--tb-eztb-badge-hue:${badgeHue(hit.rule.name)}">${escapeHtml(hit.rule.name)}</span>` + (hit.sure ? "" : `<span class="tb-eztb-hit-unsure">证据较弱，可能是误判</span>`) + `</div>` + evidences + `</div>`;
+      }).join("");
+      const body_ = (hits.length ? `<div class="tb-eztb-hint">命中 ${hits.length} 条规则（共配置 ${rules.length} 条）</div><div class="tb-eztb-hits">${hitBlocks}</div>` : `<div class="tb-eztb-empty">没有命中任何关键词：这个用户关注的吧与发帖里都没出现规则表中的词。</div>`) + `<div class="tb-eztb-hint" style="margin-top:12px;">${escapeHtml(statLine)}</div>` + (stat.failed.length ? `<div class="tb-eztb-warn">部分数据没取到：${escapeHtml(stat.failed.join("；"))}</div>` : "") + actions(
+        `<button type="button" data-act="recheck">重新检测</button><button type="button" data-act="settings">关键词设置</button>`
+      );
+      body.innerHTML = body_;
+      body.querySelector('[data-act="settings"]')?.addEventListener("click", () => openSettingsDialog());
+      bindRecheck();
+      function bindRecheck() {
+        body.querySelector('[data-act="recheck"]')?.addEventListener("click", () => renderCompositionTab(body, ref, true));
+      }
+    })();
+  }
+
+  // src/features/panel/pagedList.ts
   function mountPagedList(options) {
     const settings = getSettings();
     const maxPages = Math.max(1, settings.maxPagesPerList);
@@ -31022,6 +31642,7 @@ ${endStackCall}`;
     let exhaustedFlag = false;
     let cappedFlag = false;
     let hiddenFlag = false;
+    let failedPageNum = null;
     const items = [];
     const refreshFooter = () => {
       const summary5 = options.summaryText?.(loaded, totalPages);
@@ -31040,6 +31661,7 @@ ${endStackCall}`;
       try {
         const result = await options.loadPage(page + 1);
         page += 1;
+        failedPageNum = null;
         loaded += result.items.length;
         items.push(...result.items);
         if (result.totalPages && result.totalPages > 0) {
@@ -31070,7 +31692,8 @@ ${endStackCall}`;
         moreBtn.disabled = exhaustedFlag;
         moreBtn.textContent = exhaustedFlag ? "没有更多了" : "加载更多";
       } catch (error) {
-        const message = errorMessage(error);
+        const message = describeRequestError(error);
+        failedPageNum = page + 1;
         options.onError?.(error);
         listEl.insertAdjacentHTML(
           "beforeend",
@@ -31093,63 +31716,20 @@ ${endStackCall}`;
       pages: () => page,
       exhausted: () => exhaustedFlag,
       capped: () => cappedFlag,
-      hidden: () => hiddenFlag
+      hidden: () => hiddenFlag,
+      failedPage: () => failedPageNum
     };
   }
+
+  // src/features/panel/rows.ts
   function renderUserRow(user) {
     const display = user.name_show || user.name || "贴吧用户";
     const portrait = stripPortraitQuery(user.portrait);
     const href = portrait ? `https://tieba.baidu.com/home/main?id=${encodeURIComponent(portrait)}` : "";
     return `<a class="tb-eztb-row" ${href ? `href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"` : ""}>` + (portrait ? `<img class="tb-eztb-row-avatar" src="${escapeHtml(portraitUrl(portrait))}" alt="">` : `<span class="tb-eztb-row-avatar"></span>`) + `<span class="tb-eztb-row-main"><span class="tb-eztb-row-title">${escapeHtml(display)}</span>` + (user.name ? `<span class="tb-eztb-row-sub">${escapeHtml(user.name)}</span>` : "") + `</span></a>`;
   }
-  function renderProfile(body, identity4) {
-    const profile = identity4.profile ?? {};
-    const genderText = profile.gender === 1 ? "男" : profile.gender === 2 ? "女" : "未知";
-    const rows = [
-      ["贴吧号", profile.uid ? String(profile.uid) : "—"],
-      ["用户名", profile.un || "—"],
-      ["昵称", profile.nickname || "—"],
-      ["等级", profile.level ? String(profile.level) : "—"],
-      ["吧龄", profile.tbAge || "—"],
-      ["发帖数", profile.postNum !== void 0 ? String(profile.postNum) : "—"],
-      ["粉丝数", profile.fansNum !== void 0 ? String(profile.fansNum) : "—"],
-      ["关注数", profile.concernNum !== void 0 ? String(profile.concernNum) : "—"],
-      ["关注吧数", profile.likeNum !== void 0 ? String(profile.likeNum) : "—"],
-      ["性别", genderText],
-      ["IP 属地", profile.ip || "—"],
-      ["会员", profile.vipLevel ? `VIP ${profile.vipLevel}` : "—"],
-      ["吧务", profile.isBawu ? profile.bawuType || "是" : "—"],
-      ["简介", profile.intro || "—"]
-    ];
-    body.innerHTML = `<dl class="tb-eztb-kv">${rows.map(
-      ([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`
-    ).join("")}</dl><div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:14px;">` + (identity4.portrait ? `<button data-act="home">打开贴吧主页</button>` : "") + `</div>`;
-    body.querySelector('[data-act="home"]')?.addEventListener("click", () => {
-      if (!identity4.portrait) return;
-      window.open(
-        `https://tieba.baidu.com/home/main?id=${encodeURIComponent(identity4.portrait)}`,
-        "_blank",
-        "noopener,noreferrer"
-      );
-    });
-  }
-  function renderFollowUsersTab(body, identity4) {
-    mountPagedList({
-      body,
-      emptyText: "该用户没有公开的关注的人",
-      summaryText: (loaded, totalPages) => Number.isFinite(totalPages) ? `已加载 ${loaded} 人 / 共约 ${totalPages * FOLLOW_PAGE_SIZE} 人` : `已加载 ${loaded} 人`,
-      loadPage: async (page) => {
-        const res = await callSdkLoose(() => getFollow(identity4.id, page));
-        const items = Array.isArray(res?.follow_list) ? res.follow_list : [];
-        const total = toNumber(res?.total_follow_num);
-        return {
-          items,
-          totalPages: total > 0 ? Math.ceil(total / FOLLOW_PAGE_SIZE) : void 0
-        };
-      },
-      renderRow: renderUserRow
-    });
-  }
+
+  // src/features/panel/fans.ts
   function renderFansTab(body, identity4) {
     mountPagedList({
       body,
@@ -31164,6 +31744,8 @@ ${endStackCall}`;
       renderRow: renderUserRow
     });
   }
+
+  // src/features/panel/forums.ts
   function applyForumActivity(body, items, activity, levelThreshold) {
     const activityEl = body.querySelector(".tb-eztb-activity");
     const parts2 = [];
@@ -31281,7 +31863,7 @@ ${endStackCall}`;
               activityButton.textContent = "重新检测";
             } catch (error) {
               if (activityEl) {
-                activityEl.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
+                activityEl.innerHTML = `<div class="tb-eztb-error">${escapeHtml(describeRequestError(error))}</div>`;
               }
               activityButton.textContent = originalLabel;
             } finally {
@@ -31318,17 +31900,386 @@ ${endStackCall}`;
                 button.disabled = false;
               } catch (error) {
                 button.textContent = "查询失败";
-                button.title = errorMessage(error);
+                button.title = describeRequestError(error);
                 button.disabled = false;
               }
             })();
           });
         }
       } catch (error) {
-        body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>`;
+        body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(describeRequestError(error))}</div>`;
       }
     })();
   }
+
+  // src/features/panel/follows.ts
+  var FOLLOW_PAGE_SIZE = 20;
+  function renderFollowUsersTab(body, identity4) {
+    mountPagedList({
+      body,
+      emptyText: "该用户没有公开的关注的人",
+      summaryText: (loaded, totalPages) => Number.isFinite(totalPages) ? `已加载 ${loaded} 人 / 共约 ${totalPages * FOLLOW_PAGE_SIZE} 人` : `已加载 ${loaded} 人`,
+      loadPage: async (page) => {
+        const res = await callSdkLoose(() => getFollow(identity4.id, page));
+        const items = Array.isArray(res?.follow_list) ? res.follow_list : [];
+        const total = toNumber(res?.total_follow_num);
+        return {
+          items,
+          totalPages: total > 0 ? Math.ceil(total / FOLLOW_PAGE_SIZE) : void 0
+        };
+      },
+      renderRow: renderUserRow
+    });
+  }
+
+  // src/core/mutualFollows.ts
+  function followKey(user) {
+    if (!user) return "";
+    if (user.id !== void 0 && user.id !== null && String(user.id)) {
+      return `id:${String(user.id)}`;
+    }
+    const portrait = String(user.portrait ?? "").split("?")[0];
+    if (portrait) return `portrait:${portrait}`;
+    const name = String(user.name ?? user.name_show ?? "").trim();
+    return name ? `name:${name}` : "";
+  }
+  function intersectFollows(mine, theirs) {
+    const myKeys = /* @__PURE__ */ new Set();
+    for (const user of mine) {
+      const key = followKey(user);
+      if (key) myKeys.add(key);
+    }
+    const common = [];
+    const seen = /* @__PURE__ */ new Set();
+    let byName = 0;
+    for (const user of theirs) {
+      const key = followKey(user);
+      if (!key || !myKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      if (key.startsWith("name:")) byName += 1;
+      common.push(user);
+    }
+    return { common, byName };
+  }
+  function buildMutualSummary(input) {
+    const mineLabel = input.mineLabel ?? "我";
+    const parts2 = [
+      `共同关注 ${input.common} 人`,
+      `${mineLabel}这边读了 ${input.mineRead} 人（${input.minePages} 页）`,
+      `对方读了 ${input.theirsRead} 人（${input.theirsPages} 页）`
+    ];
+    if (input.byName) {
+      parts2.push(`其中 ${input.byName} 个是按用户名比上的（可能有同名）`);
+    }
+    if (input.capped) {
+      parts2.push("已到这边的页数上限，可能还有没比对到的");
+    }
+    return parts2.join(" · ");
+  }
+
+  // src/features/panel/mutual.ts
+  var INITIAL_PAGES = 3;
+  function parseSelfRef(raw) {
+    const value = String(raw ?? "").trim();
+    if (!value) return null;
+    const fromUrl = value.match(/[?&]id=([^&\s]+)/);
+    const body = fromUrl ? decodeURIComponent(fromUrl[1]) : value;
+    if (/^\d+$/.test(body)) return { userId: Number(body) };
+    if (body.startsWith("tb.") || body.includes(".")) return { portrait: body };
+    return { un: body };
+  }
+  async function resolveSelfIdentity(ref) {
+    if (typeof ref.userId === "number" && Number.isFinite(ref.userId)) {
+      try {
+        const byUid = await callSdkLoose(() => getUserByUid(ref.userId));
+        const internalId = Number(byUid?.id ?? 0);
+        if (internalId) {
+          return {
+            id: internalId,
+            label: byUid?.nameShow || byUid?.name || String(ref.userId)
+          };
+        }
+      } catch {
+      }
+    }
+    const identity4 = await resolveIdentity(ref);
+    return {
+      id: identity4.id,
+      label: identity4.nickname || identity4.un || "我"
+    };
+  }
+  async function loadFollowPage(uid, page) {
+    const res = await callSdkLoose(() => getFollow(uid, page));
+    return Array.isArray(res?.follow_list) ? res.follow_list : [];
+  }
+  function renderMutualTab(body, identity4) {
+    const settings = getSettings();
+    const selfRef = parseSelfRef(settings.selfIdentity);
+    if (!selfRef) {
+      body.innerHTML = `<div class="tb-eztb-notice"><div class="tb-eztb-warn">要看「共同关注」，得先告诉脚本你自己是谁：在设置里填上你自己的<b>贴吧号</b>（或用户名 / 主页链接）。</div><div class="tb-eztb-hint">脚本会用这个身份读一次你自己的「关注的人」，再和对方的关注列表求交集。全部只读，不会关注或取关任何人。</div></div>`;
+      return;
+    }
+    const maxPages = Math.max(
+      INITIAL_PAGES,
+      Math.min(Number(settings.maxPagesPerList) || INITIAL_PAGES, 50)
+    );
+    body.innerHTML = `<div class="tb-eztb-notice"></div><div class="tb-eztb-hint" data-role="mutual-summary">正在读双方的关注列表…</div><div class="tb-eztb-list"></div><button class="tb-eztb-more" data-role="mutual-more">再比一页</button><div class="tb-eztb-hint" data-role="mutual-foot"></div>`;
+    const noticeEl = body.querySelector(".tb-eztb-notice");
+    const summaryEl = body.querySelector('[data-role="mutual-summary"]');
+    const listEl = body.querySelector(".tb-eztb-list");
+    const moreBtn = body.querySelector('[data-role="mutual-more"]');
+    const footEl = body.querySelector('[data-role="mutual-foot"]');
+    let minePages = 0;
+    let theirsPages = 0;
+    let mine = [];
+    let theirs = [];
+    let capped = false;
+    let loading = false;
+    const loadOneMorePage = async () => {
+      const wantMine = minePages < maxPages;
+      const wantTheirs = theirsPages < maxPages;
+      if (!wantMine && !wantTheirs) {
+        capped = true;
+        return false;
+      }
+      if (wantMine) {
+        const rows = await loadFollowPage(selfUid, minePages + 1);
+        minePages += 1;
+        mine = mine.concat(rows);
+        if (!rows.length) minePages = maxPages;
+      }
+      if (wantTheirs) {
+        const rows = await loadFollowPage(identity4.id, theirsPages + 1);
+        theirsPages += 1;
+        theirs = theirs.concat(rows);
+        if (!rows.length) theirsPages = maxPages;
+      }
+      return true;
+    };
+    const render2 = () => {
+      const { common, byName } = intersectFollows(mine, theirs);
+      summaryEl.textContent = buildMutualSummary({
+        common: common.length,
+        byName,
+        mineRead: mine.length,
+        minePages,
+        theirsRead: theirs.length,
+        theirsPages,
+        capped,
+        mineLabel: selfLabel
+      });
+      listEl.innerHTML = common.length ? common.map(renderUserRow).join("") : `<div class="tb-eztb-empty">在已经读到的这些页里没有共同关注</div>`;
+      moreBtn.disabled = loading || minePages >= maxPages && theirsPages >= maxPages;
+      moreBtn.textContent = loading ? "读取中…" : moreBtn.disabled ? "到页数上限了" : "再比一页";
+    };
+    let selfUid = null;
+    let selfLabel = "我";
+    const run3 = async () => {
+      if (loading) return;
+      loading = true;
+      render2();
+      try {
+        await loadOneMorePage();
+        noticeEl.innerHTML = "";
+      } catch (error) {
+        noticeEl.innerHTML = `<div class="tb-eztb-error">${escapeHtml(
+          describeRequestError(error, "共同关注")
+        )}</div>`;
+      } finally {
+        loading = false;
+        render2();
+      }
+    };
+    moreBtn.addEventListener("click", () => {
+      void run3();
+    });
+    void (async () => {
+      try {
+        const self = await resolveSelfIdentity(selfRef);
+        selfUid = self.id;
+        selfLabel = self.label;
+        footEl.textContent = `以「${selfLabel}」的身份比对（每页 20 人，最多 ${maxPages} 页）`;
+        await run3();
+      } catch (error) {
+        noticeEl.innerHTML = `<div class="tb-eztb-error">认不出设置里的「我自己」：${escapeHtml(
+          describeRequestError(error, "共同关注·我")
+        )}</div>`;
+        summaryEl.textContent = "";
+        moreBtn.disabled = true;
+      }
+    })();
+  }
+
+  // src/core/postStats.ts
+  function mergeForumCounts(a, b) {
+    const out = { ...a };
+    for (const [forum, count3] of Object.entries(b)) {
+      out[forum] = (out[forum] ?? 0) + count3;
+    }
+    return out;
+  }
+  function totalForumCount(counts) {
+    return Object.values(counts).reduce((sum2, value) => sum2 + value, 0);
+  }
+  function postRowSubParts(post) {
+    const parts2 = [];
+    if (post.forumName) {
+      parts2.push(
+        `<span class="tb-eztb-row-forum">${escapeHtml(post.forumName)}</span>`
+      );
+    }
+    if (post.kind === "sub" && post.replyTo) {
+      parts2.push(
+        `<span class="tb-eztb-row-replyto">↩ ${escapeHtml(post.replyTo)}</span>`
+      );
+    }
+    if (post.kind !== "topic" && post.preview) {
+      parts2.push(escapeHtml(post.preview));
+    }
+    return parts2;
+  }
+  var PIE_COLORS = [
+    "#1677ff",
+    "#e8a33d",
+    "#3fb950",
+    "#a371f7",
+    "#e5534b",
+    "#1f9ea8"
+  ];
+  var PIE_OTHER_COLOR = "#b6bcc6";
+  function buildForumStats(counts) {
+    const total = totalForumCount(counts);
+    if (!total) return [];
+    return Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([forum, count3]) => ({
+      forum,
+      count: count3,
+      fraction: count3 / total,
+      percentText: `${(count3 / total * 100).toFixed(1)}%`
+    }));
+  }
+  function buildForumFilterOptionsHtml(counts, selected) {
+    const options = buildForumStats(counts).map((stat) => {
+      const value = escapeHtml(stat.forum);
+      const isSelected = stat.forum === selected ? " selected" : "";
+      return `<option value="${value}"${isSelected}>${value}（${stat.count}）</option>`;
+    });
+    return `<option value=""${selected ? "" : " selected"}>全部吧</option>` + options.join("");
+  }
+  function postMatchesQuery(post, query) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return `${post.title ?? ""} ${post.preview ?? ""}`.toLowerCase().includes(needle);
+  }
+  function mergePostRows(topicRows, replyRows) {
+    return [...topicRows, ...replyRows].sort((a, b) => b.createTime - a.createTime);
+  }
+  function buildPostFilterHint(input) {
+    const forum = input.forum.trim();
+    const query = input.query.trim();
+    if (!forum && !query) return "";
+    const label = forum && query ? `筛选「${forum}」+ 搜索「${query}」` : forum ? `筛选「${forum}」` : `搜索「${query}」`;
+    const { topic, reply } = input.matched;
+    if (topic + reply === 0) {
+      return query ? `${label}：已加载的 ${input.loadedTotal} 条里没有命中` : `${label}：该用户在这个吧没有发帖或回复`;
+    }
+    return `${label}：主题帖 ${topic} 个 · 回复 ${reply} 条`;
+  }
+  function buildSearchAllSummary(input) {
+    const query = input.query.trim();
+    const loadedTotal = input.loaded.topic + input.loaded.reply;
+    const matchedTotal = input.matched.topic + input.matched.reply;
+    const scope3 = input.complete ? `已翻完主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页` : `翻到上限（每路最多 ${input.pageLimit} 页）时仍有更早的没加载，已翻主题帖 ${input.pages.topic} 页、回复 ${input.pages.reply} 页`;
+    const hit = matchedTotal === 0 ? `没有命中` : `命中 ${matchedTotal} 条（主题帖 ${input.matched.topic} · 回复 ${input.matched.reply}）`;
+    return `搜索「${query}」：${scope3}，共 ${loadedTotal} 条，${hit}。`;
+  }
+  function buildForumListHtml(counts, open) {
+    const stats = buildForumStats(counts);
+    if (stats.length < 2) return "";
+    const total = totalForumCount(counts);
+    const button = `<button type="button" class="tb-eztb-pielistbtn" data-act="pie-all">${open ? "收起" : `查看全部 ${stats.length} 个吧的占比`}</button>`;
+    if (!open) return `<div class="tb-eztb-pielistwrap">${button}</div>`;
+    const rows = stats.map(
+      (stat) => `<div class="tb-eztb-pieitem" data-forum="${escapeHtml(stat.forum)}"><span class="tb-eztb-pieitem-name" title="${escapeHtml(stat.forum)}">${escapeHtml(stat.forum)}</span><span class="tb-eztb-pieitem-bar"><i style="width:${(stat.fraction * 100).toFixed(1)}%"></i></span><b class="tb-eztb-pieitem-count">${stat.count}</b><span class="tb-eztb-pieitem-percent">${stat.percentText}</span></div>`
+    ).join("");
+    return `<div class="tb-eztb-pielistwrap">${button}<div class="tb-eztb-pielist"><div class="tb-eztb-pielist-head">共 ${stats.length} 个吧 · ${total} 条发言</div>` + rows + `</div></div>`;
+  }
+  function buildPieNotes(states) {
+    const loading = states.filter((state) => state.loading);
+    const failed = states.filter((state) => !state.loading && state.error);
+    const parts2 = [];
+    if (loading.length) {
+      const labels = loading.map((state) => `「${state.label}」`).join("、");
+      parts2.push(
+        `<div class="tb-eztb-pie-pending">${labels}的数据还在加载，下面的占比<b>还不完整</b>——到齐后会自动补上。</div>`
+      );
+    }
+    for (const state of failed) {
+      const reason = escapeHtml(state.error ?? "");
+      if (!state.hasRows) {
+        const page = state.failedPage ?? 1;
+        parts2.push(
+          `<div class="tb-eztb-warn">「${state.label}」的第 ${page} 页就没取到（饼图里缺这一路的条数）：${reason}</div>`
+        );
+        continue;
+      }
+      const detail = state.failedPage === void 0 ? "后续页没取到" : state.loadedPages ? `第 ${state.failedPage} 页没取到（前 ${state.loadedPages} 页已经计入饼图）` : `第 ${state.failedPage} 页没取到`;
+      parts2.push(
+        `<div class="tb-eztb-warn">「${state.label}」的${detail}（饼图只统计到已经加载出来的那部分）：${reason}</div>`
+      );
+    }
+    return parts2.join("");
+  }
+  function buildForumSlices(counts, maxSlices = 5) {
+    const total = totalForumCount(counts);
+    if (!total) return [];
+    const ranked = Object.entries(counts).filter(([, count3]) => count3 > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const head5 = ranked.slice(0, maxSlices);
+    const rest = ranked.slice(maxSlices);
+    const slices = head5.map(([forum, count3], index) => ({
+      forum,
+      label: forum,
+      count: count3,
+      color: PIE_COLORS[index % PIE_COLORS.length],
+      fraction: count3 / total,
+      percentText: `${(count3 / total * 100).toFixed(1)}%`
+    }));
+    if (rest.length) {
+      const count3 = rest.reduce((sum2, [, value]) => sum2 + value, 0);
+      slices.push({
+        forum: null,
+        label: `其它 ${rest.length} 个吧`,
+        count: count3,
+        color: PIE_OTHER_COLOR,
+        fraction: count3 / total,
+        percentText: `${(count3 / total * 100).toFixed(1)}%`
+      });
+    }
+    return slices;
+  }
+  var RADIUS = 46;
+  var STROKE = 18;
+  var CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  function buildForumPieSvg(counts, maxSlices = 5) {
+    const slices = buildForumSlices(counts, maxSlices);
+    const total = totalForumCount(counts);
+    if (!total) {
+      return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="暂无发帖数据"><circle class="tb-eztb-pie-track" cx="60" cy="60" r="${RADIUS}" fill="none" stroke-width="${STROKE}"></circle></svg><figcaption class="tb-eztb-pie-legend"><div class="tb-eztb-pie-empty">还没有加载到发帖记录</div></figcaption></figure>`;
+    }
+    let acc = 0;
+    const arcs = slices.filter((slice) => slice.count > 0).map((slice) => {
+      const length2 = slice.fraction * CIRCUMFERENCE;
+      const gap = CIRCUMFERENCE - length2;
+      const offset = -acc;
+      acc += length2;
+      return `<circle class="tb-eztb-pie-slice" cx="60" cy="60" r="${RADIUS}" fill="none" stroke="${slice.color}" stroke-width="${STROKE}" stroke-dasharray="${length2.toFixed(3)} ${gap.toFixed(3)}" stroke-dashoffset="${offset.toFixed(3)}" data-forum="${escapeHtml(slice.forum ?? "")}"><title>${escapeHtml(slice.label)} ${slice.count} 条（${slice.percentText}）</title></circle>`;
+    }).join("");
+    const legend = slices.map(
+      (slice) => `<span class="tb-eztb-pie-item" data-forum="${escapeHtml(slice.forum ?? "")}"><i class="tb-eztb-pie-dot" style="background:${slice.color}"></i><span class="tb-eztb-pie-label" title="${escapeHtml(slice.label)}">${escapeHtml(slice.label)}</span><b class="tb-eztb-pie-count">${slice.count}</b><span class="tb-eztb-pie-percent">${slice.percentText}</span></span>`
+    ).join("");
+    return `<figure class="tb-eztb-pie"><svg class="tb-eztb-pie-svg" viewBox="0 0 120 120" role="img" aria-label="发帖都发在哪些吧"><g transform="rotate(-90 60 60)">${arcs}</g></svg><figcaption class="tb-eztb-pie-legend">${legend}<div class="tb-eztb-pie-total">已加载 ${total} 条 · ${Object.keys(counts).length} 个吧</div></figcaption></figure>`;
+  }
+
+  // src/features/panel/posts.ts
   var POST_KIND_LABEL = {
     topic: "主题",
     reply: "回复",
@@ -31427,7 +32378,7 @@ ${endStackCall}`;
         return { items: feed.rows, hidden: feed.hidden };
       },
       renderRow: renderPostRow,
-      onError: (error) => onError3(errorMessage(error)),
+      onError: (error) => onError3(describeRequestError(error)),
       onPage: (result) => {
         bindFloorButtons(pane);
         onRows(result.items);
@@ -31673,12 +32624,18 @@ ${endStackCall}`;
     const updatePie = () => {
       if (!pieEl) return;
       const notes = buildPieNotes(
-        POST_SUBTABS.map((item) => ({
-          label: item.label,
-          loading: pending4.has(item.id),
-          error: failures2.get(item.id),
-          hasRows: loadedAny.has(item.id)
-        }))
+        POST_SUBTABS.map((item) => {
+          const handle = handles.get(item.id);
+          return {
+            label: item.label,
+            loading: pending4.has(item.id),
+            error: failures2.get(item.id),
+            hasRows: loadedAny.has(item.id),
+            // 失败提示要写到页上：只写"后续页没取到"没法判断是第 2 页还是第 9 页
+            failedPage: handle?.failedPage() ?? void 0,
+            loadedPages: handle?.pages() ?? 0
+          };
+        })
       );
       pieEl.innerHTML = buildForumPieSvg(counts) + notes + buildForumListHtml(counts, listOpen);
       pieEl.querySelector('[data-act="pie-all"]')?.addEventListener("click", () => {
@@ -31737,61 +32694,45 @@ ${endStackCall}`;
       });
     }
   }
-  function renderCompositionTab(body, ref, force = false) {
-    body.innerHTML = `<div class="tb-eztb-loading"><div class="tb-eztb-spinner"></div>正在检测成分…</div>`;
-    const actions = (html) => `<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:12px;">${html}</div>`;
-    void (async () => {
-      let result;
-      try {
-        result = await checkUser(ref, { force });
-      } catch (error) {
-        body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(errorMessage(error))}</div>` + actions(
-          `<button type="button" data-act="recheck" class="primary">重试</button>`
-        );
-        bindRecheck();
-        return;
-      }
-      if (result.noRules) {
-        body.innerHTML = `<div class="tb-eztb-hint">还没有配置成分关键词规则，因此没有做任何检测（也没有发出请求）。</div>` + actions(
-          `<button type="button" data-act="settings">去配置关键词</button>`
-        );
-        body.querySelector('[data-act="settings"]')?.addEventListener("click", () => openSettingsDialog());
-        return;
-      }
-      if (result.noBduss) {
-        body.innerHTML = `<div class="tb-eztb-warn">成分检测需要读取关注吧与发帖，请先设置 BDUSS。</div>` + actions(
-          `<button type="button" data-act="settings" class="primary">去设置 BDUSS</button>`
-        );
-        body.querySelector('[data-act="settings"]')?.addEventListener(
-          "click",
-          () => openSettingsDialog({ requireBduss: true })
-        );
-        return;
-      }
-      const { hits, stat } = result;
-      const statLine = `已检查：关注的吧 ${stat.forums} 个` + (stat.forumsRecovered ? `（其中 ${stat.forumsRecovered} 个来自隐藏关注贴吧的恢复）` : "") + ` · 主题帖 ${stat.topics} 条 · 回复 ${stat.replies} 条` + (result.fromCache ? "（来自缓存）" : "");
-      const rules = parseRules(getSettings().compositionRules);
-      const hitBlocks = hits.map((hit) => {
-        const evidences = hit.evidences.map((evidence) => {
-          const excerpt = evidence.excerpt ? `<div class="tb-eztb-evidence-text">${highlightKeywords(evidence.excerpt, [evidence.keyword])}</div>` : "";
-          return `<div class="tb-eztb-evidence"><span class="tb-eztb-evidence-reason">${escapeHtml(evidence.reason)}</span><span class="tb-eztb-evidence-keyword">${escapeHtml(evidence.keyword)}</span>` + excerpt + `</div>`;
-        }).join("");
-        return `<div class="tb-eztb-hit"><div class="tb-eztb-hit-head"><span class="tb-eztb-badge" style="--tb-eztb-badge-hue:${badgeHue(hit.rule.name)}">${escapeHtml(hit.rule.name)}</span>` + (hit.sure ? "" : `<span class="tb-eztb-hit-unsure">证据较弱，可能是误判</span>`) + `</div>` + evidences + `</div>`;
-      }).join("");
-      const body_ = (hits.length ? `<div class="tb-eztb-hint">命中 ${hits.length} 条规则（共配置 ${rules.length} 条）</div><div class="tb-eztb-hits">${hitBlocks}</div>` : `<div class="tb-eztb-empty">没有命中任何关键词：这个用户关注的吧与发帖里都没出现规则表中的词。</div>`) + `<div class="tb-eztb-hint" style="margin-top:12px;">${escapeHtml(statLine)}</div>` + (stat.failed.length ? `<div class="tb-eztb-warn">部分数据没取到：${escapeHtml(stat.failed.join("；"))}</div>` : "") + actions(
-        `<button type="button" data-act="recheck">重新检测</button><button type="button" data-act="settings">关键词设置</button>`
+
+  // src/features/panel/profile.ts
+  function renderProfile(body, identity4) {
+    const profile = identity4.profile ?? {};
+    const genderText = profile.gender === 1 ? "男" : profile.gender === 2 ? "女" : "未知";
+    const rows = [
+      ["贴吧号", profile.uid ? String(profile.uid) : "—"],
+      ["用户名", profile.un || "—"],
+      ["昵称", profile.nickname || "—"],
+      ["等级", profile.level ? String(profile.level) : "—"],
+      ["吧龄", profile.tbAge || "—"],
+      ["发帖数", profile.postNum !== void 0 ? String(profile.postNum) : "—"],
+      ["粉丝数", profile.fansNum !== void 0 ? String(profile.fansNum) : "—"],
+      ["关注数", profile.concernNum !== void 0 ? String(profile.concernNum) : "—"],
+      ["关注吧数", profile.likeNum !== void 0 ? String(profile.likeNum) : "—"],
+      ["性别", genderText],
+      ["IP 属地", profile.ip || "—"],
+      ["会员", profile.vipLevel ? `VIP ${profile.vipLevel}` : "—"],
+      ["吧务", profile.isBawu ? profile.bawuType || "是" : "—"],
+      ["简介", profile.intro || "—"]
+    ];
+    body.innerHTML = `<dl class="tb-eztb-kv">${rows.map(
+      ([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`
+    ).join("")}</dl><div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:14px;">` + (identity4.portrait ? `<button data-act="home">打开贴吧主页</button>` : "") + `</div>`;
+    body.querySelector('[data-act="home"]')?.addEventListener("click", () => {
+      if (!identity4.portrait) return;
+      window.open(
+        `https://tieba.baidu.com/home/main?id=${encodeURIComponent(identity4.portrait)}`,
+        "_blank",
+        "noopener,noreferrer"
       );
-      body.innerHTML = body_;
-      body.querySelector('[data-act="settings"]')?.addEventListener("click", () => openSettingsDialog());
-      bindRecheck();
-      function bindRecheck() {
-        body.querySelector('[data-act="recheck"]')?.addEventListener("click", () => renderCompositionTab(body, ref, true));
-      }
-    })();
+    });
   }
+
+  // src/features/userPanel.ts
   var TABS = PANEL_TABS;
   function openUserPanel(ref, options = {}) {
-    const initialTab = options.tab ?? normalizePanelTabId(getSettings().defaultTab);
+    const settings = getSettings();
+    const initialTab = options.tab ?? (settings.rememberLastTab ? readLastTab() ?? normalizePanelTabId(settings.defaultTab) : normalizePanelTabId(settings.defaultTab));
     const dialog = openDialog({
       title: ref.nickname || ref.un || "贴吧用户",
       subtitleHtml: "正在解析用户信息…",
@@ -31823,6 +32764,7 @@ ${endStackCall}`;
       return pane;
     };
     const switchTab = (id, identity4) => {
+      if (getSettings().rememberLastTab) writeLastTab(id);
       activeTabId = id;
       for (const [key, pane2] of panes) {
         pane2.classList.toggle("active", key === id);
@@ -31841,6 +32783,9 @@ ${endStackCall}`;
           break;
         case "follow":
           renderFollowUsersTab(pane, identity4);
+          break;
+        case "mutual":
+          renderMutualTab(pane, identity4);
           break;
         case "forums":
           renderFollowForumsTab(pane, identity4);
@@ -31902,7 +32847,7 @@ ${endStackCall}`;
         dialog.body.innerHTML = "";
         switchTab(requestedTab, identity4);
       } catch (error) {
-        const message = errorMessage(error);
+        const message = describeRequestError(error);
         const needBduss = /BDUSS/i.test(message);
         dialog.body.innerHTML = `<div class="tb-eztb-error">${escapeHtml(message)}</div>` + (needBduss ? `<div class="tb-eztb-actions" style="justify-content:flex-start;"><button data-act="config" class="primary">去设置 BDUSS</button></div>` : "");
         dialog.body.querySelector('[data-act="config"]')?.addEventListener(
@@ -32305,6 +33250,21 @@ ${endStackCall}`;
 }
 /* 行里连一个标记都放不下时的兜底：一个小圆点，颜色仍然区分规则 */
 .tb-eztb-badge-dot{padding:0 5px;font-size:10px;line-height:17px;}
+/* 「证据不足」：没有命中、但这次的数据不足以判定。用中性灰，不参与规则配色，
+   免得看起来像"命中了某条规则"（HANDOFF §9.2）。 */
+.tb-eztb-badge-insufficient{
+  color:var(--tb-eztb-text-muted) !important;
+  background:var(--tb-eztb-chip) !important;
+  border-color:var(--tb-eztb-border-input);
+  border-style:solid;
+  font-weight:500;
+}
+/* 键盘可达：徽章自己是 span（用 button 会被 .btn-wrapper 的样式带跑），
+   所以显式给一圈焦点环，键盘用户才看得出焦点在哪。 */
+.tb-eztb-badge:focus-visible,.tb-eztb-btn:focus-visible{
+  outline:2px solid var(--tb-eztb-accent);
+  outline-offset:1px;
+}
 
 /* 面板「成分」页签 */
 .tb-eztb-hits{display:flex;flex-direction:column;gap:10px;}
@@ -32399,6 +33359,25 @@ ${endStackCall}`;
       true
     );
   }
+  function installKeyboardDelegate() {
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+          return;
+        }
+        const target = event.target;
+        const badge = target?.closest?.(`.${BADGE_CLASS}`);
+        if (!badge) return;
+        const badgeRef = getBadgeRef(badge);
+        if (!badgeRef) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openUserPanel(badgeRef, { tab: "composition" });
+      },
+      true
+    );
+  }
   var mount = (ref, nameEl, wrapper) => {
     if (!ref.userId && !ref.un && !ref.portrait) return;
     const button = createButton(ref);
@@ -32451,6 +33430,7 @@ ${endStackCall}`;
     requestQueue.setMinInterval(getSettings().minIntervalMs);
     registerMenuCommands();
     installClickDelegate();
+    installKeyboardDelegate();
     startScanner(mount);
     log.info("已加载：数据直连贴吧接口，不经过第三方服务");
   }

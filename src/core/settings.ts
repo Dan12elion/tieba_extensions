@@ -43,6 +43,12 @@ export interface ToolboxSettings {
 	compositionAuto: boolean;
 	/** 每页最多自动检测多少个用户 */
 	compositionMaxPerPage: number;
+	/**
+	 * 成分检测时，主题帖与回复**各**翻几页（每页 60 条）。
+	 *
+	 * 默认 1：只按第 1 页判定。调大能覆盖更早的帖子，代价是每个用户多 (N-1)×2 个请求。
+	 */
+	compositionPages: number;
 	/** 成分结果缓存多少天 */
 	compositionCacheDays: number;
 	/**
@@ -52,6 +58,19 @@ export interface ToolboxSettings {
 	signInLevelThreshold: number;
 	/** 打开用户面板时默认停在哪个页签（见 core/panelTabs.ts 的页签注册表） */
 	defaultTab: PanelTabId;
+	/**
+	 * 记住上次看过的页签（存 `tbEztbToolboxLastTabV1`，不在这份设置里）。
+	 *
+	 * 开着时它**覆盖** `defaultTab`：键盘用户来回看同一个页签时不用每次重新切。
+	 */
+	rememberLastTab: boolean;
+	/**
+	 * 「共同关注」里**我自己**的标识：贴吧号（uid）/ 用户名 / 主页链接都行。
+	 *
+	 * 空着时「共同关注」页签只显示"先去设置里填自己是谁"的提示——没有它就无法比对，
+	 * 这一点宁可说清楚，也不要静默显示 0 个共同关注。
+	 */
+	selfIdentity: string;
 }
 
 export const DEFAULT_SETTINGS: ToolboxSettings = {
@@ -62,9 +81,12 @@ export const DEFAULT_SETTINGS: ToolboxSettings = {
 	compositionRules: "",
 	compositionAuto: true,
 	compositionMaxPerPage: 20,
+	compositionPages: 1,
 	compositionCacheDays: 3,
 	signInLevelThreshold: 6,
 	defaultTab: DEFAULT_PANEL_TAB,
+	rememberLastTab: false,
+	selfIdentity: "",
 };
 
 /** 存储里比 `ToolboxSettings` 多一个版本号 */
@@ -120,6 +142,12 @@ export function normalizeSettings(input: unknown): ToolboxSettings {
 			1,
 			200,
 		),
+		compositionPages: clampNumber(
+			raw.compositionPages,
+			DEFAULT_SETTINGS.compositionPages,
+			1,
+			10,
+		),
 		compositionCacheDays: clampNumber(
 			raw.compositionCacheDays,
 			DEFAULT_SETTINGS.compositionCacheDays,
@@ -133,6 +161,8 @@ export function normalizeSettings(input: unknown): ToolboxSettings {
 			18,
 		),
 		defaultTab: normalizePanelTabId(raw.defaultTab),
+		rememberLastTab: raw.rememberLastTab === true,
+		selfIdentity: readString(raw.selfIdentity, DEFAULT_SETTINGS.selfIdentity).trim(),
 	};
 }
 

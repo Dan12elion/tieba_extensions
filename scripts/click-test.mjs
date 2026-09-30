@@ -123,10 +123,36 @@ const PAGE = `<!doctype html>
   window.__tbRequests = 0;
   // 请求日志：定位"哪个请求发出去了但一直没回来"（桩/代理层的问题都靠它）
   window.__tbLog = [];
+  // 「校验 BDUSS」的三种世界：null（谁都没登录）/ real（只有真凭据能过）/ always（Cookie 头被剥掉）
+  window.__tbWhoami = 'real';
+  // 注入前 N 个网络错误，用来验证请求会自动重试
+  window.__tbFailNext = 0;
   window.GM_xmlhttpRequest = function (d) {
     window.__tbRequests++;
     var entry = { url: d.url, state: 'start' };
     window.__tbLog.push(entry);
+    if (window.__tbFailNext > 0) {
+      window.__tbFailNext--;
+      entry.state = 'injected-fail';
+      setTimeout(function () { d.onerror && d.onerror({}); }, 0);
+      return { abort: function () {} };
+    }
+    if (d.url.indexOf('/f/user/json_userinfo') >= 0) {
+      var mode = window.__tbWhoami;
+      var cookie = (d.headers && (d.headers.Cookie || d.headers.cookie)) || '';
+      var loggedIn = mode === 'always' ||
+        (mode === 'real' && cookie.indexOf('TEST_DUMMY_BDUSS') >= 0);
+      entry.state = 'whoami:' + mode + ':' + (loggedIn ? 'in' : 'out');
+      setTimeout(function () {
+        d.onload && d.onload({
+          status: 200,
+          statusText: 'OK',
+          responseHeaders: '',
+          response: loggedIn ? '{"user_name":"测试账号","user_id":12345}' : 'null'
+        });
+      }, 0);
+      return { abort: function () {} };
+    }
     fetch('/proxy?u=' + encodeURIComponent(d.url), {
       method: d.method || 'GET',
       headers: d.headers || {},
@@ -755,8 +781,8 @@ const PAGE = `<!doctype html>
           add('（阶段 9）设置里有「打开面板时默认停在」', hasSelect, '');
           if (!hasSelect) { finish(); return; }
           var select = inPanel('#tb-eztb-default-tab');
-          add('（阶段 9）默认页签的选项覆盖面板的六个页签',
-              select.options.length === 6, '选项 ' + select.options.length + ' 个');
+          add('（阶段 9）默认页签的选项覆盖面板的七个页签',
+              select.options.length === 7, '选项 ' + select.options.length + ' 个');
           select.value = 'forums';
           var saveBtn = inPanel('[data-act="save"]');
           if (!saveBtn) { finish(); return; }
@@ -886,10 +912,293 @@ const PAGE = `<!doctype html>
           until(settled, function (again) {
             add('回车也能触发「搜全部」', again, hintText());
             add('阶段 10 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-            finish();
+            stage11();
           }, 300);
         }, 300);
       };
+
+      /**
+       * 阶段 11：1.9.0 新增的三件事——软导航后重置页面标记、请求自动重试、
+       * 诊断面板的运行期自检与「校验 BDUSS」。
+       *
+       * 这些都不依赖面板当前的状态，所以放在最后一个阶段，测完直接 finish()。
+       */
+      function stage11() {
+        // 先把面板关掉：遮罩是全屏 fixed 层，会影响命中测试（踩坑 #13）
+        Array.prototype.forEach.call(document.querySelectorAll('.tb-eztb-mask'), function (mask) {
+          var close = mask.querySelector('.tb-eztb-close');
+          if (close) close.click();
+        });
+        if (document.querySelector('.tb-eztb-mask')) {
+          add('阶段 11 开始前面板已关闭', false, '还有遮罩没关掉');
+          finish();
+          return;
+        }
+
+        // ── 11.1 软导航（SPA 换页）后重置页面标记 ──
+        var host = document.querySelector('.head-line');
+        var probeButton = host && host.querySelector('.tb-eztb-btn');
+        if (!host || !probeButton) {
+          add('阶段 11：找得到用来验证软导航的节点', false, '');
+          stage12();
+          return;
+        }
+        probeButton.setAttribute('data-tb-probe', '1');
+        var beforeCount = document.querySelectorAll('.tb-eztb-btn').length;
+        history.pushState({}, '', location.pathname + '?tbprobe=' + Date.now());
+        until(function () { return !document.querySelector('.tb-eztb-btn[data-tb-probe]'); }, function (replaced) {
+          add('软导航（pushState）后旧按钮被摘掉、按当前 DOM 重新注入', replaced && !!host.querySelector('.tb-eztb-btn'),
+              replaced ? '' : '旧按钮还在（页面复用的节点会留着上一个用户的按钮）');
+          add('软导航后同一个节点上只有一个按钮（不会重复注入）',
+              host.querySelectorAll('.tb-eztb-btn').length === 1,
+              '该节点按钮数 ' + host.querySelectorAll('.tb-eztb-btn').length);
+          var afterCount = document.querySelectorAll('.tb-eztb-btn').length;
+          add('软导航后按钮数不变（既不重复注入、也没漏掉）',
+              afterCount === beforeCount && afterCount > 0,
+              '软导航前 ' + beforeCount + ' → 后 ' + afterCount);
+          stage12();
+        }, 40);
+      }
+
+      // ── 11.2 请求自动重试：注入两次网络错误，一次**必然发生**的请求仍要成功 ──
+      function stage12() {
+        window.__tbFailNext = 2;
+        /*
+         * 这里刻意用「关注的人」页签，而不是资料页签：资料在这个测试里早就被
+         * 前面的阶段取过并落进了缓存，点开面板**一个请求都不发**，
+         * 拿它验证重试会变成"什么都没测"（第一次写这条断言就踩了：注入失败只记到 1 次，
+         * 因为那 1 次是后台成分检测的请求）。
+         * 关注列表不落缓存，每次都要真的打接口。
+         */
+        var target = document.querySelector('.l_post .tb-eztb-btn');
+        if (!target) {
+          add('阶段 11：注入失败前找得到「查询」按钮', false, '');
+          stage13();
+          return;
+        }
+        target.click();
+        until(function () {
+          return !!document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="follow"]');
+        }, function (opened) {
+          if (!opened) {
+            add('阶段 11：注入失败后仍能打开面板', false, '面板没打开');
+            stage13();
+            return;
+          }
+          var followTab = document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="follow"]');
+          followTab.click();
+          until(function () {
+            var pane = document.querySelector('.tb-eztb-pane[data-pane="follow"]');
+            return !!pane && (pane.querySelectorAll('.tb-eztb-row').length > 0 ||
+              pane.querySelectorAll('.tb-eztb-error').length > 0);
+          }, function () {
+            var pane = document.querySelector('.tb-eztb-pane[data-pane="follow"]');
+            var rows = pane ? pane.querySelectorAll('.tb-eztb-row').length : 0;
+            var injected = window.__tbLog.filter(function (e) {
+              return String(e.state).indexOf('injected-fail') === 0;
+            }).length;
+            var errorText = pane && pane.querySelector('.tb-eztb-error')
+              ? String(pane.querySelector('.tb-eztb-error').textContent).slice(0, 100)
+              : '';
+            add('注入两次网络错误后，这一路数据仍然取到了（请求会自动重试）',
+                rows > 0 && injected >= 2,
+                '行数=' + rows + '，注入失败 ' + injected + ' 次，请求共 ' + window.__tbRequests +
+                ' 次，错误提示=' + (errorText || '（无）'));
+            add('重试成功后界面上没有留下错误提示', !errorText, errorText);
+            add('阶段 11：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+            stage13();
+          }, 100);
+        }, 60);
+      }
+
+      // ── 11.3 诊断面板：关键约束自检 + 重置熔断 ──
+      function stage13() {
+        Array.prototype.forEach.call(document.querySelectorAll('.tb-eztb-mask'), function (mask) {
+          var close = mask.querySelector('.tb-eztb-close');
+          if (close) close.click();
+        });
+        var open = window.__tbMenus['eztb：诊断当前页面'];
+        if (!open) {
+          add('阶段 11：菜单里有「诊断当前页面」', false, '');
+          stage14();
+          return;
+        }
+        open();
+        var report = inPanel('.tb-eztb-report');
+        if (!report) {
+          add('阶段 11：诊断报告打不开', false, '');
+          stage14();
+          return;
+        }
+        var text = String(report.textContent);
+        add('诊断报告里有「关键约束自检」一节（用户报「按钮点不动」时报告自带答案）',
+            text.indexOf('关键约束自检') >= 0, '');
+        add('自检量了按钮的 pointer-events（坑 #1 的不变量）',
+            /PASS\\s+按钮 pointer-events = auto/.test(text),
+            (text.match(/按钮 pointer-events[^\\n]*/) || [''])[0]);
+        add('自检量了按钮的 z-index（坑 #3 的不变量）',
+            /PASS\\s+按钮 z-index = 5/.test(text),
+            (text.match(/按钮 z-index[^\\n]*/) || [''])[0]);
+        add('诊断报告里有「请求熔断状态」', text.indexOf('请求熔断状态') >= 0, '');
+        var resetBtn = inPanel('[data-act="reset-breaker"]');
+        add('诊断面板里有「重置熔断」按钮', !!resetBtn, '');
+        var beforeText = resetBtn ? String(resetBtn.textContent) : '';
+        if (resetBtn) resetBtn.click();
+        add('点「重置熔断」会给出反馈', !!resetBtn && String(resetBtn.textContent) !== beforeText,
+            resetBtn ? (beforeText + ' → ' + resetBtn.textContent) : '');
+        stage14();
+      }
+
+      // ── 11.4 「校验 BDUSS」的三种世界 ──
+      function stage14() {
+        Array.prototype.forEach.call(document.querySelectorAll('.tb-eztb-mask'), function (mask) {
+          var close = mask.querySelector('.tb-eztb-close');
+          if (close) close.click();
+        });
+        var openSettings = window.__tbMenus['eztb：设置 BDUSS / 运行参数'];
+        if (!openSettings) {
+          add('阶段 11：菜单里有设置入口', false, '');
+          finish();
+          return;
+        }
+        openSettings();
+        var checkBtn = inPanel('[data-act="check-bduss"]');
+        var status = inPanel('#tb-eztb-bduss-status');
+        add('设置面板里有「校验 BDUSS」按钮和状态行', !!checkBtn && !!status, '');
+        var bdussHint = inPanel('.tb-eztb-form') ? String(inPanel('.tb-eztb-form').textContent) : '';
+        add('设置面板里写着自己动手复制 BDUSS 的步骤（含 Application / Cookies）',
+            bdussHint.indexOf('Application') >= 0 && bdussHint.indexOf('Cookies') >= 0, '');
+        if (!checkBtn || !status) { finish(); return; }
+
+        var runCheck = function (mode, next) {
+          window.__tbWhoami = mode;
+          // 上一轮的状态文字要先清掉，否则 until 会立刻带着旧结论返回
+          status.textContent = '';
+          checkBtn.click();
+          // 注意：点击会**同步**写一句"正在问贴吧…"，所以要等真正的结论，而不是"有文字了"
+          var isConclusion = function (text) {
+            return /校验通过|无法确认|没通过|校验没能完成/.test(text);
+          };
+          until(function () { return isConclusion(String(status.textContent)); }, function () {
+            next(String(status.textContent));
+          }, 60);
+        };
+
+        runCheck('real', function (text) {
+          add('凭据有效时报「校验通过」并写出账号名',
+              text.indexOf('校验通过') >= 0 && text.indexOf('测试账号') >= 0, text);
+          runCheck('always', function (text2) {
+            add('Cookie 头被脚本管理器剥掉时，如实说「无法确认」而不是假装通过',
+                text2.indexOf('无法确认') >= 0, text2);
+            runCheck('null', function (text3) {
+              add('谁都没登录时报「没通过」，并提示重新复制凭据',
+                  text3.indexOf('没通过') >= 0 && text3.indexOf('重新复制') > 0, text3);
+              stage15();
+            });
+          });
+        });
+      }
+
+      /**
+       * 阶段 15：1.9.0 新增的设置项与「共同关注」页签。
+       *
+       * 此时设置面板还开着（阶段 14 打开的）。先断言三个新字段在，再用
+       * "自己 = 对方" 这个自洽场景验证交集：共同关注应当等于他关注的人（已读到的那些），
+       * 而且两边的「读了 N 人」必然相等。
+       */
+      function stage15() {
+        var selfInput = inPanel('#tb-eztb-self');
+        var pagesInput = inPanel('#tb-eztb-composition-pages');
+        var rememberSel = inPanel('#tb-eztb-remember-tab');
+        add('设置里有「我自己的贴吧号（共同关注用）」', !!selfInput, '');
+        add('设置里有「成分检测每路翻几页」', !!pagesInput, '');
+        add('设置里有「记住上次看过的页签」', !!rememberSel, '');
+
+        // 先把"我自己"留空并保存，验证没配置时页签会老实说明
+        if (selfInput) selfInput.value = '';
+        var saveBtn = inPanel('[data-act="save"]');
+        if (!saveBtn) { add('阶段 15：找得到保存按钮', false, ''); finish(); return; }
+        saveBtn.click();
+
+        var openPanel = function (next) {
+          var target = document.querySelector('.l_post .tb-eztb-btn');
+          if (!target) { add('阶段 15：找得到「查询」按钮', false, ''); finish(); return; }
+          target.click();
+          until(function () {
+            return !!document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="mutual"]');
+          }, function (opened) {
+            if (!opened) { add('阶段 15：面板里有「共同关注」页签', false, '面板没打开'); finish(); return; }
+            var tab = document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="mutual"]');
+            tab.click();
+            /*
+             * 页签按钮在**解析用户信息之前**就已经在 DOM 里了，那时副标题还是
+             * "正在解析用户信息…"。所以要等到副标题真的带出贴吧号再读 uid——
+             * 早读会拿到 null，后面设置的"我自己"就成了空串
+             * （第一次写这段时就是这么错的：共同关注页签一直停在"先填自己是谁"）。
+             */
+            until(function () {
+              var sub = inPanel('.tb-eztb-sub');
+              return !!sub && /贴吧号 \\d+/.test(String(sub.textContent));
+            }, function () {
+              var sub = inPanel('.tb-eztb-sub');
+              window.__tbSelfUid = sub ? (String(sub.textContent).match(/贴吧号 (\\d+)/) || [])[1] : null;
+              next();
+            }, 60);
+          }, 60);
+        };
+
+        openPanel(function () {
+          until(function () {
+            var pane = inPanel('.tb-eztb-pane[data-pane="mutual"]');
+            return !!pane && String(pane.textContent).length > 0;
+          }, function () {
+            add('面板里有「共同关注」页签', true, '');
+            var pane = inPanel('.tb-eztb-pane[data-pane="mutual"]');
+            var text = pane ? String(pane.textContent) : '';
+            add('没填「我自己」时说明要先去哪填，而不是显示 0 个共同关注',
+                text.indexOf('先告诉脚本你自己是谁') >= 0 || text.indexOf('设置里填上') >= 0,
+                text.slice(0, 120));
+
+            // 把自己设成"就是对方"：交集应当等于他关注的人，且两边读数相同
+            var settingsBtn = lastMask() && lastMask().querySelector('[data-act="settings"]');
+            if (settingsBtn) settingsBtn.click();
+            var self2 = inPanel('#tb-eztb-self');
+            add('阶段 15：能打开设置并拿到「我自己」输入框', !!self2, '');
+            if (!self2) { finish(); return; }
+            self2.value = String(window.__tbSelfUid || '');
+            var save2 = inPanel('[data-act="save"]');
+            if (save2) save2.click();
+
+            openPanel(function () {
+              until(function () {
+                var pane2 = inPanel('.tb-eztb-pane[data-pane="mutual"]');
+                return !!pane2 && !!pane2.querySelector('.tb-eztb-row');
+              }, function () {
+                var pane3 = inPanel('.tb-eztb-pane[data-pane="mutual"]');
+                var rows = pane3 ? pane3.querySelectorAll('.tb-eztb-row').length : 0;
+                var summaryEl = pane3 && pane3.querySelector('[data-role="mutual-summary"]');
+                var summary = summaryEl ? String(summaryEl.textContent) : '';
+                add('把自己设成同一个人时，共同关注 = 他关注的人（已读到的那些）',
+                    rows > 0 && summary.indexOf('共同关注 ' + rows + ' 人') >= 0,
+                    '行数=' + rows + '，结论=' + summary +
+                    '；selfUid=' + window.__tbSelfUid +
+                    '；存储里的 selfIdentity=' +
+                    JSON.stringify((window.GM_getValue('tbEztbToolboxSettingsV1', {}) || {}).selfIdentity) +
+                    '；页签容器长度=' + (pane3 ? String(pane3.textContent).length : -1));
+                add('两边读到的样本数必然相等（自己就是对方）',
+                    (function () {
+                      var reads = summary.match(/读了 \\d+ 人/g) || [];
+                      return reads.length === 2 && reads[0] === reads[1];
+                    })(), summary);
+                add('结论里写明了读了多少页（不能被读成「一共只有这么多」）',
+                    /读了 \\d+ 人（\\d+ 页）/.test(summary), summary);
+                add('阶段 11 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+                finish();
+              }, 100);
+            });
+          }, 60);
+        });
+      }
 
       mergedBtn.click();
       var mergedView = pane.querySelector('.tb-eztb-mergedview');
@@ -1088,11 +1397,14 @@ const PAGE = `<!doctype html>
 
   // 兜底：万一哪一步的断言抛错导致链条断了，也把已经跑出的结果发回来，
   // 否则只能看到一个干巴巴的"浏览器未返回结果"。
+  // 时限是**整个页面流程**的上限（阶段 0~15 串行）：1.9.0 加了阶段 11~15
+  // （重试要真等两次退避、软导航、诊断自检、三次 BDUSS 校验、共同关注要比对两路），
+  // 原来的 150 秒会被正好卡掉——表现是"中途断了"而不是某条断言红。
   setTimeout(function () {
     add('测试在超时前跑完', false, '中途断了，最后一条断言见上面');
     add('页面 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
     finish();
-  }, 150000);
+  }, 200000);
 
   setTimeout(function () {
     /*
@@ -1139,8 +1451,9 @@ const PAGE = `<!doctype html>
     // 点旧版按钮：它带真实 user_id，可直接解析出用户
     var clickTarget = oldButton || newButton;
     if (!clickTarget) { add('存在可点击按钮', false, ''); finish(); return; }
-    clickTarget.click();
-    add('点击后面板已打开', !!document.querySelector('.tb-eztb-mask'), '');
+    // 后面阶段 11 的重试验证要复用这个"已经证明能解析出资料"的按钮
+    window.__tbProvenButton = clickTarget;
+    clickTarget.click();    add('点击后面板已打开', !!document.querySelector('.tb-eztb-mask'), '');
 
     /*
      * 焦点陷阱（2026-09-28 修的那个洞）：打开时焦点落在弹窗容器本身（tabIndex = -1），
@@ -1192,6 +1505,12 @@ const PAGE = `<!doctype html>
     // ── 阶段 2：真实数据渲染 ──
     until(function () { return !!document.querySelector('.tb-eztb-kv'); }, function (ok) {
       add('资料页签用真实数据渲染', ok, ok ? (document.querySelector('.tb-eztb-kv').textContent || '').slice(0, 40) : '超时');
+      // 顺手记下这个用户的贴吧号：阶段 15 的「共同关注」要拿它当"我自己"（自己=对方，结论可自洽验证）
+      (function () {
+        var sub = document.querySelector('.tb-eztb-mask .tb-eztb-sub');
+        var matched = sub ? String(sub.textContent).match(/贴吧号 (\\d+)/) : null;
+        window.__tbSelfUid = matched ? matched[1] : null;
+      })();
       var postsTab = document.querySelector('.tb-eztb-tab[data-tab="posts"]');
       add('存在「发帖」页签', !!postsTab, '');
       if (!postsTab) { add('运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; ')); finish(); return; }
@@ -1706,7 +2025,9 @@ const child = spawn(
 );
 
 const timeout = new Promise((resolve) =>
-	setTimeout(() => resolve("__TIMEOUT__"), 240_000),
+	// 页面侧自己的兜底是 200 秒（见页面脚本里的 watchdog）：这里留出余量，
+	// 免得两边的时限贴太近、报出来的是"浏览器没返回结果"而不是哪条断言断了。
+	setTimeout(() => resolve("__TIMEOUT__"), 260_000),
 );
 const raw = await Promise.race([resultPromise, timeout]);
 // 主流程已经交卷，先把这台浏览器收掉，深色那一遍再单开一台
@@ -1714,7 +2035,7 @@ child.kill();
 
 if (raw === "__TIMEOUT__") {
 	server.close();
-	console.error("浏览器未在 240 秒内返回结果");
+	console.error("浏览器未在 260 秒内返回结果");
 	process.exit(1);
 }
 

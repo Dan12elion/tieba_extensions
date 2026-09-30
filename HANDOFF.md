@@ -56,10 +56,13 @@ eztb-userscript/
 ├─ PLAN.md                      # 立项时的改造/验证清单（已归档）
 ├─ HANDOFF.md                   # 本文件
 ├─ IMPROVEMENTS.md              # 对标同类项目的改动建议（含进度）
+├─ CHANGELOG.md                 # 版本历史（scripts/version.mjs 会核对）
+├─ docs/rules.md                # 「成分」规则的格式说明与排查步骤（用户向）
 ├─ LICENSE                      # MIT（只覆盖本工程代码）
 ├─ THIRD-PARTY.md               # 内嵌的第三方代码与授权状态（★ 1.8.0 更正过）
 ├─ sdk.lock.json                # 锁内嵌 SDK + 构建它的那份上游 eztb 检出（提交号，构建时核对）
-├─ .github/workflows/ci.yml     # CI：离线三项 + 产物同步校验（★ 1.8.0 新增）
+├─ .github/workflows/ci.yml     # CI：离线三项 + 产物同步校验 + 版本一致性（★ 1.8.0/1.9.0）
+├─ .github/ISSUE_TEMPLATE/      # issue 模板（bug 模板要求附诊断报告，★ 1.9.0）
 ├─ .gitattributes               # 统一 LF（产物会被直接安装/上传）
 ├─ .gitignore                   # 忽略 node_modules、dist/.verify、dist/.samples
 ├─ scripts/
@@ -67,6 +70,7 @@ eztb-userscript/
 │  ├─ deps-info.mjs             # 读内嵌依赖的版本/许可/提交号，生成产物 NOTICE
 │  ├─ typecheck.mjs             # tsc --noEmit（别名、参数形状、字段是否存在）
 │  ├─ verify.mjs                # 签名逐字符比对 + 产物检查
+│  ├─ version.mjs               # 版本一致性：package.json / 产物 @version / CHANGELOG（★ 1.9.0）
 │  ├─ keyword-test.mjs          # 成分规则 / 饼图 / 判定的纯离线测试
 │  ├─ live-test.mjs             # 真实接口测试（EZTB_PROBE=1 开探查）
 │  ├─ click-test.mjs            # 无头浏览器 + 本地代理的交互测试
@@ -75,15 +79,22 @@ eztb-userscript/
 │  ├─ probe-user.mjs            # 单用户原始数据探查
 │  └─ extract-mhtml.mjs         # MHTML 解码工具
 ├─ src/
-│  ├─ main.ts                   # 入口：注入样式、挂按钮、注册菜单、点击委托
+│  ├─ main.ts                   # 入口：注入样式、挂按钮、注册菜单、点击与键盘委托
 │  ├─ core/                     # ★ 设置、SDK、身份、取数、规则与缓存
+│  │  ├─ netPolicy.ts           # 请求重试 / 退避 / 熔断（★ 1.9.0）
+│  │  ├─ errno.ts               # 贴吧业务错误码 → 人话（★ 1.9.0）
+│  │  ├─ bdussCheck.ts          # 「校验 BDUSS」（★ 1.9.0）
+│  │  ├─ mutualFollows.ts       # 共同关注的纯逻辑（★ 1.9.0）
+│  │  └─ lastTab.ts             # 「记住上次页签」的独立存储（★ 1.9.0）
 │  ├─ shims/                    # 4 个 Node 依赖的浏览器替身 + 测试入口
 │  ├─ page/                     # 新旧版 DOM 适配、扫描、成分徽章
 │  ├─ ui/                       # 全部 CSS、通用弹窗外壳
 │  ├─ features/                 # 用户面板、设置面板、成分调度、诊断
+│  │  ├─ userPanel.ts           # 面板外壳与页签编排（1.9.0 拆分后 231 行）
+│  │  └─ panel/                 # 每个页签一个文件（★ 1.9.0 拆出来的）
 │  └─ types/                    # GM_* API 的类型声明
 └─ dist/
-   ├─ tieba-eztb-toolbox.user.js      # 产物：未压缩可读版（约 1.0 MB）
+   ├─ tieba-eztb-toolbox.user.js      # 产物：未压缩可读版（约 1.1 MB）
    ├─ tieba-eztb-toolbox.min.user.js  # 只有 node build.mjs --minify 才生成
    ├─ .verify/                        # 测试中间产物（gitignore）
    └─ .samples/                       # 随手放进来的页面快照（gitignore）
@@ -263,6 +274,24 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 > `hidePost` 是 protobuf 的 `uint32`（字段号 2），`{data:{hidePost:1}}` 的字节是 `12 02 10 01`。
 > click-test 用它把某个用户的 userpost 响应顶掉，从而**不依赖真实账号的隐私设置**来验证这条路径。
 
+### 4.7 「贴吧号」（tiebaUid）与「内部 id」不是一回事
+
+1.9.0 写「共同关注」时踩到的：面板副标题里的「贴吧号」是 **`tiebaUid`**（形如 `523640824`），
+而 `getProfile(id)` / `getFollow(id)` 的 `uid` 参数要的是**内部 id**（形如 `2724733822`）。
+两者都是纯数字，混用不报错，只会"查到另一个人"。
+
+实测（2026-10-01，live-test 里已钉成断言）：
+
+| 事实 | 证据 |
+|---|---|
+| `getProfile(2724733822)` 的 `user.id = 2724733822`（内部 id）、`user.tiebaUid = 523640824`（贴吧号） | live-test「profile 同时给出内部 id 与贴吧号」 |
+| `getUserByUid(523640824)` → `.id = 2724733822`（按贴吧号换内部 id） | live-test「getUserByUid(贴吧号) 能换回同一个内部 id」 |
+| `getUserByUid(2724733822)` → 空（内部 id 不是贴吧号） | live-test「把内部 id 当贴吧号查会查不到人」 |
+| 把贴吧号当 uid 传给 `getProfile` / `getFollow`，**不报错**，但拿到的是另一个账号的数据 | click-test 的「自己=对方」自洽断言：交集算出来是 0，而两边样本数还不一样（19 / 20）——看起来完全正常 |
+
+所以任何"让用户填自己的贴吧号 / 用户名"的入口（`features/panel/mutual.ts` 的 `resolveSelfIdentity`）
+都要先 `getUserByUid()` 换出内部 id，再拿内部 id 去取数。**别把这两个标识符当同义词用。**
+
 ---
 
 ## 5. 踩过的坑
@@ -306,6 +335,15 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 33 | 提交信息与内容不符 | `3b183b2` 的信息是 `docs: 把子代理提到的两个小遗留记进「可以继续做的事」`，实际同时带了 #32 的**代码修复**（`postStats.ts` / `userPost.ts` / `userPanel.ts`）、两份测试的改动与重建的产物。看 `git log --oneline` 会以为那一版只动了文档 | 把 §9.2 里那两条（同一提交已经修掉的"遗留"）移走、在 §9.1 补记归属；以后 `docs:` 只提交文档，动代码或产物写 `feat:` / `fix:` |
 | 34 | 仓库里其实**没有可用的类型检查**：`tsc --noEmit` 报 100+ 个错 | 根 `tsconfig.json` 只有 `baseUrl` 和一条指向 `../eztb/packages/sdk/dist/index.d.ts` 的 `paths`——那个 `dist` 根本不存在（SDK 从**源码**消费）；而 src 里的相对导入带 `.ts` 后缀，又用了 `tieba.js` / `tieba.js/generated/*` / `eztb-internal/*` / `effect` 这些构建期别名，`tsc` 一个都解析不到。能跑的配置此前只存在于被 gitignore 的 `dist/.verify/tsconfig.check.json` 里 | 把配置并进根 `tsconfig.json`（`allowImportingTsExtensions` + 与 `shims-plugin.mjs` 对齐的 `paths`，注释里写明要一起改），新增 `scripts/typecheck.mjs`（从上游借 typescript，缺了会报出路径），并写进测试清单 |
 | 47 | 面板刚打开、页面还在「正在解析用户信息…」时点别的页签，解析完仍然停在默认页签——用户看到的是"点了没反应、内容一直是加载中" | 页签点击的绑定写在 `resolveIdentity()` **之后**：解析这段时间里根本没有监听器。而页签按钮此时已经能点，因为 `openDialog` 自己绑了一份点击（只负责高亮）——于是出现"按钮高亮切了、内容没切" | 点击**立刻**绑定（`requestedTab` 记下最后点过的页签），解析完成按 `switchTab(requestedTab, identity)` 渲染。click-test 阶段 9 用**同步点击**复现（网络回调必然晚于当前这一帧，所以点击一定发生在解析中）；反向验证：把 `requestedTab` 换回 `initialTab` → 该断言必红（实测"可见页签=profile"） |
+| 49 | click-test 整个页面脚本突然报 `TypeError: TEST_USER_ID…PAGER_FIRST_PAGE.l_post is not a function`，位置指向一句**注释** | 页面脚本是一整条 Node 模板字符串（`const PAGE = \`…\``），我在注释里写了 `` `.l_post` ``——**反引号把模板字符串提前结束了**。与 #11（`\n` / `\d` 被 Node 吃掉）是同一族问题的另一面：**模板字符串里不能出现反引号**（除非转义） | 注释里的反引号改成普通引号。教训：往 page/click-test 的页面脚本里加东西时，反引号、`${}`、`\n`、`\d` 四样都要过一遍 |
+| 50 | 加了重试之后，`__tbFailNext=2` 注入的两次失败"没起作用"，请求还是成功了 | **SDK 自己已经有重试**：`packages/sdk/src/core/http.ts` 的 `requestWithRetry()` 用 `Effect.retry(Schedule.exponential(1000), times: 3)`，即 1s/2s/4s 各一次。我们在传输层又包了一层，于是同一个逻辑调用最多被尝试 4×3 次 | 叠加是**故意保留**的（两层针对的失败不同：SDK 那层只认它自己的 `FetchError`，我们这层认 `GmHttpError` 的 network/timeout，而且在熔断之外还能兜住 SDK 没覆盖的路径）。但写断言时必须知道这件事，否则会误以为"注入没生效" |
+| 51 | click-test 里新加的"注入网络错误后查询仍成功"这条断言红，面板写着「无法识别该用户」 | 我为了省事挑了"页面上第一个 `.tb-eztb-btn`"当查询目标，而那是**新版头部行里的合成用户**（测试页面专门造出来验排版的，本来就解析不出身份）。断言失败的原因被指向了错误的地方 | 用阶段 0 已经证明能解析出资料的那个节点（`.l_post .tb-eztb-btn`）。教训：测试里"随手挑一个元素"会把**目标选错**伪装成**功能坏了** |
+| 52 | 同上这条断言改好之后仍然红：`注入失败 1 次`，而且解析出资料=true | 我拿**资料**页签验证"请求重试"，可资料在前面阶段早就取过并落盘缓存了——点开面板**一个请求都不发**；那 1 次注入失败是后台成分检测的请求 | 改用「关注的人」页签（不落缓存，每次都要真请求）。教训：**用缓存过的路径验证"请求行为"，等于什么都没测**（与 #30 同类：断言先确认它真的跑过） |
+| 53 | 「共同关注」页签一直停在"先填自己是谁"，明明已经把自己的贴吧号写进设置并保存了 | 我在"面板刚打开"就读副标题里的 `贴吧号` 当自己的 uid，而**页签按钮在解析用户信息之前就在 DOM 里**，那一刻副标题还是「正在解析用户信息…」，正则匹配不到 → uid 是 `undefined` → 设置存进去的是空串 | 先 `until` 等副标题真的带出 `贴吧号 \d+`，再读 uid。教训：#47 的反面——**"元素在"不等于"内容已经就绪"** |
+| 54 | 「校验 BDUSS」要靠什么判据？试过的接口全都不可用 | 实测（`dist/.verify/bduss-probe*.mjs`）：`getFollow` / `getFans` / `getLikeForum` / `getProfile` **在凭据无效时照样返回数据**（它们匿名也读得到），`/i/sys/user_json` 无论登录与否都返回一个 `tbs`；只有 `/f/user/json_userinfo` 在未登录时返回**字面量 `null`**。另外脚本管理器可能**剥掉脚本设置的 `Cookie` 头**，那就变成在用浏览器自己的登录状态 | 判据钉进 live-test（每次跑都重新量：无效 BDUSS 必须回 `null`，§5 #37 的"外部事实要有出处"）；实现里先用**故意写坏的凭据**探一次：如果坏凭据也被认下来，就说明头被剥掉了，此时**如实说"无法确认"**，绝不假装通过 |
+| 55 | click-test 里"凭据无效时报没通过"这条断言拿到的是「正在问贴吧「当前是谁」……」 | 点击处理函数**同步**写了那句占位文字，而断言的条件是"状态行有文字了"→ 立刻命中占位文字 | 条件改成等**真正的结论**（`/校验通过|无法确认|没通过|校验没能完成/`）。教训：等待条件要写"完成态"，不要写"非空" |
+| 56 | click-test 里「共同关注」的结论出现「璐村惂鐢ㄦ埛_09aA4N8馃惥」这种乱码（UTF-8 字节被按 GBK 解），一度怀疑是脚本的解码路径有问题 | 绕开本地代理、直接用 live-test 那条链路打真实接口（`dist/.verify/follow-encoding.mjs`），人名完全正常（"好玩的视频达人" / "李彦宏"）——**乱码来自 click-test 的本地代理/桩**，不是产品问题 | 记下来：**不要在 click-test 里断言非 ASCII 的人名**；要验证编码就去 live-test 或 probe 脚本 |
+| 57 | 「共同关注」在"自己=对方"时算出交集 0 人，而且看起来一切正常（两边都读到了人） | 面板上抄下来的「贴吧号」被当成 `uid` 传给了 `getFollow`——那是**另一个标识符**，查到的是另一个账号（§4.7 有实测表）。它不报错，只给错数据，是最难发现的那种错 | 数字输入先 `getUserByUid()` 换内部 id；并在 live-test 把"贴吧号 ↔ 内部 id"的对应关系钉成 3 条断言。教训：**自洽场景（自己和自己比对）能揪出"看起来正常的错数据"**——比"有没有报错"强得多 |
 | 48 | 换一台机器之后 `verify.mjs` 报 4 条 FAIL、`node build.mjs` 直接拒绝构建：`sdk.lock.json 的 sdk.commit 是 db48716，实际是 338a81e`（eztb 那条同理） | `sdk.lock.json` 是**跟着上游走**的（1.8.2 起锁在 eztb `8ca0637` + sdk `db48716`），而每台机器上的同级上游检出 `../eztb` 停在各自的历史状态。自检按设计在写任何文件之前就停，所以**工作区不会被动**——这只是"本机暂时没法重建"，不是产物有问题（CI 与已发布的 `dist` 都是对着锁里的上游构建的） | 让 `EZTB_ROOT` 指到一份**对得上锁的上游**，别为了构建去改正在用的那份检出：`git -C ../eztb fetch origin <sha>` → `git -C ../eztb worktree add ../eztb-locked --detach <eztb.commit>` → `git -C ../eztb-locked submodule update --init packages/sdk` → 没有 bun 就把现有 `node_modules` 用 junction 借过去（`New-Item -ItemType Junction`）→ `$env:EZTB_ROOT="../eztb-locked"` 再构建。CI 也正是按锁里的提交取上游 + 子模块 |
 | 35 | 从面板底部点「设置」之后，旧面板的捕获阶段 keydown 监听器永远留在 document 上，`onClose` 也从不触发 | `closeOpenDialog()`（`ui/modal.ts`）只做了 `document.querySelector(".tb-eztb-mask")?.remove()`，而摘监听器/触发回调/还焦点都在 `close()` 里；`openDialog()` 一进来就调 `closeOpenDialog()`，正好走这条路 | 把当前弹窗的 `close` 存在模块级 `activeClose` 上，`closeOpenDialog()` 改成调它（再兜底 remove 一次）。1.8.0 顺带补了 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后把焦点还给打开它的按钮。**今天没有可见症状**（没人传 `onClose`），但只要有人用 `onClose` 做清理就会变成真 bug |
 | 36 | 「明明查过了，重开面板还是重新请求」——因为缓存根本没写进去 | 五个缓存模块各自 `try { GM_setValue(...) } catch { /* 忽略存储失败 */ }`，写失败是静默的。另外整张表 JSON 塞进单个 value，条数一多会撞油猴的存储配额 | 抽 `core/kvCache.ts`：统一实现 + 把失败记进 `getStorageIssues()`（诊断面板会显示）+ 失败时砍掉一半重试一次。**以后新增缓存一律用它，不要再抄第六份** |
@@ -334,18 +372,19 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 
 ## 6. 测试设施
 
-**五套测试 + 一次类型检查 + 三个工具**，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
+**五套测试 + 一次类型检查 + 四个工具**，全部不需要 BDUSS（用假 BDUSS，proto 接口本来就不带它）：
 
 ```powershell
 cd <本项目目录>
 node build.mjs                     # 未压缩可读版（Greasy Fork 要求）
 node build.mjs --minify            # 需要小体积时另存 dist/tieba-eztb-toolbox.min.user.js
 node scripts/typecheck.mjs         # 类型检查
-node scripts/verify.mjs            # 签名比对 + 产物检查 + 内嵌依赖自检 + Greasy Fork 要求 + 源码卫生（51 项）
-node scripts/keyword-test.mjs      # 规则 / 饼图 / 签到的纯离线测试（70 项）
-node scripts/live-test.mjs         # 真实接口链路（33 项）
-node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互（170 项，其中深色模式 16 项）
-node scripts/page-test.mjs         # 真实页面快照回归（项数取决于本机有几份快照，见下）
+node scripts/verify.mjs            # 签名比对 + 产物检查 + 内嵌依赖自检 + Greasy Fork 要求 + 源码卫生
+node scripts/version.mjs           # 版本一致性：package.json / 产物 @version / CHANGELOG（1.9.0 新增）
+node scripts/keyword-test.mjs      # 规则 / 饼图 / 签到 / 错误码 / 重试熔断 / 共同关注 的纯离线测试
+node scripts/live-test.mjs         # 真实接口链路
+node scripts/click-test.mjs        # 无头浏览器 + 真实数据交互
+node scripts/page-test.mjs         # 真实页面快照回归
 
 # 也可以直接用 package.json 里的脚本：npm test / npm run test:live 等
 # （本机没有 npm，`npm run` 只是给有 npm 的人看的；直接敲上面的命令即可）
@@ -360,10 +399,11 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 |---|---|---|
 | `typecheck.mjs` | 用根 `tsconfig.json` 跑 `tsc --noEmit`（typescript 从上游借） | 别名解析、参数形状、字段是否存在（esbuild 不做类型检查） |
 | `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 与浏览器 shim 跑一遍逐字符比对；另把 Greasy Fork 的硬性要求写成 V7 一组断言；内嵌依赖的版本/许可/提交号与 `sdk.lock.json` 核对 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项、NOTICE 与真实依赖脱节 |
+| `version.mjs` | 核对 `package.json` 的 version、产物里的 `@version`、`CHANGELOG.md` 的条目三处一致；HEAD 上没有 `v<版本>` tag 时只提醒（打 tag 是发布动作） | 「同名同版本号用户收不到更新」这条规则以前只靠人记（§5 #31 / 1.7.1 的由来） |
 | `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**2026-09-28 已在 GitHub 上实跑通过**（`main@e3ef7ea`，见 §9.1）：按 SHA 取上游、`bun install --frozen-lockfile`、产物同步校验、verify、keyword-test 全部 success。`browser-suites` 那个 job 仍是 skipped（只在 `workflow_dispatch` 跑），所以真机三套在 CI 上还没验过 |
-| `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` 三个纯逻辑模块做断言 | 成分规则、饼图算法、签到判定改坏（离线即可发现） |
-| `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证** |
-| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node。**跑两遍**：亮色那一遍走完整流程，深色那一遍加 `--blink-settings=preferredColorScheme=0`（实测这个值才是深色，1/2 都是亮色）只做配色与对比度 | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合、弹窗焦点陷阱（含反向 Tab，§5 #41）、**深色模式的底色/底环颜色/文字与徽章对比度/无残留白底**（§5 #42） |
+| `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` / `errno.ts` / `netPolicy.ts` / `mutualFollows.ts` 等**纯逻辑**模块做断言（+ `panelTabs`） | 成分规则、饼图算法、签到判定、错误码翻译、重试与熔断、共同关注交集改坏（离线即可发现） |
+| `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证**、**「校验 BDUSS」的判据**（无效凭据必须回 `null`）、**贴吧号 ↔ 内部 id 的对应关系** |
+| `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node。**跑两遍**：亮色那一遍走完整流程，深色那一遍加 `--blink-settings=preferredColorScheme=0`（实测这个值才是深色，1/2 都是亮色）只做配色与对比度 | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合与**运行期自检**、弹窗焦点陷阱（含反向 Tab，§5 #41）、**软导航后重置标记**、**注入网络错误后的自动重试**、「校验 BDUSS」的三种世界、「共同关注」的自洽验证、**深色模式的底色/底环/对比度/无残留白底**（§5 #42） |
 | `page-test.mjs` | 读真实快照（「网页，完整」自带 `<标题>_files/` 的 CSS；MHTML 需先抓 CSS），同一份跑正常宽度与 420px 窄容器两遍 | 只有真实页面才暴露的问题（#6 标记撞名、无规则时不注入标记、#14 头部行排版、#24 按钮压正文） |
 
 > **page-test 的断言数不是固定值**：它按找到的快照逐个跑，而快照是 gitignore 的
@@ -452,6 +492,30 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.9.0 · 「出错时说得清」+ 三个小功能（重构 + 请求层 + 诊断）**
+
+这一版没有动查询逻辑本身，重点全在**失败路径**与**可维护性**上。
+
+| 事项 | 做法 | 验证 |
+|---|---|---|
+| 请求重试 | 传输层（`src/shims/undici.ts` 是所有 SDK HTTP 的唯一出口）套 `core/netPolicy.ts`：只对**网络类**错误重试，最多 3 次尝试、退避 700ms→1400ms；业务错误码不重试。重试仍在调用方那个限速名额里 | keyword-test 用注入时钟断言尝试次数与退避序列（`700,1400`）；click-test 注入两次网络错误后「关注的人」仍然取到数据（§5 #52 记了第一版断言为什么什么都没测） |
+| 熔断 | 连续 5 次最终失败 → 暂停请求 30 秒，期间请求立刻带原因失败；成功一次清零。诊断面板显示状态并可**一键重置** | keyword-test 5 项（阈值、冷却、挡回去不发请求、计数、自动恢复）；click-test 断言诊断面板里的状态与「重置熔断」按钮 |
+| 错误码翻人话 | 新增 `core/errno.ts`：`describeRequestError()` 统一给界面用（业务码 / 超时 / 连不上 / 取消各一套话）。**已收录的码只有实测过的那一个**，没见过的原样显示 + 标「未收录」+ 记进诊断报告（`recentUnknownErrno()`）。表里每条都必须写 `observed` 出处 | keyword-test 11 项；`verify.mjs` 不管错误码（它是纯逻辑，不是外部事实） |
+| 诊断面板自检 | 报告里新增「关键约束自检」：在当前页面上直接量按钮 `pointer-events`、`z-index`、徽章是否折行/是否待在行高内 | click-test 3 项（用户报「按钮点不动」时报告自带答案） |
+| 校验 BDUSS | 新增 `core/bdussCheck.ts`：问贴吧自己的「我是谁」端点。**先发两次探针**判断"坏凭据会不会被认下来"（= Cookie 头有没有被脚本管理器剥掉），再给结论；无法确认时如实说、不假装通过 | click-test 三种世界（有效 / 头被剥掉 / 谁都没登录）；live-test 每次都重新量判据：无效 BDUSS 返回字面量 `null`（§5 #54） |
+| 「证据不足」标记 | `core/composition.ts` 的纯函数 `compositionVerdict()` 判定"没有命中"还是"数据没拿到"（取数失败 / 对方隐藏发帖 / 样本为空），后者挂中性灰标记，点开仍进「成分」页签 | keyword-test 8 项（含"规则里没用到的数据为空不算证据不足"） |
+| 成分检测页数可配置 | 新增设置 `compositionPages`（默认 1，1~10）；两路 feed 各翻 N 页，某一页取到 0 条提前停 | live-test 用真实接口跑（见下） |
+| 饼图失败提示细到页 | `PieFeedState` 增加 `failedPage` / `loadedPages`，提示写成「第 3 页没取到（前 2 页已计入）」 | keyword-test 原有 3 条措辞断言继续覆盖；`PagedListHandle` 新增 `failedPage()` |
+| 键盘可达性 | 成分徽章是 `<span>`（用 `button` 会被 `.btn-wrapper` 样式带跑），给它 `tabIndex` + `role=button` + 焦点环，Enter/空格由 `main.ts` 的捕获阶段 keydown 接管（空格必须 `preventDefault`，否则会滚页面） | click-test 覆盖徽章可点；键盘路径靠 `:focus-visible` + 这条 keydown 委托 |
+| 记住上次页签 | 新设置 `rememberLastTab`（默认关）+ 独立存储键 `tbEztbToolboxLastTabV1`（**不塞进设置**：那是界面状态，塞进去会让导出/导入带上别人的浏览习惯） | keyword-test 非法值兜底；click-test 断言设置项存在 |
+| 「共同关注」页签 | 第 7 个页签。`core/mutualFollows.ts` 是纯逻辑（认人键 id→portrait→name、按对方顺序求交集、结论必须写明读了多少页），`features/panel/mutual.ts` 负责两边各翻页；设置里填 `selfIdentity`（贴吧号/用户名/主页链接），不填就老实提示 | keyword-test 8 项；click-test 用"自己=对方"的自洽场景断言交集行数 = 结论里的共同关注数、两边样本数相等 |
+| 规则校验器 | `parseRulesDetailed()` 返回**行号级**问题（只有名称没条件 / 同名只保留第一条 / 关键词带空格 / 关键词与排除词自我否决 / 超 6 段 / 没有名称），设置面板在规则表下面实时显示 | keyword-test 8 项（含 `parseRules` 与 detailed 结果一致，老调用方不受影响） |
+| 软导航重置标记 | `pushState`/`replaceState`/`popstate`（包装 + 只在 URL 真的变了时）→ 摘掉自己注入的按钮与徽章、清「已处理」标记、全量重扫。不这么做，页面复用的旧节点会留着**上一个用户**的按钮 | click-test 3 项（旧按钮被摘掉、同节点只有一个按钮、总数不变） |
+| 扫描合批 | 同一帧的 `addedNodes` 去重（被祖先覆盖的丢掉）、上限 60 个根节点、缺口留到下一帧；顺带补上「新增节点**本身就是**目标元素」时被漏掉的情况（`querySelectorAll` 不含节点自己） | click-test/page-test 的注入数与命中测试继续覆盖（#6 那条"某类页面不出按钮"的可疑成因之一） |
+| 发版流程 | 新增 `CHANGELOG.md` + `scripts/version.mjs`（核对 `package.json` / 产物 `@version` / CHANGELOG 三处，CI 里也跑），并在 HEAD 无 tag 时提醒 | `node scripts/version.mjs`；CI 新增一步 |
+| `userPanel.ts` 拆分 | 1554 行 → `userPanel.ts`(231) + `features/panel/{pagedList,rows,profile,composition,follows,fans,forums,posts,mutual}.ts`。**行为零变化**：拆分前后用 esbuild 在内存里各打一份产物，非拆分模块逐字节相同、被拆模块的行多重集完全相同 | typecheck + click-test 全绿；拆完才加「共同关注」（新增文件而不是继续往大文件里塞） |
+| 规则文档 | 新增 `docs/rules.md`（六段格式、可照抄的示例、常见坑、请求成本、排查步骤）+ `.github/ISSUE_TEMPLATE/bug_report.yml`（bug 模板要求附诊断报告，并提醒**别贴 BDUSS**） | 文档与 `composition.ts` 的解析实现逐条对齐 |
 
 **1.8.4 · 「搜全部」：把没加载的页也翻完再给结论**
 
@@ -669,16 +733,21 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 ## 10. 新对话怎么接着干
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
-2. **改完必须跑五套测试 + 类型检查**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test`）。
-当前基线（1.8.4 实测）：typecheck 0 错 / verify 51 / keyword-test 89 / live-test 33 / click-test 205 /
-   page-test 34 全绿（page-test 的项数随本机有的快照数量变化——本机现在只有 1 份快照 × 2 种宽度）。
+2. **改完必须跑五套测试 + 类型检查 + 版本一致性**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test` / `version`）。
+当前基线（1.9.0 实测，2026-10-01）：typecheck 0 错 / verify 53 / keyword-test 138 / live-test 37 /
+   click-test 232（含深色模式与阶段 11~15）/ page-test 34 全绿
+   （page-test 的项数随本机有的快照数量变化——本机现在只有 1 份快照 × 2 种宽度）。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
+   > 上一版基线（1.8.4）是 verify 51 / keyword 89 / live 33 / click 205 / page 34——**看到数字变了先确认是不是新加了断言**，
+   > 别急着怀疑测试坏了。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。
 4. 涉及协议或数据模型的疑问**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs` 或
    `node scripts/probe-user.mjs <portrait|ID> [吧名]`，不要凭推测改。
-5. **改完重建产物并提交**：`node build.mjs` → 跑测试 → 改 `package.json` 版本号 →
+5. **改完重建产物并提交**：`node build.mjs` → 跑测试 → 改 `package.json` 版本号 → 在 `CHANGELOG.md` 加一条 →
    `git add -A && git commit && git push`（仓库已公开，`main` 直接推）。
    **只要 `dist/` 内容变了就必须提 `@version`**；`docs:` 就只提交文档（§5 #33）。
+   `node scripts/version.mjs` 会把三处版本号（`package.json` / 产物 `@version` / CHANGELOG）对一遍，
+   提交前跑一次最省事；打 tag（`v<版本>`）是发布动作，由维护者决定时机。
    > 顺序上有两处会咬人：**版本号要在 `node build.mjs` 之前改**（`@version` 是从
    > `package.json` 抄进产物的）；而 CI 里那条 `git diff --exit-code -- dist` 正是为了
    > 拦住"改了源码忘了重建"。想避开手工顺序失误，直接照 CI 那串命令跑一遍。

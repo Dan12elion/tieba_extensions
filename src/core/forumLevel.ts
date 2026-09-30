@@ -14,7 +14,8 @@ import { getPosts } from "tieba.js";
 import { callSdkLoose } from "./identity.ts";
 import { type KvEntry, createKvCache } from "./kvCache.ts";
 import { loadReplyRows, loadTopicRows } from "./userPost.ts";
-import { errorMessage, toNumber } from "./util.ts";
+import { toNumber } from "./util.ts";
+import { describeRequestError } from "./errno.ts";
 
 const CACHE_KEY = "tbEztbToolboxForumLevelV1";
 const CACHE_MAX = 500;
@@ -130,7 +131,7 @@ export async function fetchUserForumLevel(
 				return { level, via: candidate.via };
 			}
 		} catch (error) {
-			lastError = errorMessage(error);
+			lastError = describeRequestError(error, `查等级·${forumName}`);
 		}
 	}
 

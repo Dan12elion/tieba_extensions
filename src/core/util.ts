@@ -78,6 +78,13 @@ export function toNumber(value: unknown): number {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * 把错误变成一行文字。
+ *
+ * **取数失败不要用这个**——那样用户只会看到 `Tieba API error 300000:` 这种英文原文。
+ * 面向贴吧接口的错误请用 `core/errno.ts` 的 `describeRequestError()`（错误码翻译 +
+ * 网络错误的处理建议）。这里只给"本地逻辑 / 参数不对"这类错误兜底。
+ */
 export function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);

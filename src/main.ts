@@ -82,6 +82,35 @@ function installClickDelegate(): void {
 	);
 }
 
+/**
+ * 键盘用户也要能打开面板。
+ *
+ * 「查询」按钮本身是 `<button>`，Enter / 空格浏览器已经处理好了；
+ * 但**成分徽章是 `<span>`**（用 button 会被贴吧 `.btn-wrapper` 的样式带跑，
+ * 而且会重新踩一遍宽度预算的坑），所以它需要自己的一套：
+ * 焦点用 `tabIndex`（见 badges.ts），激活在这里用捕获阶段的 keydown 接管。
+ */
+function installKeyboardDelegate(): void {
+	document.addEventListener(
+		"keydown",
+		(event) => {
+			if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+				return;
+			}
+			const target = event.target as Element | null;
+			const badge = target?.closest?.(`.${BADGE_CLASS}`);
+			if (!badge) return;
+			const badgeRef = getBadgeRef(badge);
+			if (!badgeRef) return;
+			// 空格默认会滚动页面，必须挡掉
+			event.preventDefault();
+			event.stopPropagation();
+			openUserPanel(badgeRef, { tab: "composition" });
+		},
+		true,
+	);
+}
+
 const mount: MountFn = (ref, nameEl, wrapper) => {
 	if (!ref.userId && !ref.un && !ref.portrait) return;
 	const button = createButton(ref);
@@ -140,6 +169,7 @@ function boot(): void {
 	requestQueue.setMinInterval(getSettings().minIntervalMs);
 	registerMenuCommands();
 	installClickDelegate();
+	installKeyboardDelegate();
 	startScanner(mount);
 
 	log.info("已加载：数据直连贴吧接口，不经过第三方服务");

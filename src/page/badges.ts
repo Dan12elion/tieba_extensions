@@ -50,6 +50,10 @@ function makeBadge(hit: CompositionHit, ref: UserRef): HTMLElement {
 	badge.textContent = hit.rule.name;
 	badge.style.setProperty("--tb-eztb-badge-hue", String(badgeHue(hit.rule.name)));
 	badge.title = hitsTooltip(hit);
+	// 键盘可达：徽章是 span（用 button 会被贴吧的 .btn-wrapper 样式带跑），
+	// 所以自己给它焦点能力，Enter / 空格由 main.ts 的捕获阶段处理器接管
+	badge.tabIndex = 0;
+	badge.setAttribute("role", "button");
 	badgeRefs.set(badge, ref);
 	return badge;
 }
@@ -111,6 +115,8 @@ export function renderBadges(
 			.slice(shown.length)
 			.map((hit) => `${hit.rule.name}：${hit.summary}`)
 			.join("\n");
+		more.tabIndex = 0;
+		more.setAttribute("role", "button");
 		badgeRefs.set(more, ref);
 		if (tryAppend(more)) break;
 		const last = shown.length ? container.lastElementChild : null;
@@ -129,6 +135,56 @@ export function renderBadges(
 			String(badgeHue(hits[0].rule.name)),
 		);
 		dot.title = hits.map(hitsTooltip).join("\n\n");
+		dot.tabIndex = 0;
+		dot.setAttribute("role", "button");
+		badgeRefs.set(dot, ref);
+		container.appendChild(dot);
+	}
+}
+
+/** 「证据不足」标记的文字（界面与测试共用这一份） */
+export const INSUFFICIENT_TEXT = "证据不足";
+
+/**
+ * 「证据不足」标记：**没有命中、但这次的数据不足以判定**时挂的中性标记。
+ *
+ * 为什么要挂一个"没命中"的标记：对方设了隐私、BDUSS 失效、取数失败时，
+ * 页面上原本什么都不显示，看起来像"这个人很干净"（HANDOFF §9.2）。
+ * 标记用中性色（不参与命中配色），点开仍然是「成分」页签，里面写着缺的是什么。
+ */
+export function renderInsufficientBadge(
+	button: HTMLElement,
+	ref: UserRef,
+	note: string,
+): void {
+	clearBadges(button);
+	if (!button.isConnected) return;
+
+	const container = document.createElement("span");
+	container.className = BADGES_CLASS;
+	container.dataset.count = "0";
+	container.dataset.insufficient = "1";
+	button.insertAdjacentElement("afterend", container);
+
+	const tooltip = `${note}\n（没有命中任何规则，但本次的数据不足以判定）\n点击查看详情`;
+	const badge = document.createElement("span");
+	badge.className = `${BADGE_CLASS} tb-eztb-badge-insufficient`;
+	badge.textContent = INSUFFICIENT_TEXT;
+	badge.title = tooltip;
+	badge.tabIndex = 0;
+	badge.setAttribute("role", "button");
+	badgeRefs.set(badge, ref);
+	container.appendChild(badge);
+
+	// 同样的宽度预算：放不下就退成一个圆点，绝不折行（坑 #14）
+	if (container.getBoundingClientRect().width > availableSlack(button)) {
+		container.removeChild(badge);
+		const dot = document.createElement("span");
+		dot.className = `${BADGE_CLASS} tb-eztb-badge-dot tb-eztb-badge-insufficient`;
+		dot.textContent = "●";
+		dot.title = tooltip;
+		dot.tabIndex = 0;
+		dot.setAttribute("role", "button");
 		badgeRefs.set(dot, ref);
 		container.appendChild(dot);
 	}

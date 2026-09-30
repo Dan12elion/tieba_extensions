@@ -938,5 +938,77 @@ if (authorId) {
 	);
 }
 
+// ── 「校验 BDUSS」的判据必须真的成立 ──────────────────────────────────
+/*
+ * 这条断言防的是"判据本身是假的"（§5 #37 的教训）：
+ * 我们的校验逻辑建立在**「无效凭据 ⇒ /f/user/json_userinfo 返回字面量 null」**之上，
+ * 而这一点是在本机实测出来的。这里每次跑测试都重新量一遍——
+ * 如果哪天贴吧改成返回 403 或别的形状，这条会先红，而不是让用户在界面上看到错误的结论。
+ */
+{
+	console.log("「校验 BDUSS」的判据（无效凭据必须被拒）");
+	try {
+		const response = await fetch(
+			"https://tieba.baidu.com/f/user/json_userinfo",
+			{
+				headers: {
+					"User-Agent":
+						"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+					// Node 的 fetch 允许设置 Cookie（浏览器里由脚本管理器决定），
+					// 所以这里量到的是"服务端对一个无效 BDUSS 的答复"
+					Cookie: "BDUSS=eztb-invalid-probe",
+				},
+			},
+		);
+		const text = (await response.text()).trim();
+		report(
+			"无效 BDUSS 下 /f/user/json_userinfo 返回 null（校验逻辑的判据）",
+			response.status === 200 && text === "null",
+			`HTTP ${response.status} body=${text.slice(0, 40)}`,
+		);
+	} catch (error) {
+		report("校验 BDUSS 判据", false, error?.message ?? String(error));
+	}
+}
+
+// ── 「贴吧号」与「内部 id」不是一回事（「共同关注」的取数要用对） ────────
+/*
+ * 这两个标识符长得都像数字，混用不会报错，只会"查出来另一个人"——
+ * 1.9.0 写「共同关注」时就踩过：把面板上的「贴吧号」直接当 uid 传给 getFollow，
+ * 交集恒为 0，而且看起来很正常（click-test 的"自己=对方"自洽断言才把它揪出来）。
+ * 这里固定住两者的对应关系：getProfile(内部 id) 报出的 tiebaUid，
+ * 反过来必须能用 getUserByUid() 换回同一个内部 id。
+ */
+{
+	console.log("「贴吧号」与「内部 id」的对应关系");
+	try {
+		const profile = await Effect.runPromise(sdk.getProfile(2724733822));
+		const tiebaUid = String(profile?.user?.tiebaUid ?? "");
+		const internalId = Number(profile?.user?.id ?? 0);
+		report(
+			"profile 同时给出内部 id 与贴吧号",
+			internalId === 2724733822 && /^\d+$/.test(tiebaUid) && tiebaUid !== String(internalId),
+			`内部 id=${internalId} 贴吧号=${tiebaUid}`,
+		);
+
+		const byUid = await Effect.runPromise(sdk.getUserByUid(Number(tiebaUid)));
+		report(
+			"getUserByUid(贴吧号) 能换回同一个内部 id（「共同关注」靠它认人）",
+			Number(byUid?.id) === internalId,
+			`getUserByUid(${tiebaUid}).id=${byUid?.id ?? "(空)"} 期望 ${internalId}`,
+		);
+
+		// 贴吧号当 uid 用会查到别人（或查不到）——这正是要防的那种"看起来正常"的错
+		const wrong = await Effect.runPromise(sdk.getUserByUid(internalId));
+		report(
+			"把内部 id 当贴吧号查会查不到人（说明两者不可互换）",
+			!wrong?.id,
+			`getUserByUid(${internalId})=${wrong?.id ?? "(空)"}`,
+		);
+	} catch (error) {
+		report("贴吧号 ↔ 内部 id", false, error?.message ?? String(error));
+	}
+}
+
 console.log(failures === 0 ? "\n真实链路全部通过。" : `\n${failures} 项失败。`);
 process.exit(failures === 0 ? 0 : 1);

@@ -139,6 +139,14 @@ function verifyBundle() {
 	check("产物存在", true);
 	check("以油猴元数据块开头", code.startsWith("// ==UserScript=="));
 	check("@connect tiebac.baidu.com 已声明", /^\/\/ @connect\s+tiebac\.baidu\.com$/m.test(code));
+	check(
+		"@connect tieba.baidu.com 已声明（「校验 BDUSS」要用）",
+		/^\/\/ @connect\s+tieba\.baidu\.com$/m.test(code),
+	);
+	check(
+		"「校验 BDUSS」的端点没有指向第三方站点",
+		code.includes("tieba.baidu.com/f/user/json_userinfo"),
+	);
 	check("不含 eztb.org 域名", !code.includes("eztb.org"));
 	check("Buffer 垫片已注入", code.includes("Buffer"));
 	for (const forbidden of [
