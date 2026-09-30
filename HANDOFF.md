@@ -306,6 +306,7 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 33 | 提交信息与内容不符 | `3b183b2` 的信息是 `docs: 把子代理提到的两个小遗留记进「可以继续做的事」`，实际同时带了 #32 的**代码修复**（`postStats.ts` / `userPost.ts` / `userPanel.ts`）、两份测试的改动与重建的产物。看 `git log --oneline` 会以为那一版只动了文档 | 把 §9.2 里那两条（同一提交已经修掉的"遗留"）移走、在 §9.1 补记归属；以后 `docs:` 只提交文档，动代码或产物写 `feat:` / `fix:` |
 | 34 | 仓库里其实**没有可用的类型检查**：`tsc --noEmit` 报 100+ 个错 | 根 `tsconfig.json` 只有 `baseUrl` 和一条指向 `../eztb/packages/sdk/dist/index.d.ts` 的 `paths`——那个 `dist` 根本不存在（SDK 从**源码**消费）；而 src 里的相对导入带 `.ts` 后缀，又用了 `tieba.js` / `tieba.js/generated/*` / `eztb-internal/*` / `effect` 这些构建期别名，`tsc` 一个都解析不到。能跑的配置此前只存在于被 gitignore 的 `dist/.verify/tsconfig.check.json` 里 | 把配置并进根 `tsconfig.json`（`allowImportingTsExtensions` + 与 `shims-plugin.mjs` 对齐的 `paths`，注释里写明要一起改），新增 `scripts/typecheck.mjs`（从上游借 typescript，缺了会报出路径），并写进测试清单 |
 | 47 | 面板刚打开、页面还在「正在解析用户信息…」时点别的页签，解析完仍然停在默认页签——用户看到的是"点了没反应、内容一直是加载中" | 页签点击的绑定写在 `resolveIdentity()` **之后**：解析这段时间里根本没有监听器。而页签按钮此时已经能点，因为 `openDialog` 自己绑了一份点击（只负责高亮）——于是出现"按钮高亮切了、内容没切" | 点击**立刻**绑定（`requestedTab` 记下最后点过的页签），解析完成按 `switchTab(requestedTab, identity)` 渲染。click-test 阶段 9 用**同步点击**复现（网络回调必然晚于当前这一帧，所以点击一定发生在解析中）；反向验证：把 `requestedTab` 换回 `initialTab` → 该断言必红（实测"可见页签=profile"） |
+| 48 | 换一台机器之后 `verify.mjs` 报 4 条 FAIL、`node build.mjs` 直接拒绝构建：`sdk.lock.json 的 sdk.commit 是 db48716，实际是 338a81e`（eztb 那条同理） | `sdk.lock.json` 是**跟着上游走**的（1.8.2 起锁在 eztb `8ca0637` + sdk `db48716`），而每台机器上的同级上游检出 `../eztb` 停在各自的历史状态。自检按设计在写任何文件之前就停，所以**工作区不会被动**——这只是"本机暂时没法重建"，不是产物有问题（CI 与已发布的 `dist` 都是对着锁里的上游构建的） | 让 `EZTB_ROOT` 指到一份**对得上锁的上游**，别为了构建去改正在用的那份检出：`git -C ../eztb fetch origin <sha>` → `git -C ../eztb worktree add ../eztb-locked --detach <eztb.commit>` → `git -C ../eztb-locked submodule update --init packages/sdk` → 没有 bun 就把现有 `node_modules` 用 junction 借过去（`New-Item -ItemType Junction`）→ `$env:EZTB_ROOT="../eztb-locked"` 再构建。CI 也正是按锁里的提交取上游 + 子模块 |
 | 35 | 从面板底部点「设置」之后，旧面板的捕获阶段 keydown 监听器永远留在 document 上，`onClose` 也从不触发 | `closeOpenDialog()`（`ui/modal.ts`）只做了 `document.querySelector(".tb-eztb-mask")?.remove()`，而摘监听器/触发回调/还焦点都在 `close()` 里；`openDialog()` 一进来就调 `closeOpenDialog()`，正好走这条路 | 把当前弹窗的 `close` 存在模块级 `activeClose` 上，`closeOpenDialog()` 改成调它（再兜底 remove 一次）。1.8.0 顺带补了 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后把焦点还给打开它的按钮。**今天没有可见症状**（没人传 `onClose`），但只要有人用 `onClose` 做清理就会变成真 bug |
 | 36 | 「明明查过了，重开面板还是重新请求」——因为缓存根本没写进去 | 五个缓存模块各自 `try { GM_setValue(...) } catch { /* 忽略存储失败 */ }`，写失败是静默的。另外整张表 JSON 塞进单个 value，条数一多会撞油猴的存储配额 | 抽 `core/kvCache.ts`：统一实现 + 把失败记进 `getStorageIssues()`（诊断面板会显示）+ 失败时砍掉一半重试一次。**以后新增缓存一律用它，不要再抄第六份** |
 | 37 | 产物 NOTICE 里 SDK 的来源是 `Dilettante258/tieba-toolbox`，许可写的是"未声明"，`verify.mjs` 还把这两条**断言**了 | 来源 URL 手写、仓库后来改名成 `eazy-tieba`；而 `packages/sdk` 其实是 **submodule**（指向 `Dilettante258/tieba.js`），它的 `package.json` 里明确写着 `license: ISC`。"没有 license 字段"这个结论从来没核对过 | NOTICE 改成构建时由 `scripts/deps-info.mjs` 从磁盘上的 `package.json` + `git rev-parse HEAD` 生成；加 `sdk.lock.json` 锁版本，构建对不上就失败；`verify.mjs` 的期望值也从同一份数据算出来。**教训：断言里写死的外部事实要有出处，否则等于把错误钉成了测试** |
@@ -375,6 +376,10 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 - **没有 `bun`、没有 `npm`**：不要在方案里依赖安装步骤。
 - esbuild、`effect`、`@bufbuild/protobuf`、`long`、typescript 都从上游借：
   `../eztb/node_modules`（`EZTB_ROOT` 可覆盖）。
+- **上游检出必须和 `sdk.lock.json` 对得上**（eztb 提交 + `packages/sdk` 子模块提交）：
+  对不上时 `build.mjs` / `verify.mjs` 会在自检处停下（这是有意的，防止"内嵌的是哪一版"说不清）。
+  换机器后遇到这种情况，按 §5 #48 的做法另开一份 worktree 并用 `EZTB_ROOT` 指过去，
+  不要为了构建去改动正在用的上游检出。
 - page-test 的样本：仓库里的 `dist/.samples/`（「网页，完整」那种自带 CSS，不用额外准备）；
   用 MHTML 快照时才需要 `node scripts/fetch-sample-css.mjs`（抓到 `../test0/_css_cache`，见 #15）。
 
