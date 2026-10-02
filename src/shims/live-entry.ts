@@ -47,3 +47,5 @@ export { getComments } from "tieba.js";
 export { fetchUserForumLevel } from "../core/forumLevel.ts";
 // 关键词匹配是纯逻辑，这里导出让 live-test 用真实数据跑一遍
 export { matchComposition, parseRules } from "../core/composition.ts";
+// 用真实数据跑一遍"证据带时间 / 帖子 id"的取数编排（1.10.0 的时间排序与跳转要用）
+export { detectComposition } from "../core/compositionDetect.ts";

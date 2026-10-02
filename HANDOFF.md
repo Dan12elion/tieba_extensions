@@ -85,6 +85,7 @@ eztb-userscript/
 │  │  ├─ errno.ts               # 贴吧业务错误码 → 人话（★ 1.9.0）
 │  │  ├─ bdussCheck.ts          # 「校验 BDUSS」（★ 1.9.0）
 │  │  ├─ mutualFollows.ts       # 共同关注的纯逻辑（★ 1.9.0）
+│  │  ├─ evidenceHtml.ts        # 成分证据行 → HTML（类型/时间/跳转/楼层，★ 1.10.0）
 │  │  └─ lastTab.ts             # 「记住上次页签」的独立存储（★ 1.9.0）
 │  ├─ shims/                    # 4 个 Node 依赖的浏览器替身 + 测试入口
 │  ├─ page/                     # 新旧版 DOM 适配、扫描、成分徽章
@@ -240,7 +241,9 @@ SDK 没有暴露 `UserPost` 的编解码器，取主题帖要用 `is_thread=1`�
 | 证据强弱 | 名单 / 关注的吧 / **主题帖** = 强证据；**回复、楼中楼** = 弱证据（界面标"可能是误判"，标记也淡一些） |
 | 排除词 | 命中则整条证据作废（对应参考脚本的 keywordsReverse），用来压住玩梗误伤 |
 | 合并 | 同一条规则的多条证据合成一个命中，不会刷屏 |
-| 缓存 | 结果带规则指纹（`hashRules`），改规则自动失效；默认 3 天过期 |
+| 排序 | **1.10.0 起按时间倒序**：命中规则之间按"各自最新的依据"排，规则内部证据也按时间倒序。名单与关注的吧没有时间（它们是"状态"不是"事件"），排在带时间的后面并保持规则表顺序（`sortHitsByRecency` / `sortEvidencesByRecency`，纯函数、离线可测） |
+| 呈现 | 每条证据带类型标签（主题帖 / 回复 / 楼中楼）、时间、吧名；楼中楼写「回复 谁」。证据行给「打开主题帖」/「打开这一楼」链接——**回复与楼中楼用 `?pid=` 精确跳到那一楼**；回复与楼中楼还给「查楼层」（点了才查，见 §4.5）。拼 HTML 的是纯函数 `core/evidenceHtml.ts` |
+| 缓存 | 结果带规则指纹（`hashRules`），改规则自动失效；默认 3 天过期。1.10.0 另加了 `schema`（结构版本）：老结果缺少时间/跳转信息，读出来会像功能没生效，所以版本对不上就当没缓存（**键名不变**） |
 
 ### 4.5 楼层号只能额外换一次
 
@@ -344,6 +347,7 @@ live-test 有断言 `hidePost=1 的返回里列表必为空`。
 | 55 | click-test 里"凭据无效时报没通过"这条断言拿到的是「正在问贴吧「当前是谁」……」 | 点击处理函数**同步**写了那句占位文字，而断言的条件是"状态行有文字了"→ 立刻命中占位文字 | 条件改成等**真正的结论**（`/校验通过|无法确认|没通过|校验没能完成/`）。教训：等待条件要写"完成态"，不要写"非空" |
 | 56 | click-test 里「共同关注」的结论出现「璐村惂鐢ㄦ埛_09aA4N8馃惥」这种乱码（UTF-8 字节被按 GBK 解），一度怀疑是脚本的解码路径有问题 | 绕开本地代理、直接用 live-test 那条链路打真实接口（`dist/.verify/follow-encoding.mjs`），人名完全正常（"好玩的视频达人" / "李彦宏"）——**乱码来自 click-test 的本地代理/桩**，不是产品问题 | 记下来：**不要在 click-test 里断言非 ASCII 的人名**；要验证编码就去 live-test 或 probe 脚本 |
 | 57 | 「共同关注」在"自己=对方"时算出交集 0 人，而且看起来一切正常（两边都读到了人） | 面板上抄下来的「贴吧号」被当成 `uid` 传给了 `getFollow`——那是**另一个标识符**，查到的是另一个账号（§4.7 有实测表）。它不报错，只给错数据，是最难发现的那种错 | 数字输入先 `getUserByUid()` 换内部 id；并在 live-test 把"贴吧号 ↔ 内部 id"的对应关系钉成 3 条断言。教训：**自洽场景（自己和自己比对）能揪出"看起来正常的错数据"**——比"有没有报错"强得多 |
+| 58 | 想用命令行验证"`?pid=` 能不能跳到那一楼"，两个 URL 都回 403，什么都证明不了 | 贴吧对**帖子页**的非浏览器请求一律 403（与 §5 #25 里"页面另存为 MHTML 才能取证"是同一堵墙）；`/f/user/json_userinfo` 这类接口不挡，所以容易误以为"网络能通、什么都能测" | 记为**只能由人在浏览器里验证**的一项（不是"已验证"）：`evidenceLink()` 的注释里写明了这一点，也写清了兜底——即便定位不生效，链接也一定落在正确的那个帖子里。教训：**别把"命令行取不到"当成"功能不对"，也别把它当成"测过了"** |
 | 48 | 换一台机器之后 `verify.mjs` 报 4 条 FAIL、`node build.mjs` 直接拒绝构建：`sdk.lock.json 的 sdk.commit 是 db48716，实际是 338a81e`（eztb 那条同理） | `sdk.lock.json` 是**跟着上游走**的（1.8.2 起锁在 eztb `8ca0637` + sdk `db48716`），而每台机器上的同级上游检出 `../eztb` 停在各自的历史状态。自检按设计在写任何文件之前就停，所以**工作区不会被动**——这只是"本机暂时没法重建"，不是产物有问题（CI 与已发布的 `dist` 都是对着锁里的上游构建的） | 让 `EZTB_ROOT` 指到一份**对得上锁的上游**，别为了构建去改正在用的那份检出：`git -C ../eztb fetch origin <sha>` → `git -C ../eztb worktree add ../eztb-locked --detach <eztb.commit>` → `git -C ../eztb-locked submodule update --init packages/sdk` → 没有 bun 就把现有 `node_modules` 用 junction 借过去（`New-Item -ItemType Junction`）→ `$env:EZTB_ROOT="../eztb-locked"` 再构建。CI 也正是按锁里的提交取上游 + 子模块 |
 | 35 | 从面板底部点「设置」之后，旧面板的捕获阶段 keydown 监听器永远留在 document 上，`onClose` 也从不触发 | `closeOpenDialog()`（`ui/modal.ts`）只做了 `document.querySelector(".tb-eztb-mask")?.remove()`，而摘监听器/触发回调/还焦点都在 `close()` 里；`openDialog()` 一进来就调 `closeOpenDialog()`，正好走这条路 | 把当前弹窗的 `close` 存在模块级 `activeClose` 上，`closeOpenDialog()` 改成调它（再兜底 remove 一次）。1.8.0 顺带补了 `role="dialog"` / `aria-modal` / 焦点陷阱 / 关闭后把焦点还给打开它的按钮。**今天没有可见症状**（没人传 `onClose`），但只要有人用 `onClose` 做清理就会变成真 bug |
 | 36 | 「明明查过了，重开面板还是重新请求」——因为缓存根本没写进去 | 五个缓存模块各自 `try { GM_setValue(...) } catch { /* 忽略存储失败 */ }`，写失败是静默的。另外整张表 JSON 塞进单个 value，条数一多会撞油猴的存储配额 | 抽 `core/kvCache.ts`：统一实现 + 把失败记进 `getStorageIssues()`（诊断面板会显示）+ 失败时砍掉一半重试一次。**以后新增缓存一律用它，不要再抄第六份** |
@@ -401,7 +405,7 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 | `verify.mjs` | 把 SDK 的 `packRequest` 分别用 Node crypto 与浏览器 shim 跑一遍逐字符比对；另把 Greasy Fork 的硬性要求写成 V7 一组断言；内嵌依赖的版本/许可/提交号与 `sdk.lock.json` 核对 | 签名错误（错了极难排查）、手滑改成压缩版、元数据漏项、NOTICE 与真实依赖脱节 |
 | `version.mjs` | 核对 `package.json` 的 version、产物里的 `@version`、`CHANGELOG.md` 的条目三处一致；HEAD 上没有 `v<版本>` tag 时只提醒（打 tag 是发布动作） | 「同名同版本号用户收不到更新」这条规则以前只靠人记（§5 #31 / 1.7.1 的由来） |
 | `.github/workflows/ci.yml` | push / PR 上跑 `typecheck` → `build` → `git diff --exit-code -- dist` → `verify` → `keyword-test`；`live`/`click`/`page` 放在 `workflow_dispatch`。上游按 `sdk.lock.json` 的 `eztb.commit` 检出，产物里的路径已收敛成机器无关的写法 | 改了源码忘了重建产物。**2026-09-28 已在 GitHub 上实跑通过**（`main@e3ef7ea`，见 §9.1）：按 SHA 取上游、`bun install --frozen-lockfile`、产物同步校验、verify、keyword-test 全部 success。`browser-suites` 那个 job 仍是 skipped（只在 `workflow_dispatch` 跑），所以真机三套在 CI 上还没验过 |
-| `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` / `errno.ts` / `netPolicy.ts` / `mutualFollows.ts` 等**纯逻辑**模块做断言（+ `panelTabs`） | 成分规则、饼图算法、签到判定、错误码翻译、重试与熔断、共同关注交集改坏（离线即可发现） |
+| `keyword-test.mjs` | 打包真实的 `composition.ts` / `postStats.ts` / `activityRule.ts` / `errno.ts` / `netPolicy.ts` / `mutualFollows.ts` / `evidenceHtml.ts` 等**纯逻辑**模块做断言（+ `panelTabs`） | 成分规则、饼图算法、签到判定、错误码翻译、重试与熔断、共同关注交集、**证据的时间排序与跳转/楼层 HTML** 改坏（离线即可发现） |
 | `live-test.mjs` | Node fetch 顶替 GM_xmlhttpRequest，打真实贴吧匿名 proto 接口 | 协议、鉴权、数据模型、翻页、真实数据跑关键词、隐藏关注贴吧的恢复、**"点了才查"的等级与楼层交叉验证**、**「校验 BDUSS」的判据**（无效凭据必须回 `null`）、**贴吧号 ↔ 内部 id 的对应关系** |
 | `click-test.mjs` | 本地起同源服务（托管页面 + 转发请求到贴吧 + 收集结果），无头 Edge 注入脚本 + GM 桩做 DOM/布局/交互断言，结果 POST 回 Node。**跑两遍**：亮色那一遍走完整流程，深色那一遍加 `--blink-settings=preferredColorScheme=0`（实测这个值才是深色，1/2 都是亮色）只做配色与对比度 | 注入、命中测试、渲染、排版、页签与子页签翻页、刷新、成分标记、查等级、菜单命令、诊断面板能开合与**运行期自检**、弹窗焦点陷阱（含反向 Tab，§5 #41）、**软导航后重置标记**、**注入网络错误后的自动重试**、「校验 BDUSS」的三种世界、「共同关注」的自洽验证、**深色模式的底色/底环/对比度/无残留白底**（§5 #42） |
 | `page-test.mjs` | 读真实快照（「网页，完整」自带 `<标题>_files/` 的 CSS；MHTML 需先抓 CSS），同一份跑正常宽度与 420px 窄容器两遍 | 只有真实页面才暴露的问题（#6 标记撞名、无规则时不注入标记、#14 头部行排版、#24 按钮压正文） |
@@ -492,6 +496,21 @@ $env:EZTB_PROBE=1; node scripts/live-test.mjs            # 打印原始 feed 结
 > 更完整的逐条记录看 `git log`（仓库已公开）。
 
 ### 9.1 已完成
+
+**1.10.0 · 「成分」证据能看清、能跳过去**
+
+用户提的三件事：按时间排序、区分发帖/回复并显示楼层、能跳到对应帖子。
+
+| 事项 | 做法 | 验证 |
+|---|---|---|
+| 证据按时间倒序 | `core/composition.ts` 新增 `sortEvidencesByRecency()` / `sortHitsByRecency()` / `newestEvidenceAt()`，`matchComposition()` 直接返回排好序的结果（缓存里也是排好的）。**名单与关注的吧没有时间**（状态而非事件），排在带时间的后面、内部保持规则表顺序 | keyword-test 5 项（含"没有时间的保持原顺序"）；live-test 用**两条**规则跑真实数据断言"最近依据"非递增（只写一条规则时断言恒真，见 §5 #30） |
+| 区分主题帖 / 回复 / 楼中楼 | `CompositionPostInput` 与 `CompositionEvidence` 加上 `at` / `post`（type、threadId、postId、replyTo、forumName、createTime）；`compositionDetect` 从 `PostRow` 原样带过来 | keyword-test 4 项；live-test 断言真实证据带上了时间与帖子 id |
+| 显示楼层 | 证据行给「查楼层」（复用 `core/replyFloor.ts` + 它的缓存），查过显示「N楼」；**主题帖不给**（它本来就在 1 楼） | keyword-test 4 项（按钮 / 已缓存写 N楼 / 缓存里是 0 也算没查到 / 主题帖没有按钮）；live-test 的「查楼层」交叉验证沿用原有断言 |
+| 跳到那条帖子 | 主题帖 → `/p/<tid>`；回复与楼中楼 → `/p/<tid>?pid=<cid>` **精确跳到那一楼**（`evidenceLink()`） | keyword-test 3 项（主题帖 / 带 pid / 名单类没有链接）；click-test 阶段 16 断言真实证据的 href 与 `target=_blank` |
+| 证据行 HTML | 抽成纯函数 `core/evidenceHtml.ts`（不 import SDK，keyword-test 能直接打） | keyword-test 22 项（类型标签、时间、关键词高亮、转义、楼层……） |
+| 缓存 | 结果加 `schema`（=2）：老缓存没有 `at`/`post`，读出来会像功能没生效 → 版本对不上就当没缓存重查一次。**存储键名不变**（改键名会把用户攒的缓存整块孤立） | typecheck + click-test（阶段 16 走的就是"规则变了 → 缓存失效 → 重新检测"这条路） |
+
+阶段 16 的一个取舍：它用真实接口的数据，所以"这次正好没有回复类证据"时，楼层那一段**明确打印跳过**而不是假装通过——楼层的拼装与点击行为由 keyword-test（纯 HTML）和 live-test（真实 `/c/f/pb/floor`）覆盖。
 
 **1.9.0 · 「出错时说得清」+ 三个小功能（重构 + 请求层 + 诊断）**
 
@@ -734,12 +753,12 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
 
 1. 先读这份 `HANDOFF.md` 和 `README.md`，再动代码。
 2. **改完必须跑五套测试 + 类型检查 + 版本一致性**（`typecheck` / `verify` / `keyword-test` / `live-test` / `click-test` / `page-test` / `version`）。
-当前基线（1.9.0 实测，2026-10-01）：typecheck 0 错 / verify 53 / keyword-test 138 / live-test 37 /
-   click-test 232（含深色模式与阶段 11~15）/ page-test 34 全绿
+当前基线（1.10.0 实测，2026-10-01）：typecheck 0 错 / verify 53 / keyword-test 165 / live-test 40 /
+   click-test 241（含深色模式与阶段 11~16）/ page-test 34 全绿
    （page-test 的项数随本机有的快照数量变化——本机现在只有 1 份快照 × 2 种宽度）。
    page-test 读仓库里的网页快照（`dist/.samples/`，同级的 `../test0` 也会找）；找不到的用例会显示"跳过"并注明。
-   > 上一版基线（1.8.4）是 verify 51 / keyword 89 / live 33 / click 205 / page 34——**看到数字变了先确认是不是新加了断言**，
-   > 别急着怀疑测试坏了。
+   > 更早的基线：1.9.2 是 verify 53 / keyword 143 / live 37 / click 232；1.8.4 是 verify 51 / keyword 89 /
+   > live 33 / click 205 / page 34——**看到数字变了先确认是不是新加了断言**，别急着怀疑测试坏了。
 3. 涉及 DOM 或布局的改动**加反向验证**：把修复改回去，确认断言会失败（见 §5 的排查方法论）。
 4. 涉及协议或数据模型的疑问**先打真实数据**：`EZTB_PROBE=1 node scripts/live-test.mjs` 或
    `node scripts/probe-user.mjs <portrait|ID> [吧名]`，不要凭推测改。

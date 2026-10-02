@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.9.2
+// @version             1.10.0
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -782,6 +782,18 @@
     reply: "回复",
     sub: "楼中楼"
   };
+  function evidencePost(post) {
+    return {
+      kind: post.kind,
+      forumName: String(post.forumName ?? "").trim(),
+      title: post.title ?? "",
+      preview: post.preview ?? "",
+      createTime: post.createTime,
+      threadId: post.threadId,
+      postId: post.postId,
+      replyTo: post.replyTo
+    };
+  }
   function contains(text, keyword) {
     return text.toLowerCase().includes(keyword.toLowerCase());
   }
@@ -802,6 +814,32 @@
     const start3 = Math.max(0, index - width);
     const end3 = Math.min(source.length, index + keyword.length + width);
     return (start3 > 0 ? "…" : "") + source.slice(start3, end3) + (end3 < source.length ? "…" : "");
+  }
+  function sortEvidencesByRecency(evidences) {
+    return evidences.map((evidence, index) => ({ evidence, index })).sort((a, b) => {
+      const left3 = Number(a.evidence.at ?? 0);
+      const right3 = Number(b.evidence.at ?? 0);
+      if (left3 !== right3) return right3 - left3;
+      return a.index - b.index;
+    }).map((item) => item.evidence);
+  }
+  function newestEvidenceAt(hit) {
+    let newest = 0;
+    for (const evidence of hit.evidences) {
+      const at = Number(evidence.at ?? 0);
+      if (at > newest) newest = at;
+    }
+    return newest;
+  }
+  function sortHitsByRecency(hits) {
+    return hits.map((hit, index) => ({
+      hit: { ...hit, evidences: sortEvidencesByRecency(hit.evidences) },
+      index,
+      newest: newestEvidenceAt(hit)
+    })).sort((a, b) => {
+      if (a.newest !== b.newest) return b.newest - a.newest;
+      return a.index - b.index;
+    }).map((item) => item.hit);
   }
   function matchComposition(input, rules) {
     const hits = [];
@@ -842,7 +880,9 @@
           keyword,
           reason: `在「${name}」发过帖`,
           excerpt: [post.title, post.preview].filter(Boolean).join(" ").slice(0, 60),
-          sure: post.kind === "topic"
+          sure: post.kind === "topic",
+          at: post.createTime,
+          post: evidencePost(post)
         };
         postForumEvidence = evidence;
         if (evidence.sure) break;
@@ -859,7 +899,9 @@
           keyword,
           reason: `${POST_KIND_TEXT[post.kind]}命中`,
           excerpt: excerptAround(text, keyword),
-          sure: post.kind === "topic"
+          sure: post.kind === "topic",
+          at: post.createTime,
+          post: evidencePost(post)
         };
         postEvidence = evidence;
         if (evidence.sure) break;
@@ -875,7 +917,7 @@
         ).join("；")
       });
     }
-    return hits;
+    return sortHitsByRecency(hits);
   }
   function compositionVerdict(input) {
     if (input.hits > 0) return { insufficient: false, note: "" };
@@ -944,6 +986,7 @@
   // src/core/compositionCache.ts
   var CACHE_KEY2 = "tbEztbToolboxCompositionCacheV1";
   var CACHE_MAX2 = 300;
+  var CACHE_SCHEMA = 2;
   function ttlMs() {
     const days2 = Number(getSettings().compositionCacheDays);
     const safe = Number.isFinite(days2) && days2 > 0 ? days2 : 3;
@@ -964,11 +1007,15 @@
       if (hit) cache3.delete(key);
       return null;
     }
+    if (hit.schema !== CACHE_SCHEMA) {
+      cache3.delete(key);
+      return null;
+    }
     return hit;
   }
   function writeCompositionCache(key, entry) {
     if (!key) return;
-    cache3.write(key, entry);
+    cache3.write(key, { ...entry, schema: CACHE_SCHEMA });
   }
   function dropCompositionMemory() {
     cache3.clearMemory();
@@ -30021,7 +30068,11 @@ ${endStackCall}`;
               title: row.title,
               preview: row.preview,
               kind: "topic",
-              forumName: row.forumName
+              forumName: row.forumName,
+              // 时间 / 帖子 id 一并带上：面板要按时间倒序，并跳到那条帖子
+              createTime: row.createTime,
+              threadId: row.threadId,
+              postId: row.postId
             });
           }
           if (!result.rows.length) break;
@@ -30041,7 +30092,11 @@ ${endStackCall}`;
               title: row.title,
               preview: row.preview,
               kind: row.kind === "sub" ? "sub" : "reply",
-              forumName: row.forumName
+              forumName: row.forumName,
+              createTime: row.createTime,
+              threadId: row.threadId,
+              postId: row.postId,
+              replyTo: row.replyTo
             });
           }
           if (!result.rows.length) break;
@@ -31141,7 +31196,7 @@ ${endStackCall}`;
   }
 
   // src/core/version.ts
-  var SCRIPT_VERSION = "1.9.2" ? "1.9.2" : "dev";
+  var SCRIPT_VERSION = "1.10.0" ? "1.10.0" : "dev";
 
   // src/page/adapters.ts
   function parseDataField(el) {
@@ -31598,7 +31653,95 @@ ${endStackCall}`;
     }
   }
 
+  // src/core/evidenceHtml.ts
+  var KIND_LABEL = {
+    topic: "主题",
+    reply: "回复",
+    sub: "楼中楼"
+  };
+  function evidenceLink(evidence) {
+    const post = evidence.post;
+    if (!post?.threadId) return null;
+    const base = threadUrl(post.threadId);
+    if (post.kind === "topic" || !post.postId) {
+      return { href: base, label: "打开主题帖" };
+    }
+    return {
+      href: `${base}?pid=${encodeURIComponent(post.postId)}`,
+      label: "打开这一楼"
+    };
+  }
+  function buildEvidenceHtml(evidence, options = {}) {
+    const post = evidence.post;
+    const parts2 = [];
+    const kindTag = post ? `<span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${KIND_LABEL[post.kind]}</span>` : "";
+    const time = post?.createTime ? `<span class="tb-eztb-evidence-time">${escapeHtml(formatTimestamp(post.createTime))}</span>` : "";
+    const replyTo = post?.kind === "sub" && post.replyTo ? `<span class="tb-eztb-evidence-replyto">回复 ${escapeHtml(post.replyTo)}</span>` : "";
+    const forum = post?.forumName && post.kind !== "topic" ? `<span class="tb-eztb-evidence-forum">${escapeHtml(post.forumName)}</span>` : "";
+    parts2.push(`<div class="tb-eztb-evidence">`);
+    parts2.push(
+      `<div class="tb-eztb-evidence-head">` + kindTag + `<span class="tb-eztb-evidence-reason">${escapeHtml(evidence.reason)}</span><span class="tb-eztb-evidence-keyword">${escapeHtml(evidence.keyword)}</span>` + time + forum + replyTo + `</div>`
+    );
+    if (evidence.excerpt) {
+      parts2.push(
+        `<div class="tb-eztb-evidence-text">${highlightKeywords(evidence.excerpt, [evidence.keyword])}</div>`
+      );
+    }
+    const link = evidenceLink(evidence);
+    if (link) {
+      const floorSlot = renderFloorSlot(post, options);
+      parts2.push(
+        `<div class="tb-eztb-evidence-actions"><a class="tb-eztb-evidence-link" href="${escapeHtml(link.href)}" target="_blank" rel="noopener noreferrer">${link.label}</a>` + floorSlot + `</div>`
+      );
+    }
+    parts2.push(`</div>`);
+    return parts2.join("");
+  }
+  function renderFloorSlot(post, options) {
+    if (!post || post.kind === "topic" || !post.postId || !post.threadId) return "";
+    const known = options.floorFor?.({
+      threadId: post.threadId,
+      postId: post.postId
+    });
+    if (known && known > 0) {
+      return `<span class="tb-eztb-floor">${known}楼</span>`;
+    }
+    return `<button type="button" class="tb-eztb-floorbtn" data-thread="${escapeHtml(post.threadId)}" data-post="${escapeHtml(post.postId)}" title="发帖记录里没有楼层号，点一下去这个帖子里查他在第几楼">查楼层</button>`;
+  }
+
   // src/features/panel/composition.ts
+  function bindFloorButtons(root) {
+    for (const button of Array.from(
+      root.querySelectorAll(".tb-eztb-floorbtn")
+    )) {
+      if (button.dataset.bound === "1") continue;
+      button.dataset.bound = "1";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled) return;
+        const threadId = button.dataset.thread ?? "";
+        const postId = button.dataset.post ?? "";
+        if (!threadId || !postId) return;
+        button.disabled = true;
+        button.textContent = "查询中…";
+        void (async () => {
+          const result = await fetchReplyFloor(threadId, postId);
+          if (result.floor) {
+            const span2 = document.createElement("span");
+            span2.className = "tb-eztb-floor";
+            span2.textContent = `${result.floor}楼`;
+            span2.title = result.excerpt ? `${result.floor} 楼的内容：${result.excerpt}` : `${result.floor} 楼`;
+            button.replaceWith(span2);
+            return;
+          }
+          button.disabled = false;
+          button.textContent = "查不到";
+          button.title = result.reason ?? "没查到";
+        })();
+      });
+    }
+  }
   function renderCompositionTab(body, ref, force = false) {
     body.innerHTML = `<div class="tb-eztb-loading"><div class="tb-eztb-spinner"></div>正在检测成分…</div>`;
     const actions = (html) => `<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:12px;">${html}</div>`;
@@ -31634,17 +31777,20 @@ ${endStackCall}`;
       const statLine = `已检查：关注的吧 ${stat.forums} 个` + (stat.forumsRecovered ? `（其中 ${stat.forumsRecovered} 个来自隐藏关注贴吧的恢复）` : "") + ` · 主题帖 ${stat.topics} 条 · 回复 ${stat.replies} 条` + (result.fromCache ? "（来自缓存）" : "");
       const rules = parseRules(getSettings().compositionRules);
       const hitBlocks = hits.map((hit) => {
-        const evidences = hit.evidences.map((evidence) => {
-          const excerpt = evidence.excerpt ? `<div class="tb-eztb-evidence-text">${highlightKeywords(evidence.excerpt, [evidence.keyword])}</div>` : "";
-          return `<div class="tb-eztb-evidence"><span class="tb-eztb-evidence-reason">${escapeHtml(evidence.reason)}</span><span class="tb-eztb-evidence-keyword">${escapeHtml(evidence.keyword)}</span>` + excerpt + `</div>`;
-        }).join("");
-        return `<div class="tb-eztb-hit"><div class="tb-eztb-hit-head"><span class="tb-eztb-badge" style="--tb-eztb-badge-hue:${badgeHue(hit.rule.name)}">${escapeHtml(hit.rule.name)}</span>` + (hit.sure ? "" : `<span class="tb-eztb-hit-unsure">证据较弱，可能是误判</span>`) + `</div>` + evidences + `</div>`;
+        const evidences = hit.evidences.map(
+          (evidence) => buildEvidenceHtml(evidence, {
+            floorFor: (target) => readReplyFloorCache(target.threadId, target.postId)?.floor ?? null
+          })
+        ).join("");
+        const newest = newestEvidenceAt(hit);
+        return `<div class="tb-eztb-hit"><div class="tb-eztb-hit-head"><span class="tb-eztb-badge" style="--tb-eztb-badge-hue:${badgeHue(hit.rule.name)}">${escapeHtml(hit.rule.name)}</span>` + (hit.sure ? "" : `<span class="tb-eztb-hit-unsure">证据较弱，可能是误判</span>`) + (newest ? `<span class="tb-eztb-hit-newest">最近依据 ${escapeHtml(formatTimestamp(newest))}</span>` : "") + `</div>` + evidences + `</div>`;
       }).join("");
       const body_ = (hits.length ? `<div class="tb-eztb-hint">命中 ${hits.length} 条规则（共配置 ${rules.length} 条）</div><div class="tb-eztb-hits">${hitBlocks}</div>` : `<div class="tb-eztb-empty">没有命中任何关键词：这个用户关注的吧与发帖里都没出现规则表中的词。</div>`) + `<div class="tb-eztb-hint" style="margin-top:12px;">${escapeHtml(statLine)}</div>` + (stat.failed.length ? `<div class="tb-eztb-warn">部分数据没取到：${escapeHtml(stat.failed.join("；"))}</div>` : "") + actions(
         `<button type="button" data-act="recheck">重新检测</button><button type="button" data-act="settings">关键词设置</button>`
       );
       body.innerHTML = body_;
       body.querySelector('[data-act="settings"]')?.addEventListener("click", () => openSettingsDialog());
+      bindFloorButtons(body);
       bindRecheck();
       function bindRecheck() {
         body.querySelector('[data-act="recheck"]')?.addEventListener("click", () => renderCompositionTab(body, ref, true));
@@ -32312,7 +32458,7 @@ ${endStackCall}`;
     sub: "楼中楼"
   };
   var HIDDEN_POSTS_NOTE = "发帖信息设为私密。";
-  function renderFloorSlot(post) {
+  function renderFloorSlot2(post) {
     if (!post.postId) return "";
     const cached4 = readReplyFloorCache(post.threadId, post.postId);
     if (cached4) {
@@ -32329,10 +32475,10 @@ ${endStackCall}`;
     const subParts = postRowSubParts(post);
     return (
       // data-time 是原始时间戳（合并视图按它倒序，测试也按它断言顺序）
-      `<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" data-search="${escapeHtml(searchText)}" data-time="${post.createTime}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`
+      `<a class="tb-eztb-row" data-forum="${escapeHtml(forum)}" data-search="${escapeHtml(searchText)}" data-time="${post.createTime}" href="${escapeHtml(threadUrl(post.threadId))}" target="_blank" rel="noopener noreferrer"><span class="tb-eztb-row-main"><span class="tb-eztb-row-title"><span class="tb-eztb-tag tb-eztb-tag-${post.kind}">${POST_KIND_LABEL[post.kind]}</span>${escapeHtml(post.title || post.preview || "(无标题)")}</span>` + (subParts.length ? `<span class="tb-eztb-row-sub">${subParts.join(" ")}</span>` : `<span class="tb-eztb-row-sub">${escapeHtml(UNKNOWN_FORUM)}</span>`) + `</span><span class="tb-eztb-row-meta tb-eztb-row-meta-stack">` + (isReply ? renderFloorSlot2(post) : "") + `<span class="tb-eztb-row-time">${escapeHtml(formatTimestamp(post.createTime))}</span></span></a>`
     );
   }
-  function bindFloorButtons(root) {
+  function bindFloorButtons2(root) {
     for (const button of Array.from(
       root.querySelectorAll(".tb-eztb-floorbtn")
     )) {
@@ -32406,7 +32552,7 @@ ${endStackCall}`;
       renderRow: renderPostRow,
       onError: (error) => onError3(describeRequestError(error)),
       onPage: (result) => {
-        bindFloorButtons(pane);
+        bindFloorButtons2(pane);
         onRows(result.items);
       }
     });
@@ -32558,7 +32704,7 @@ ${endStackCall}`;
         );
         mergedNoticeEl.innerHTML = hiddenAll && !loadedTotal ? `<div class="tb-eztb-warn">${escapeHtml(HIDDEN_POSTS_NOTE)}</div>` : "";
       }
-      bindFloorButtons(mergedListEl);
+      bindFloorButtons2(mergedListEl);
       const loading = POST_SUBTABS.some((item) => pending4.has(item.id));
       const done7 = POST_SUBTABS.every((item) => handles.get(item.id)?.exhausted());
       const failed = POST_SUBTABS.map((item) => failures2.get(item.id)).filter(
@@ -33297,13 +33443,21 @@ ${endStackCall}`;
 .tb-eztb-hit{
   padding:10px 12px;border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
-.tb-eztb-hit-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.tb-eztb-hit-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;}
 .tb-eztb-hit-head .tb-eztb-badge{cursor:default;}
 .tb-eztb-hit-unsure{font-size:12px;color:var(--tb-eztb-warn-text) !important;}
+/* 命中规则右上角写"最近依据"的时间：证据按时间倒序，得让用户看出为什么这么排 */
+.tb-eztb-hit-newest{font-size:11px;color:var(--tb-eztb-text-muted) !important;margin-left:auto;}
 .tb-eztb-evidence{
   display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;
   font-size:12px;color:var(--tb-eztb-text-muted) !important;
 }
+/* 一行证据的头部：类型标签 + 原因 + 关键词 + 时间 + 吧名 + 回复对象 */
+.tb-eztb-evidence-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1 1 100%;}
+.tb-eztb-evidence-time,.tb-eztb-evidence-forum,.tb-eztb-evidence-replyto{
+  font-size:11px;color:var(--tb-eztb-text-muted) !important;
+}
+.tb-eztb-evidence-forum::before{content:"·";margin-right:4px;}
 .tb-eztb-evidence-keyword{
   padding:0 6px;border-radius:4px;background:var(--tb-eztb-chip-strong) !important;color:var(--tb-eztb-text-strong) !important;
   font-size:11px;line-height:17px;
@@ -33311,6 +33465,13 @@ ${endStackCall}`;
 .tb-eztb-evidence-text{
   flex:1 1 100%;font-size:12px;color:var(--tb-eztb-text-muted) !important;word-break:break-word;
 }
+/* 跳转 + 楼层那一行 */
+.tb-eztb-evidence-actions{display:flex;align-items:center;gap:8px;flex:1 1 100%;margin-top:2px;}
+.tb-eztb-evidence-link{
+  font-size:12px;color:var(--tb-eztb-accent) !important;text-decoration:none;
+  border-bottom:1px dashed var(--tb-eztb-accent-border);
+}
+.tb-eztb-evidence-link:hover{border-bottom-style:solid;}
 .tb-eztb-mark{background:var(--tb-eztb-mark-bg) !important;color:inherit !important;padding:0 2px;border-radius:2px;}
 .tb-eztb-textarea-tall{min-height:150px;}
 .tb-eztb-more{

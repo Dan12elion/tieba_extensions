@@ -44,6 +44,8 @@ const panelTabs = await bundle("src/core/panelTabs.ts", "panelTabs.mjs");
 const errno = await bundle("src/core/errno.ts", "errno.mjs");
 const netPolicy = await bundle("src/core/netPolicy.ts", "netPolicy.mjs");
 const mutual = await bundle("src/core/mutualFollows.ts", "mutualFollows.mjs");
+// 证据行 HTML（类型标签 / 时间 / 跳转 / 查楼层）也是纯逻辑，直接钉死
+const evidenceHtml = await bundle("src/core/evidenceHtml.ts", "evidenceHtml.mjs");
 
 const {
 	parseRules,
@@ -1448,6 +1450,232 @@ console.log("「没有命中」还是「证据不足」");
 	check(
 		"结论里必须写明「这不等于没有命中」",
 		compositionVerdict({ ...base, posts: 0 }).note.includes("不等于"),
+	);
+}
+
+console.log("命中证据：时间排序与跳转");
+{
+	const {
+		matchComposition,
+		sortEvidencesByRecency,
+		sortHitsByRecency,
+		newestEvidenceAt,
+	} = await import(pathToFileURL(outFile).href);
+	const { buildEvidenceHtml, evidenceLink } = evidenceHtml;
+
+	check(
+		"证据按时间倒序：最近的排前面，没有时间的不参与比较（保持原顺序、排在后面）",
+		(function () {
+			const sorted = sortEvidencesByRecency([
+				{ source: "post", keyword: "a", reason: "", excerpt: "", sure: true, at: 100 },
+				{ source: "uid", keyword: "b", reason: "", excerpt: "", sure: true },
+				{ source: "post", keyword: "c", reason: "", excerpt: "", sure: true, at: 300 },
+				{ source: "forum", keyword: "d", reason: "", excerpt: "", sure: true },
+			]);
+			return (
+				sorted.map((e) => e.keyword).join(",") === "c,a,b,d"
+			);
+		})(),
+	);
+
+	const rules = parseRules(
+		[
+			"🅰️名单规则 | | | | 12345",
+			"🅱️发帖规则 | 原神",
+			"🅲吧规则 | | 原神吧",
+		].join("\n"),
+	);
+	const posts = [
+		{
+			kind: "reply",
+			title: "回复：原神怎么样",
+			preview: "原神还行",
+			forumName: "原神吧",
+			createTime: 1_700_000_000,
+			threadId: "111",
+			postId: "222",
+		},
+		{
+			kind: "topic",
+			title: "原神的主题帖",
+			preview: "聊聊原神",
+			forumName: "原神吧",
+			createTime: 1_600_000_000,
+			threadId: "333",
+			postId: "444",
+		},
+	];
+	const hits = matchComposition(
+		{ uid: "12345", userId: 0, forums: ["原神吧"], posts },
+		rules,
+	);
+	check(
+		"命中规则也按时间倒序：有发帖依据的排在只有名单/关注吧的前面",
+		hits.map((hit) => hit.rule.name).join(",") === "🅱️发帖规则,🅰️名单规则,🅲吧规则",
+		hits.map((hit) => hit.rule.name).join(","),
+	);
+	check(
+		"没有时间依据的命中之间保持规则表顺序",
+		hits[1].rule.name === "🅰️名单规则" && hits[2].rule.name === "🅲吧规则",
+	);
+	check(
+		"规则内多条证据都带上了时间",
+		hits[0].evidences.every((e) => e.source !== "post" || typeof e.at === "number"),
+		JSON.stringify(hits[0].evidences.map((e) => [e.source, e.at])),
+	);
+	check(
+		"命中里最新的证据时间可以取出来（面板要显示「最近依据」）",
+		newestEvidenceAt(hits[0]) === 1_600_000_000,
+		String(newestEvidenceAt(hits[0])),
+	);
+	check(
+		"没有时间的命中，最新时间是 0",
+		newestEvidenceAt(hits[1]) === 0,
+		String(newestEvidenceAt(hits[1])),
+	);
+
+	// 证据带上了"出处"：类型 / 帖子 id / 回复对象都要能传到界面上
+	const postEvidence = hits[0].evidences.find((e) => e.source === "post");
+	check(
+		"发帖证据带上了出处（类型、帖子 id、时间）",
+		postEvidence?.post?.kind === "topic" &&
+			postEvidence?.post?.threadId === "333" &&
+			postEvidence?.post?.postId === "444" &&
+			postEvidence?.at === 1_600_000_000,
+		JSON.stringify(postEvidence?.post),
+	);
+	check(
+		"主题帖与回复同时命中时优先取主题帖（原本的设计不变）",
+		postEvidence?.post?.kind === "topic",
+		postEvidence?.post?.kind,
+	);
+
+	// 只用回复的场景：弱证据 + 要能跳到那一楼
+	const replyOnly = matchComposition(
+		{ uid: "1", userId: 0, forums: [], posts: [posts[0]] },
+		parseRules("🅱️发帖规则 | 原神"),
+	);
+	const replyEvidence = replyOnly[0].evidences[0];
+	check("只有回复命中时仍是弱证据", replyEvidence.sure === false && replyEvidence.post?.kind === "reply");
+
+	const topicLink = evidenceLink(postEvidence);
+	check(
+		"主题帖的跳转指向帖子本身",
+		topicLink?.href === "https://tieba.baidu.com/p/333" && topicLink.label === "打开主题帖",
+		JSON.stringify(topicLink),
+	);
+	const replyLink = evidenceLink(replyEvidence);
+	check(
+		"回复 / 楼中楼用 pid 精确跳到那一楼",
+		replyLink?.href === "https://tieba.baidu.com/p/111?pid=222" &&
+			replyLink.label === "打开这一楼",
+		JSON.stringify(replyLink),
+	);
+	check(
+		"名单 / 关注的吧这类证据没有跳转（它们不是帖子）",
+		evidenceLink(hits[1].evidences[0]) === null &&
+			evidenceLink({
+				source: "forum",
+				keyword: "x",
+				reason: "",
+				excerpt: "",
+				sure: true,
+			}) === null,
+	);
+
+	const topicHtml = buildEvidenceHtml(postEvidence);
+	check(
+		"证据行写出了类型标签与时间",
+		topicHtml.includes("tb-eztb-tag-topic") &&
+			topicHtml.includes("主题") &&
+			/\d{4}-\d{2}-\d{2}/.test(topicHtml),
+		topicHtml.slice(0, 160),
+	);
+	check(
+		"证据行有「打开主题帖」链接",
+		topicHtml.includes('href="https://tieba.baidu.com/p/333"') &&
+			topicHtml.includes("打开主题帖"),
+	);
+	check(
+		"主题帖证据没有「查楼层」（主题帖本来就在 1 楼）",
+		!topicHtml.includes("查楼层"),
+	);
+	check(
+		"命中的关键词在原文里高亮（转义后的 <mark>）",
+		topicHtml.includes("<mark"),
+	);
+
+	const replyHtml = buildEvidenceHtml(replyEvidence);
+	check(
+		"回复证据：类型标签 + 指向那一楼的链接 + 「查楼层」按钮",
+		replyHtml.includes("tb-eztb-tag-reply") &&
+			replyHtml.includes('href="https://tieba.baidu.com/p/111?pid=222"') &&
+			replyHtml.includes("查楼层") &&
+			replyHtml.includes('data-thread="111"') &&
+			replyHtml.includes('data-post="222"'),
+		replyHtml.slice(0, 200),
+	);
+	check(
+		"楼层已经查过就直接写「N楼」，不再给按钮",
+		(function () {
+			const html = buildEvidenceHtml(replyEvidence, {
+				floorFor: () => 12,
+			});
+			return html.includes("12楼") && !html.includes("查楼层");
+		})(),
+	);
+	check(
+		"缓存里没有楼层时仍然给「查楼层」按钮",
+		buildEvidenceHtml(replyEvidence, { floorFor: () => null }).includes("查楼层"),
+	);
+	check(
+		"查不到（0）也算没有，照样给按钮",
+		buildEvidenceHtml(replyEvidence, { floorFor: () => 0 }).includes("查楼层"),
+	);
+
+	const subHtml = buildEvidenceHtml({
+		source: "post",
+		keyword: "原神",
+		reason: "楼中楼命中",
+		excerpt: "原神好玩",
+		sure: false,
+		at: 1_700_000_000,
+		post: {
+			kind: "sub",
+			forumName: "原神吧",
+			title: "t",
+			preview: "p",
+			createTime: 1_700_000_000,
+			threadId: "111",
+			postId: "999",
+			replyTo: "某人",
+		},
+	});
+	check(
+		"楼中楼写出「回复 谁」",
+		subHtml.includes("楼中楼") && subHtml.includes("回复 某人"),
+		subHtml.slice(0, 200),
+	);
+	check(
+		"证据行里的内容会被转义（吧名 / 名字来自接口，不能拼进 HTML）",
+		(function () {
+			const html = buildEvidenceHtml({
+				source: "post",
+				keyword: "原神",
+				reason: "在「<img src=x>」发过帖",
+				excerpt: "",
+				sure: true,
+				post: {
+					kind: "reply",
+					forumName: "<b>吧</b>",
+					title: "",
+					preview: "",
+					threadId: "111",
+					postId: "222",
+				},
+			});
+			return !html.includes("<img src=x>") && !html.includes("<b>吧</b>");
+		})(),
 	);
 }
 

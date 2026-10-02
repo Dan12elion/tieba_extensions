@@ -1010,5 +1010,59 @@ if (authorId) {
 	}
 }
 
+// ── 成分证据的"时间 + 出处"（1.10.0 的时间排序与跳转都靠它） ──────────
+/*
+ * 面板要按时间倒序排证据、要能跳到那条帖子、回复还要查楼层——
+ * 这些都建立在"证据里带着 at / threadId / postId"之上。
+ * 这里用真实数据跑一遍 detectComposition，确认这些字段真的被填上了
+ * （纯逻辑排序本身在 keyword-test 里钉死）。
+ */
+{
+	console.log("成分证据带时间与出处");
+	try {
+		const uid = 240365734;
+		const detection = await sdk.detectComposition(
+			{ id: uid, uid: String(uid), profileForums: [] },
+			// 两条规则：都要命中发帖证据，"排序"这件事才真的被测到
+			// （只配一条规则的话 = 只有一个元素，倒序断言恒真，等于没测，见 §5 #30）
+			sdk.parseRules(["📝发帖甲 | 的", "📝发帖乙 | 我"].join("\n")),
+		);
+		const hits = detection?.hits ?? [];
+		const postEvidences = hits
+			.flatMap((hit) => hit.evidences)
+			.filter((evidence) => evidence.source === "post");
+		report(
+			"真实数据下能取到发帖类证据",
+			postEvidences.length > 0,
+			`命中 ${hits.length} 条规则 / 发帖证据 ${postEvidences.length} 条`,
+		);
+		const withInfo = postEvidences.filter(
+			(evidence) =>
+				evidence.at > 0 &&
+				evidence.post?.threadId &&
+				evidence.post?.postId &&
+				["topic", "reply", "sub"].includes(evidence.post?.kind),
+		);
+		report(
+			"发帖证据带上了时间、帖子 id 与类型（跳转与楼层要用）",
+			withInfo.length === postEvidences.length && withInfo.length > 0,
+			withInfo.length
+				? `例如 ${withInfo[0].post.kind} threadId=${withInfo[0].post.threadId} postId=${withInfo[0].post.postId} at=${withInfo[0].at}`
+				: "一条都没带上",
+		);
+		const newest = hits.map((hit) =>
+			Math.max(0, ...hit.evidences.map((evidence) => evidence.at ?? 0)),
+		);
+		report(
+			"命中规则按「最近依据」倒序返回（两条以上才说明排序真的生效）",
+			newest.length >= 2 &&
+				newest.every((value, index) => index === 0 || newest[index - 1] >= value),
+			newest.join(","),
+		);
+	} catch (error) {
+		report("成分证据带时间与出处", false, error?.message ?? String(error));
+	}
+}
+
 console.log(failures === 0 ? "\n真实链路全部通过。" : `\n${failures} 项失败。`);
 process.exit(failures === 0 ? 0 : 1);

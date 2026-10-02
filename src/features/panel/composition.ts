@@ -7,15 +7,59 @@
 
 import {
 	badgeHue,
-	highlightKeywords,
+	newestEvidenceAt,
 	parseRules,
 } from "../../core/composition.ts";
+import { buildEvidenceHtml } from "../../core/evidenceHtml.ts";
 import { describeRequestError } from "../../core/errno.ts";
+import { fetchReplyFloor, readReplyFloorCache } from "../../core/replyFloor.ts";
 import { getSettings } from "../../core/settings.ts";
-import { escapeHtml } from "../../core/util.ts";
+import { escapeHtml, formatTimestamp } from "../../core/util.ts";
 import type { UserRef } from "../../page/adapters.ts";
 import { type CompositionCheckResult, checkUser } from "../compositionScan.ts";
 import { openSettingsDialog } from "../settingsDialog.ts";
+
+/**
+ * 给证据行上的「查楼层」绑事件。
+ *
+ * 与「发帖」页签同一套做法（也是为了同一件事）：楼层号不在发帖 feed 里，
+ * 一条回复一次 `/c/f/pb/floor` 请求，所以**点了才查**，查过写缓存
+ * （下次渲染时 `buildEvidenceHtml` 直接写「N楼」）。
+ */
+function bindFloorButtons(root: HTMLElement): void {
+	for (const button of Array.from(
+		root.querySelectorAll<HTMLButtonElement>(".tb-eztb-floorbtn"),
+	)) {
+		if (button.dataset.bound === "1") continue;
+		button.dataset.bound = "1";
+		button.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (button.disabled) return;
+			const threadId = button.dataset.thread ?? "";
+			const postId = button.dataset.post ?? "";
+			if (!threadId || !postId) return;
+			button.disabled = true;
+			button.textContent = "查询中…";
+			void (async () => {
+				const result = await fetchReplyFloor(threadId, postId);
+				if (result.floor) {
+					const span = document.createElement("span");
+					span.className = "tb-eztb-floor";
+					span.textContent = `${result.floor}楼`;
+					span.title = result.excerpt
+						? `${result.floor} 楼的内容：${result.excerpt}`
+						: `${result.floor} 楼`;
+					button.replaceWith(span);
+					return;
+				}
+				button.disabled = false;
+				button.textContent = "查不到";
+				button.title = result.reason ?? "没查到";
+			})();
+		});
+	}
+}
 
 /**
  * 「成分」页签：把关键词命中的结论摆出来，命中的关键词在原文里高亮。
@@ -85,20 +129,21 @@ export function renderCompositionTab(
 		const rules = parseRules(getSettings().compositionRules);
 		const hitBlocks = hits
 			.map((hit) => {
+				/*
+				 * 证据行：类型标签（主题帖 / 回复 / 楼中楼）、时间、命中的词与原文，
+				 * 以及"跳到那条帖子"的链接；回复与楼中楼还要「查楼层」（点了才查）。
+				 * 顺序由 core/composition.ts 的 sortHitsByRecency 决定：最近的排前面。
+				 */
 				const evidences = hit.evidences
-					.map((evidence) => {
-						const excerpt = evidence.excerpt
-							? `<div class="tb-eztb-evidence-text">${highlightKeywords(evidence.excerpt, [evidence.keyword])}</div>`
-							: "";
-						return (
-							`<div class="tb-eztb-evidence">` +
-							`<span class="tb-eztb-evidence-reason">${escapeHtml(evidence.reason)}</span>` +
-							`<span class="tb-eztb-evidence-keyword">${escapeHtml(evidence.keyword)}</span>` +
-							excerpt +
-							`</div>`
-						);
-					})
+					.map((evidence) =>
+						buildEvidenceHtml(evidence, {
+							floorFor: (target) =>
+								readReplyFloorCache(target.threadId, target.postId)?.floor ??
+								null,
+						}),
+					)
 					.join("");
+				const newest = newestEvidenceAt(hit);
 				return (
 					`<div class="tb-eztb-hit">` +
 					`<div class="tb-eztb-hit-head">` +
@@ -106,6 +151,9 @@ export function renderCompositionTab(
 					(hit.sure
 						? ""
 						: `<span class="tb-eztb-hit-unsure">证据较弱，可能是误判</span>`) +
+					(newest
+						? `<span class="tb-eztb-hit-newest">最近依据 ${escapeHtml(formatTimestamp(newest))}</span>`
+						: "") +
 					`</div>` +
 					evidences +
 					`</div>`
@@ -131,6 +179,7 @@ export function renderCompositionTab(
 		body
 			.querySelector('[data-act="settings"]')
 			?.addEventListener("click", () => openSettingsDialog());
+		bindFloorButtons(body);
 		bindRecheck();
 
 		function bindRecheck(): void {

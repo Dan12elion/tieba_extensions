@@ -126,6 +126,10 @@ export async function detectComposition(
 						preview: row.preview,
 						kind: "topic",
 						forumName: row.forumName,
+						// 时间 / 帖子 id 一并带上：面板要按时间倒序，并跳到那条帖子
+						createTime: row.createTime,
+						threadId: row.threadId,
+						postId: row.postId,
 					});
 				}
 				// 这一页是空的 ⇒ 没有下一页了，别再白花请求
@@ -147,6 +151,10 @@ export async function detectComposition(
 						preview: row.preview,
 						kind: row.kind === "sub" ? "sub" : "reply",
 						forumName: row.forumName,
+						createTime: row.createTime,
+						threadId: row.threadId,
+						postId: row.postId,
+						replyTo: row.replyTo,
 					});
 				}
 				if (!result.rows.length) break;

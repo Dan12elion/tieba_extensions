@@ -1193,11 +1193,120 @@ const PAGE = `<!doctype html>
                 add('结论里写明了读了多少页（不能被读成「一共只有这么多」）',
                     /读了 \\d+ 人（\\d+ 页）/.test(summary), summary);
                 add('阶段 11 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
-                finish();
+                stage16();
               }, 100);
             });
           }, 60);
         });
+      }
+
+      /**
+       * 阶段 16：成分页签的"证据行"（1.10.0）。
+       *
+       * 验证三件事：证据带**类型标签与时间**、带**跳到那条帖子**的链接、
+       * 回复 / 楼中楼带「查楼层」。用"发帖所在吧"这条规则去撞测试用户真实发过的吧
+       * （他的第一页主题帖里就有「小红书」），这样证据一定是一条**主题帖**。
+       *
+       * 说明：这一阶段的数据来自真实接口，"这次正好没有回复类证据"时，
+       * 楼层按钮那一段会**明确记为跳过**（不是假装通过）——楼层的拼装与点击行为
+       * 已经由 keyword-test（纯 HTML）与 live-test（真实 /c/f/pb/floor）覆盖。
+       */
+      function stage16() {
+        Array.prototype.forEach.call(document.querySelectorAll('.tb-eztb-mask'), function (mask) {
+          var close = mask.querySelector('.tb-eztb-close');
+          if (close) close.click();
+        });
+        var openSettings = window.__tbMenus['eztb：设置 BDUSS / 运行参数'];
+        if (!openSettings) { add('阶段 16：菜单里有设置入口', false, ''); finish(); return; }
+        openSettings();
+        var rulesBox = inPanel('#tb-eztb-rules');
+        var saveBtn = inPanel('[data-act="save"]');
+        add('阶段 16：能拿到规则框与保存按钮', !!rulesBox && !!saveBtn, '');
+        if (!rulesBox || !saveBtn) { finish(); return; }
+        // 只用第 6 段（发帖所在吧）：证据必然是"发帖"类，且带帖子 id
+        rulesBox.value = '📝发帖吧 | | | | | 小红书';
+        saveBtn.click();
+
+        var target = document.querySelector('.l_post .tb-eztb-btn');
+        if (!target) { add('阶段 16：找得到「查询」按钮', false, ''); finish(); return; }
+        target.click();
+        until(function () {
+          return !!document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="composition"]');
+        }, function (opened) {
+          if (!opened) { add('阶段 16：面板打得开', false, ''); finish(); return; }
+          document.querySelector('.tb-eztb-mask .tb-eztb-tab[data-tab="composition"]').click();
+          until(function () {
+            var pane = inPanel('.tb-eztb-pane[data-pane="composition"]');
+            return !!pane && (!!pane.querySelector('.tb-eztb-hit') ||
+              !!pane.querySelector('.tb-eztb-empty') || !!pane.querySelector('.tb-eztb-error'));
+          }, function () {
+            var pane = inPanel('.tb-eztb-pane[data-pane="composition"]');
+            var text = pane ? String(pane.textContent) : '';
+            var hit = pane ? pane.querySelector('.tb-eztb-hit') : null;
+            add('成分页签按新规则重新检测出了命中',
+                !!hit, text.slice(0, 160));
+            if (!hit) { finish(); return; }
+
+            var newest = hit.querySelector('.tb-eztb-hit-newest');
+            add('命中规则上写出了「最近依据」的时间（证据按时间倒序，得能看出为什么这么排）',
+                !!newest && /\\d{4}-\\d{2}-\\d{2}/.test(String(newest.textContent)),
+                newest ? String(newest.textContent) : '（没有）');
+
+            var evidence = hit.querySelector('.tb-eztb-evidence');
+            var kindTag = evidence && evidence.querySelector('.tb-eztb-tag');
+            var timeEl = evidence && evidence.querySelector('.tb-eztb-evidence-time');
+            add('证据行标出了类型（主题 / 回复 / 楼中楼）',
+                !!kindTag && /主题|回复|楼中楼/.test(String(kindTag.textContent)),
+                kindTag ? String(kindTag.textContent) : '（没有类型标签）');
+            add('证据行写出了时间', !!timeEl && /\\d{4}-\\d{2}-\\d{2}/.test(String(timeEl.textContent)),
+                timeEl ? String(timeEl.textContent) : '（没有时间）');
+
+            var link = evidence && evidence.querySelector('.tb-eztb-evidence-link');
+            var href = link ? String(link.getAttribute('href')) : '';
+            add('证据行有跳到那条帖子的链接（新窗口打开）',
+                !!link && /^https:\\/\\/tieba\\.baidu\\.com\\/p\\/\\d+/.test(href) &&
+                  link.getAttribute('target') === '_blank',
+                href || '（没有链接）');
+            /*
+             * 注意：这条规则命中的是"吧名"（小红书），而关键词不一定会出现在帖子正文里，
+             * 所以这里断言的是"原文被显示出来了"，不是"一定有高亮"——
+             * 高亮由 keyword-test 直接对 buildEvidenceHtml 断言（那里能构造关键词出现在正文里的数据）。
+             */
+            var evidenceText = evidence && evidence.querySelector('.tb-eztb-evidence-text');
+            add('证据行把命中的那条帖子内容显示出来了',
+                !!evidenceText && String(evidenceText.textContent).trim().length > 0,
+                evidenceText ? String(evidenceText.textContent).slice(0, 60) : '（没有正文）');
+
+            var isReplyEvidence = !!kindTag && /回复|楼中楼/.test(String(kindTag.textContent));
+            var floorBtn = evidence ? evidence.querySelector('.tb-eztb-floorbtn') : null;
+            if (isReplyEvidence) {
+              add('回复 / 楼中楼的链接精确到那一楼（带 pid）', href.indexOf('?pid=') > 0, href);
+              add('回复 / 楼中楼给了「查楼层」按钮', !!floorBtn, '');
+              if (floorBtn) {
+                floorBtn.click();
+                until(function () {
+                  var ev = inPanel('.tb-eztb-pane[data-pane="composition"] .tb-eztb-evidence');
+                  return !!ev && (!!ev.querySelector('.tb-eztb-floor') ||
+                    /查不到/.test(String(ev.textContent)));
+                }, function () {
+                  var ev = inPanel('.tb-eztb-pane[data-pane="composition"] .tb-eztb-evidence');
+                  var floor = ev ? ev.querySelector('.tb-eztb-floor') : null;
+                  add('点「查楼层」之后写出了楼层（或明确说查不到）',
+                      !!floor || /查不到/.test(String(ev ? ev.textContent : '')),
+                      floor ? String(floor.textContent) : String(ev ? ev.textContent : '').slice(0, 80));
+                  add('阶段 16 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+                  finish();
+                }, 60);
+                return;
+              }
+            } else {
+              console.log('  跳过（这次的数据里这块证据是主题帖，不是回复）：回复/楼中楼的 pid 链接与「查楼层」按钮由 keyword-test 与 live-test 覆盖');
+              add('主题帖证据不显示「查楼层」（它本来就在 1 楼）', !floorBtn, '');
+            }
+            add('阶段 16 结束：运行期无 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
+            finish();
+          }, 100);
+        }, 60);
       }
 
       mergedBtn.click();

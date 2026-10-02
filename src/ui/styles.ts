@@ -420,13 +420,21 @@ export const STYLE_TEXT = `${THEME_VARS}
 .tb-eztb-hit{
   padding:10px 12px;border:1px solid var(--tb-eztb-border);border-radius:8px;background:var(--tb-eztb-surface-alt) !important;
 }
-.tb-eztb-hit-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.tb-eztb-hit-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;}
 .tb-eztb-hit-head .tb-eztb-badge{cursor:default;}
 .tb-eztb-hit-unsure{font-size:12px;color:var(--tb-eztb-warn-text) !important;}
+/* 命中规则右上角写"最近依据"的时间：证据按时间倒序，得让用户看出为什么这么排 */
+.tb-eztb-hit-newest{font-size:11px;color:var(--tb-eztb-text-muted) !important;margin-left:auto;}
 .tb-eztb-evidence{
   display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;
   font-size:12px;color:var(--tb-eztb-text-muted) !important;
 }
+/* 一行证据的头部：类型标签 + 原因 + 关键词 + 时间 + 吧名 + 回复对象 */
+.tb-eztb-evidence-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1 1 100%;}
+.tb-eztb-evidence-time,.tb-eztb-evidence-forum,.tb-eztb-evidence-replyto{
+  font-size:11px;color:var(--tb-eztb-text-muted) !important;
+}
+.tb-eztb-evidence-forum::before{content:"·";margin-right:4px;}
 .tb-eztb-evidence-keyword{
   padding:0 6px;border-radius:4px;background:var(--tb-eztb-chip-strong) !important;color:var(--tb-eztb-text-strong) !important;
   font-size:11px;line-height:17px;
@@ -434,6 +442,13 @@ export const STYLE_TEXT = `${THEME_VARS}
 .tb-eztb-evidence-text{
   flex:1 1 100%;font-size:12px;color:var(--tb-eztb-text-muted) !important;word-break:break-word;
 }
+/* 跳转 + 楼层那一行 */
+.tb-eztb-evidence-actions{display:flex;align-items:center;gap:8px;flex:1 1 100%;margin-top:2px;}
+.tb-eztb-evidence-link{
+  font-size:12px;color:var(--tb-eztb-accent) !important;text-decoration:none;
+  border-bottom:1px dashed var(--tb-eztb-accent-border);
+}
+.tb-eztb-evidence-link:hover{border-bottom-style:solid;}
 .tb-eztb-mark{background:var(--tb-eztb-mark-bg) !important;color:inherit !important;padding:0 2px;border-radius:2px;}
 .tb-eztb-textarea-tall{min-height:150px;}
 .tb-eztb-more{

@@ -259,6 +259,14 @@ export interface CompositionPostInput {
 	kind: CompositionPostKind;
 	/** 这条帖子发在哪个吧（「发帖所在吧」那一类关键词打在它上面） */
 	forumName?: string;
+	/** 发帖时间（unix 秒）。没有时间的证据排序时排在带时间的后面 */
+	createTime?: number;
+	/** 所在主题帖的 id（跳转要用） */
+	threadId?: string;
+	/** 这一楼的帖子 id：回复 / 楼中楼用它精确跳到那一楼、并查楼层 */
+	postId?: string;
+	/** 楼中楼回复了谁 */
+	replyTo?: string;
 }
 
 export interface CompositionInput {
@@ -268,6 +276,18 @@ export interface CompositionInput {
 	forums: string[];
 	/** 该用户的主题帖与回复（标题 + 正文摘要） */
 	posts: CompositionPostInput[];
+}
+
+/** 一条发帖类证据的出处：面板据此渲染类型标签、时间、跳转链接与「查楼层」。 */
+export interface CompositionEvidencePost {
+	kind: CompositionPostKind;
+	forumName: string;
+	title: string;
+	preview: string;
+	createTime?: number;
+	threadId?: string;
+	postId?: string;
+	replyTo?: string;
 }
 
 export interface CompositionEvidence {
@@ -280,6 +300,29 @@ export interface CompositionEvidence {
 	excerpt: string;
 	/** 是否强证据 */
 	sure: boolean;
+	/**
+	 * 这条证据发生在什么时候（unix 秒）。
+	 *
+	 * 只有发帖类证据有：名单与关注的吧是"状态"，没有时间。
+	 * 排序规则见 `sortEvidencesByRecency()`：带时间的按时间倒序排前面，没时间的排在后面。
+	 */
+	at?: number;
+	/** 发帖类证据的出处（跳转 / 楼层要用；名单与关注的吧没有） */
+	post?: CompositionEvidencePost;
+}
+
+/** 从一条发帖输入里摘出"出处"，附在证据上（渲染与排序都要用）。 */
+function evidencePost(post: CompositionPostInput): CompositionEvidencePost {
+	return {
+		kind: post.kind,
+		forumName: String(post.forumName ?? "").trim(),
+		title: post.title ?? "",
+		preview: post.preview ?? "",
+		createTime: post.createTime,
+		threadId: post.threadId,
+		postId: post.postId,
+		replyTo: post.replyTo,
+	};
 }
 
 export interface CompositionHit {
@@ -326,10 +369,65 @@ export function excerptAround(
 }
 
 /**
- * 按规则匹配一个用户，返回命中的规则（顺序与规则表一致）。
+ * 证据按时间倒序：**最近的排前面**。
+ *
+ * 为什么要有：一条规则可能同时命中"关注了吧"和"上周发的帖"，用户想先看到的是
+ * 最近那条依据（用来判断"这人现在还这样吗"）。名单与关注的吧没有时间，
+ * 它们是"状态"而不是"事件"，所以排在带时间的证据后面，并保持原来的相对顺序
+ * （稳定排序：不传时间的不参与比较）。
+ */
+export function sortEvidencesByRecency(
+	evidences: CompositionEvidence[],
+): CompositionEvidence[] {
+	return evidences
+		.map((evidence, index) => ({ evidence, index }))
+		.sort((a, b) => {
+			const left = Number(a.evidence.at ?? 0);
+			const right = Number(b.evidence.at ?? 0);
+			if (left !== right) return right - left;
+			return a.index - b.index;
+		})
+		.map((item) => item.evidence);
+}
+
+/** 一条命中里最新的证据时间（没有带时间的证据就返回 0）。 */
+export function newestEvidenceAt(hit: CompositionHit): number {
+	let newest = 0;
+	for (const evidence of hit.evidences) {
+		const at = Number(evidence.at ?? 0);
+		if (at > newest) newest = at;
+	}
+	return newest;
+}
+
+/**
+ * 命中规则也按时间倒序：最近有依据的规则排在前面。
+ *
+ * 原来的顺序是"规则表里的书写顺序"——用户看到的第一个标记与他最近看到的东西无关。
+ * 没有时间依据的命中（只靠名单 / 关注的吧）排在有时间的后面，内部保持规则表顺序。
+ */
+export function sortHitsByRecency(hits: CompositionHit[]): CompositionHit[] {
+	return hits
+		.map((hit, index) => ({
+			hit: { ...hit, evidences: sortEvidencesByRecency(hit.evidences) },
+			index,
+			newest: newestEvidenceAt(hit),
+		}))
+		.sort((a, b) => {
+			if (a.newest !== b.newest) return b.newest - a.newest;
+			return a.index - b.index;
+		})
+		.map((item) => item.hit);
+}
+
+/**
+ * 按规则匹配一个用户。
  *
  * 每条规则最多产出一条 hit，但可以带多条证据：一个用户既关注了「原神吧」、
  * 又发过带「原神」的主题帖，就会把两条原因都写进去，而不是变成两个重复徽章。
+ *
+ * **返回顺序 = 时间倒序**（1.10.0 起，见 `sortHitsByRecency`）：最近的依据排在前面。
+ * 需要"规则表顺序"的地方（比如测试里对照规则）自己按 `rule` 取即可。
  */
 export function matchComposition(
 	input: CompositionInput,
@@ -387,6 +485,8 @@ export function matchComposition(
 					.join(" ")
 					.slice(0, 60),
 				sure: post.kind === "topic",
+				at: post.createTime,
+				post: evidencePost(post),
 			};
 			postForumEvidence = evidence;
 			if (evidence.sure) break;
@@ -406,6 +506,8 @@ export function matchComposition(
 				reason: `${POST_KIND_TEXT[post.kind]}命中`,
 				excerpt: excerptAround(text, keyword),
 				sure: post.kind === "topic",
+				at: post.createTime,
+				post: evidencePost(post),
 			};
 			postEvidence = evidence;
 			if (evidence.sure) break;
@@ -427,7 +529,7 @@ export function matchComposition(
 		});
 	}
 
-	return hits;
+	return sortHitsByRecency(hits);
 }
 
 /**
