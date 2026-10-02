@@ -1332,6 +1332,39 @@ console.log("规则校验器（行号级报错）");
 		parseRulesDetailed("🎮原神 | 原神,米哈游 | 原神吧").issues.length === 0,
 		JSON.stringify(parseRulesDetailed("🎮原神 | 原神,米哈游 | 原神吧").issues),
 	);
+
+	/*
+	 * 内置示例（EXAMPLE_RULES）是**要发给用户**的预设：设置面板里的「填入示例」就是它。
+	 * 所以它自己必须零问题——少一个 `|`、多写一段、两条同名，用户点一下「填入示例」
+	 * 就会看到一片红字。这几条把它挡在测试里。
+	 */
+	const { EXAMPLE_RULES } = await import(pathToFileURL(outFile).href);
+	const example = parseRulesDetailed(EXAMPLE_RULES);
+	check(
+		"内置示例零问题（预设写错会在这里红）",
+		example.issues.length === 0,
+		JSON.stringify(example.issues.slice(0, 3)),
+	);
+	check(
+		"内置示例至少有一条可用规则",
+		example.rules.length > 0,
+		`共 ${example.rules.length} 条`,
+	);
+	check(
+		"内置示例里没有同名规则（同名会被静默丢掉）",
+		new Set(example.rules.map((rule) => rule.name)).size === example.rules.length,
+		`${example.rules.length} 条规则 / ${new Set(example.rules.map((rule) => rule.name)).size} 个名字`,
+	);
+	check(
+		"内置示例里每条规则都至少有一个条件（只有名称的行会被丢掉）",
+		example.rules.every(
+			(rule) =>
+				rule.postKeywords.length > 0 ||
+				rule.forumKeywords.length > 0 ||
+				rule.postForumKeywords.length > 0 ||
+				rule.uids.length > 0,
+		),
+	);
 }
 
 console.log("「没有命中」还是「证据不足」");
