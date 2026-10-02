@@ -150,7 +150,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	);
 	parts.push(`<div class="tb-eztb-hint" id="tb-eztb-rules-issues"></div>`);
 	parts.push(`<div class="tb-eztb-actions" style="justify-content:flex-start;margin-top:0;">`);
-	parts.push(`<button data-act="rules-example">填入示例</button>`);
+	parts.push(`<button data-act="rules-example">填入示例（二游大战）</button>`);
 	parts.push(`<button data-act="rules-clear">清空规则</button>`);
 	parts.push(`</div>`);
 	parts.push(`</div>`);

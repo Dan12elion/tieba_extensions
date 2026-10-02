@@ -1365,6 +1365,27 @@ console.log("规则校验器（行号级报错）");
 				rule.uids.length > 0,
 		),
 	);
+	/*
+	 * 这套内置清单的设计是「关注的吧」与「发帖所在吧」写同一份名单，
+	 * 于是"只关注没发言"和"只在吧里发言没关注"都能命中。
+	 * 两段一旦漂移（漏抄一个吧、只补了一边），命中率就悄悄下降，肉眼很难发现——
+	 * 用户报过一次（鸣潮的「北落野」、同的「燕淋十六声」只写了一边），所以在这里钉死。
+	 */
+	const drifted = example.rules
+		.filter((rule) => rule.forumKeywords.length && rule.postForumKeywords.length)
+		.filter((rule) => {
+			const left = new Set(rule.forumKeywords.map((item) => item.toLowerCase()));
+			const right = new Set(rule.postForumKeywords.map((item) => item.toLowerCase()));
+			if (left.size !== right.size) return true;
+			for (const item of left) if (!right.has(item)) return true;
+			return false;
+		})
+		.map((rule) => rule.name);
+	check(
+		"内置示例里「关注的吧」与「发帖所在吧」两段一致（这套清单的设计就是两边同一份）",
+		drifted.length === 0,
+		drifted.length ? `对不上的规则：${drifted.join("、")}` : "",
+	);
 }
 
 console.log("「没有命中」还是「证据不足」");
