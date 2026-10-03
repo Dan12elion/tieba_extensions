@@ -45,8 +45,115 @@ export interface CompositionRule {
 /** 关键词分隔符：只用逗号，不用空格——参考脚本里有「互动抽奖 #原神」这种带空格的词。 */
 const LIST_SEPARATOR = /[,，;；]+/;
 
+/**
+ * 关键词的匹配方式。
+ *
+ * - `contains`（默认）：包含匹配。关键词出现在吧名 / 文本的任意位置就算命中。
+ * - `exact`：完全匹配。吧名要**整个相等**（`V` 匹配 `V吧`，不匹配 `zerosievert吧`）；
+ *   文本里的英文 / 数字关键词要**独立成词**（两侧不能是字母数字下划线），
+ *   所以 `V` 不会命中 `zerosievert`。
+ *
+ * 为什么要有：用户实测踩过——某个只在「zerosievert吧」发过言的人，因为吧名里有个 `v`，
+ * 被 `V` 这条规则用包含匹配判成了 V 圈（HANDOFF §5 #59）。
+ * 纯中文关键词在 `exact` 下退化为包含（中文没有词边界），文档里写明了。
+ */
+export type KeywordMatchMode = "contains" | "exact";
+
+export const KEYWORD_MATCH_MODES: ReadonlyArray<{
+	id: KeywordMatchMode;
+	label: string;
+}> = [
+	{ id: "contains", label: "包含匹配（默认）" },
+	{ id: "exact", label: "完全匹配" },
+];
+
+/**
+ * 单个关键词写成 `=xxx` 表示这一个词用完全匹配。
+ *
+ * 用前缀而不是"每个词配一个开关"：规则表是一行行手写的纯文本，
+ * 前缀是唯一能就地表达"这一个词要精确"的写法（`=V` 读起来也直观）。
+ */
+const EXACT_PREFIX = "=";
+
+export function isExactKeyword(token: string): boolean {
+	return String(token ?? "").startsWith(EXACT_PREFIX);
+}
+
+/** 去掉 `=` 前缀后的关键词本体（界面显示、高亮、理由文案都用它）。 */
+export function keywordText(token: string): string {
+	return isExactKeyword(token)
+		? String(token).slice(EXACT_PREFIX.length).trim()
+		: String(token ?? "");
+}
+
+/** 一个关键词是不是"短英文/数字"——这种词用包含匹配最容易误伤（`V` 命中 `zerosievert`）。 */
+export function isRiskyShortKeyword(token: string): boolean {
+	const text = keywordText(token);
+	if (isExactKeyword(token)) return false;
+	return /^[A-Za-z0-9_]+$/.test(text) && text.length <= 2;
+}
+
+const WORD_CHAR = /[A-Za-z0-9_]/;
+
+/** 找到就能命中：英文 / 数字按"独立成词"判断，中文没有词边界，退化为包含。 */
+function containsAsWord(text: string, keyword: string): boolean {
+	if (!keyword) return false;
+	const haystack = text.toLowerCase();
+	const needle = keyword.toLowerCase();
+	// 纯中文（含其它非 ASCII）没有词边界可用：与包含匹配等价
+	if (/^[^A-Za-z0-9_]+$/.test(needle)) return haystack.includes(needle);
+	let index = haystack.indexOf(needle);
+	while (index >= 0) {
+		const before = index > 0 ? haystack[index - 1] : "";
+		const after = haystack[index + needle.length] ?? "";
+		const leftOk = !before || !WORD_CHAR.test(before);
+		const rightOk = !after || !WORD_CHAR.test(after);
+		if (leftOk && rightOk) return true;
+		index = haystack.indexOf(needle, index + 1);
+	}
+	return false;
+}
+
+/** 吧名比较前先去掉末尾的「吧」：用户写 `=V` 时，`V吧` 也该算命中。 */
+function normalizeForumName(value: string): string {
+	return String(value ?? "")
+		.trim()
+		.replace(/吧$/, "")
+		.toLowerCase();
+}
+
+/** 关键词 vs 文本（发帖内容 / 排除词）。 */
+export function keywordMatchesText(
+	text: string,
+	token: string,
+	mode: KeywordMatchMode,
+): boolean {
+	const keyword = keywordText(token);
+	if (!keyword) return false;
+	if (isExactKeyword(token) || mode === "exact") {
+		return containsAsWord(text, keyword);
+	}
+	return String(text ?? "").toLowerCase().includes(keyword.toLowerCase());
+}
+
+/** 关键词 vs 吧名：`exact` 下要求整个吧名相等（忽略末尾的「吧」）。 */
+export function keywordMatchesForum(
+	forumName: string,
+	token: string,
+	mode: KeywordMatchMode,
+): boolean {
+	const keyword = keywordText(token);
+	if (!keyword) return false;
+	if (isExactKeyword(token) || mode === "exact") {
+		return normalizeForumName(forumName) === normalizeForumName(keyword);
+	}
+	return String(forumName ?? "")
+		.toLowerCase()
+		.includes(keyword.toLowerCase());
+}
+
 export const RULE_FORMAT_HINT =
-	"每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释。";
+	"每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释；单个词前面加 `=` 表示这个词要完全匹配（例如 `=V` 只命中吧名就是 V 的，不会命中 zerosievert）。";
 
 export const EXAMPLE_RULES = [
 	"# 名称 | 发帖关键词 | 关注的关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在关键词(可省)",
@@ -77,7 +184,7 @@ export const EXAMPLE_RULES = [
 	"百合||偶像大师,学园偶像大师,偶像大师闪耀色彩,东方,东方幻想魔录,隔壁东方,东方口袋战争,反百破,百合,新百合,魔法少女的魔女裁判,光之美少女,萌战|||偶像大师,学园偶像大师,偶像大师闪耀色彩,东方,东方幻想魔录,隔壁东方,东方口袋战争,反百破,百合,新百合,魔法少女的魔女裁判,光之美少女,萌战",
 	"边狱||边狱公司|||边狱公司",
 	"圆规||原神内鬼,原神内鬼避风港|||原神内鬼,原神内鬼避风港",
-	"V||asoul,V|||asoul,V",
+	"V||asoul,=V|||asoul,=V",
 	"bang||bangdream,bangdream国服,邦多利声优,笔记紫,梦想紫,avemujica|||bangdream,bangdream国服,邦多利声优,笔记紫,梦想紫,avemujica",
 	"⭕️||反激女|||反激女",
 	"同||燕淋十六声,淋神,王者淋耀,欧美后花园,lol淋价,淋日方舟,淋,极地大乱斗,新极地大乱斗|||燕淋十六声,淋神,王者淋耀,欧美后花园,lol淋价,淋日方舟,淋,极地大乱斗,新极地大乱斗",
@@ -175,6 +282,24 @@ export function parseRulesDetailed(text: string): ParsedRules {
 					text: brief,
 					level: "warn",
 					message: `${field}里的「${spaced}」带空格。脚本**不按空格切分**关键词，它会被当成一个整词；如果那是两个词，请用逗号分开。`,
+				});
+			}
+		}
+
+		// 短英文 / 数字关键词 + 包含匹配 = 最容易误伤的一种写法（用户实测被 `V` 命中 `zerosievert`）
+		for (const [field, values] of [
+			["发帖关键词", rule.postKeywords],
+			["关注的吧关键词", rule.forumKeywords],
+			["排除关键词", rule.excludes],
+			["发帖所在吧关键词", rule.postForumKeywords],
+		] as const) {
+			const risky = values.find((value) => isRiskyShortKeyword(value));
+			if (risky) {
+				issues.push({
+					line: lineNumber,
+					text: brief,
+					level: "warn",
+					message: `${field}里的「${keywordText(risky)}」很短，用包含匹配会命中无关内容（实测：关键词 V 命中了「zerosievert吧」）。要精确匹配就写成 =${keywordText(risky)}。`,
 				});
 			}
 		}
@@ -334,19 +459,38 @@ export interface CompositionHit {
 	summary: string;
 }
 
-function contains(text: string, keyword: string): boolean {
-	return text.toLowerCase().includes(keyword.toLowerCase());
-}
-
-function firstKeyword(text: string, keywords: string[]): string {
+/** 找到一个命中的关键词，返回**去掉 `=` 前缀**的词（界面显示与高亮都用它）。 */
+function firstKeywordText(
+	text: string,
+	keywords: string[],
+	mode: KeywordMatchMode,
+): string {
 	for (const keyword of keywords) {
-		if (contains(text, keyword)) return keyword;
+		if (keywordMatchesText(text, keyword, mode)) return keywordText(keyword);
 	}
 	return "";
 }
 
-function isExcluded(text: string, excludes: string[]): boolean {
-	return excludes.some((word) => contains(text, word));
+/** 吧名匹配：`exact` 要求整个吧名相等，`contains` 按包含。 */
+function firstKeywordForum(
+	forumName: string,
+	keywords: string[],
+	mode: KeywordMatchMode,
+): string {
+	for (const keyword of keywords) {
+		if (keywordMatchesForum(forumName, keyword, mode)) {
+			return keywordText(keyword);
+		}
+	}
+	return "";
+}
+
+function isExcluded(
+	text: string,
+	excludes: string[],
+	mode: KeywordMatchMode,
+): boolean {
+	return excludes.some((word) => keywordMatchesText(text, word, mode));
 }
 
 /** 截取命中位置前后的一段，方便在面板里看清楚是哪儿命中的。 */
@@ -428,11 +572,16 @@ export function sortHitsByRecency(hits: CompositionHit[]): CompositionHit[] {
  *
  * **返回顺序 = 时间倒序**（1.10.0 起，见 `sortHitsByRecency`）：最近的依据排在前面。
  * 需要"规则表顺序"的地方（比如测试里对照规则）自己按 `rule` 取即可。
+ *
+ * `options.mode` 是**不带 `=` 前缀**的关键词用哪种匹配方式（默认包含）；
+ * 单个关键词写了 `=xxx` 就一定是完全匹配（见 `keywordMatchesText`）。
  */
 export function matchComposition(
 	input: CompositionInput,
 	rules: CompositionRule[],
+	options: { mode?: KeywordMatchMode } = {},
 ): CompositionHit[] {
+	const mode = options.mode ?? "contains";
 	const hits: CompositionHit[] = [];
 	const ids = [input.uid, input.userId ? String(input.userId) : ""]
 		.map((value) => String(value ?? "").trim())
@@ -455,8 +604,8 @@ export function matchComposition(
 
 		// 2) 关注的吧（关注是主动行为，算强证据）
 		for (const forum of input.forums) {
-			if (isExcluded(forum, rule.excludes)) continue;
-			const keyword = firstKeyword(forum, rule.forumKeywords);
+			if (isExcluded(forum, rule.excludes, mode)) continue;
+			const keyword = firstKeywordForum(forum, rule.forumKeywords, mode);
 			if (!keyword) continue;
 			evidences.push({
 				source: "forum",
@@ -473,8 +622,8 @@ export function matchComposition(
 		let postForumEvidence: CompositionEvidence | null = null;
 		for (const post of input.posts) {
 			const name = String(post.forumName ?? "").trim();
-			if (!name || isExcluded(name, rule.excludes)) continue;
-			const keyword = firstKeyword(name, rule.postForumKeywords);
+			if (!name || isExcluded(name, rule.excludes, mode)) continue;
+			const keyword = firstKeywordForum(name, rule.postForumKeywords, mode);
 			if (!keyword) continue;
 			const evidence: CompositionEvidence = {
 				source: "postForum",
@@ -497,8 +646,8 @@ export function matchComposition(
 		let postEvidence: CompositionEvidence | null = null;
 		for (const post of input.posts) {
 			const text = [post.title, post.preview].filter(Boolean).join(" ");
-			if (!text || isExcluded(text, rule.excludes)) continue;
-			const keyword = firstKeyword(text, rule.postKeywords);
+			if (!text || isExcluded(text, rule.excludes, mode)) continue;
+			const keyword = firstKeywordText(text, rule.postKeywords, mode);
 			if (!keyword) continue;
 			const evidence: CompositionEvidence = {
 				source: "post",

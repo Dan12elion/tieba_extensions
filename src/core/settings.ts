@@ -7,6 +7,7 @@
  */
 
 import { log } from "./log.ts";
+import type { KeywordMatchMode } from "./composition.ts";
 import {
 	DEFAULT_PANEL_TAB,
 	normalizePanelTabId,
@@ -49,6 +50,13 @@ export interface ToolboxSettings {
 	 * 默认 1：只按第 1 页判定。调大能覆盖更早的帖子，代价是每个用户多 (N-1)×2 个请求。
 	 */
 	compositionPages: number;
+	/**
+	 * 关键词匹配方式（**不带** `=` 前缀的词用它）：
+	 *   - `contains`（默认）：包含匹配；
+	 *   - `exact`：完全匹配（吧名要整个相等；英文 / 数字词要独立成词）。
+	 * 单个关键词写成 `=xxx` 时不受这个设置影响，一定是完全匹配。
+	 */
+	compositionKeywordMatch: KeywordMatchMode;
 	/** 成分结果缓存多少天 */
 	compositionCacheDays: number;
 	/**
@@ -82,6 +90,7 @@ export const DEFAULT_SETTINGS: ToolboxSettings = {
 	compositionAuto: true,
 	compositionMaxPerPage: 20,
 	compositionPages: 1,
+	compositionKeywordMatch: "contains",
 	compositionCacheDays: 3,
 	signInLevelThreshold: 6,
 	defaultTab: DEFAULT_PANEL_TAB,
@@ -148,6 +157,8 @@ export function normalizeSettings(input: unknown): ToolboxSettings {
 			1,
 			10,
 		),
+		compositionKeywordMatch:
+			raw.compositionKeywordMatch === "exact" ? "exact" : "contains",
 		compositionCacheDays: clampNumber(
 			raw.compositionCacheDays,
 			DEFAULT_SETTINGS.compositionCacheDays,

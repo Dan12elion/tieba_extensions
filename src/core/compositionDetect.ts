@@ -25,6 +25,7 @@ import {
 import { loadUserForums } from "./userForums.ts";
 import { loadReplyPage, loadTopicPage } from "./userPost.ts";
 import { describeRequestError } from "./errno.ts";
+import { getSettings } from "./settings.ts";
 
 export interface CompositionScanStat {
 	/** 读到的关注吧数量 */
@@ -168,6 +169,8 @@ export async function detectComposition(
 	const hits = matchComposition(
 		{ uid: target.uid, userId: target.id, forums, posts },
 		rules,
+		// 匹配方式来自设置：不带 `=` 前缀的关键词按它走（单个词写成 `=xxx` 一定精确）
+		{ mode: getSettings().compositionKeywordMatch },
 	);
 	stat.verdict = compositionVerdict({
 		hits: hits.length,

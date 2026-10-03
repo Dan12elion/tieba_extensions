@@ -11,7 +11,7 @@ import { invalidateClient } from "../core/sdk.ts";
 import { checkBduss } from "../core/bdussCheck.ts";
 import { clearProfileCache } from "../core/cached.ts";
 import { requestQueue } from "../core/queue.ts";
-import { EXAMPLE_RULES, RULE_FORMAT_HINT, parseRulesDetailed } from "../core/composition.ts";
+import { EXAMPLE_RULES, KEYWORD_MATCH_MODES, RULE_FORMAT_HINT, parseRulesDetailed } from "../core/composition.ts";
 import { clearForumLevelCache } from "../core/forumLevel.ts";
 import { clearReplyFloorCache } from "../core/replyFloor.ts";
 import { clearForumActivityCache } from "../core/forumActivity.ts";
@@ -141,6 +141,27 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 	parts.push(`</div>`);
 
 	parts.push(`<div class="tb-eztb-field">`);
+	parts.push(`<label for="tb-eztb-match">关键词匹配方式</label>`);
+	parts.push(`<select id="tb-eztb-match" class="tb-eztb-input">`);
+	for (const option of KEYWORD_MATCH_MODES) {
+		parts.push(
+			`<option value="${option.id}"${current.compositionKeywordMatch === option.id ? " selected" : ""}>${option.label}</option>`,
+		);
+	}
+	parts.push(`</select>`);
+	parts.push(
+		`<div class="tb-eztb-hint">` +
+			`<b>包含匹配</b>：关键词出现在吧名 / 文本的任意位置就算命中。` +
+			`<b>完全匹配</b>：吧名要整个相等（<code>V</code> 命中「V吧」、不命中「zerosievert吧」），` +
+			`英文 / 数字词要独立成词（<code>V</code> 不命中 <code>zerosievert</code>）；` +
+			`纯中文关键词没有词边界，两种方式等价。<br>` +
+			`只想让个别短词精确时，别动这个开关，直接在规则里写 <code>=V</code>（` +
+			`单个词前面加 <code>=</code> 就一定是完全匹配）。` +
+			`</div>`,
+	);
+	parts.push(`</div>`);
+
+	parts.push(`<div class="tb-eztb-field">`);
 	parts.push(`<label for="tb-eztb-rules">成分关键词规则</label>`);
 	parts.push(
 		`<textarea id="tb-eztb-rules" class="tb-eztb-textarea tb-eztb-textarea-tall" spellcheck="false" placeholder="${escapeHtml(RULE_FORMAT_HINT)}">${escapeHtml(current.compositionRules)}</textarea>`,
@@ -255,6 +276,10 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 			compositionAuto: value("tb-eztb-composition-auto") !== "0",
 			compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
 			compositionPages: Number(value("tb-eztb-composition-pages")),
+			compositionKeywordMatch:
+				value("tb-eztb-match") === "exact"
+					? ("exact" as const)
+					: ("contains" as const),
 			compositionCacheDays: Number(value("tb-eztb-cachedays")),
 			signInLevelThreshold: Number(value("tb-eztb-signin-level")),
 			defaultTab: normalizePanelTabId(value("tb-eztb-default-tab")),
@@ -318,6 +343,7 @@ export function openSettingsDialog(options: SettingsDialogOptions = {}): void {
 		set("tb-eztb-composition-auto", settings.compositionAuto ? "1" : "0");
 		set("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
 		set("tb-eztb-composition-pages", String(settings.compositionPages));
+		set("tb-eztb-match", settings.compositionKeywordMatch);
 		set("tb-eztb-cachedays", String(settings.compositionCacheDays));
 		set("tb-eztb-signin-level", String(settings.signInLevelThreshold));
 		set("tb-eztb-default-tab", settings.defaultTab);

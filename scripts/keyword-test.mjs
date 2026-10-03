@@ -1679,5 +1679,178 @@ console.log("命中证据：时间排序与跳转");
 	);
 }
 
+console.log("关键词匹配方式（包含 / 完全匹配）");
+{
+	const {
+		matchComposition,
+		keywordMatchesText,
+		keywordMatchesForum,
+		keywordText,
+		isExactKeyword,
+		isRiskyShortKeyword,
+		parseRulesDetailed,
+	} = await import(pathToFileURL(outFile).href);
+
+	/*
+	 * 用户实测报的误判（2026-10-01）：某人只在「zerosievert吧」发过言，
+	 * 却因为吧名里有个 v，被 `V` 这条规则用**包含匹配**判成了 V 圈。
+	 * 下面两条就是那个 case，别再退回去。
+	 */
+	check(
+		"包含匹配下 `V` 会命中「zerosievert吧」（这就是用户报的误判）",
+		keywordMatchesForum("zerosievert吧", "V", "contains") === true,
+	);
+	check(
+		"完全匹配下 `=V` 不再命中「zerosievert吧」",
+		keywordMatchesForum("zerosievert吧", "=V", "contains") === false &&
+			keywordMatchesForum("zerosievert吧", "=V", "exact") === false,
+	);
+	check(
+		"完全匹配下 `=V` 仍然命中吧名就是 V 的（V / V吧 都算）",
+		keywordMatchesForum("V", "=V", "exact") === true &&
+			keywordMatchesForum("V吧", "=V", "exact") === true &&
+			keywordMatchesForum("v吧", "=V", "exact") === true,
+	);
+	check(
+		"完全匹配是「整个吧名相等」而不是前缀：`=V` 不命中「V圈吧」",
+		keywordMatchesForum("V圈吧", "=V", "exact") === false &&
+			keywordMatchesForum("V圈", "=V", "exact") === false,
+	);
+	check(
+		"吧名与文本的「完全匹配」不是一回事：吧名要整个相等（=原神 不命中「原神内鬼吧」，命中「原神吧」）",
+		keywordMatchesForum("原神内鬼吧", "=原神", "exact") === false &&
+			keywordMatchesForum("原神吧", "=原神", "exact") === true,
+	);
+	check(
+		"中文关键词打在**文本**上时退化为包含（中文没有词边界，文档里写明了）",
+		keywordMatchesText("今天聊聊原神的事儿", "=原神", "exact") === true &&
+			keywordMatchesText("今天聊聊原神的事儿", "=原神", "contains") === true,
+	);
+	check(
+		"文本里的英文短词按「独立成词」判断：`=V` 不命中 zerosievert，命中 V圈 / 玩V的",
+		keywordMatchesText("zerosievert 真好玩", "=V", "exact") === false &&
+			keywordMatchesText("V圈的事", "=V", "exact") === true &&
+			keywordMatchesText("我在玩V的", "=V", "exact") === true &&
+			keywordMatchesText("asoul 和 V", "=V", "exact") === true,
+	);
+	check(
+		"下划线与数字也算词字符：`=V` 不命中 V_1 / 1V2",
+		keywordMatchesText("V_1", "=V", "exact") === false &&
+			keywordMatchesText("1V2", "=V", "exact") === false,
+	);
+
+	// 全局开关：不带 `=` 的词按它走；带 `=` 的词永远精确
+	check(
+		"全局切到完全匹配后，普通关键词也变成「整个吧名相等」",
+		keywordMatchesForum("zerosievert吧", "V", "exact") === false &&
+			keywordMatchesForum("V吧", "V", "exact") === true,
+	);
+	check(
+		"全局是包含匹配时，普通关键词照旧包含",
+		keywordMatchesForum("原神内鬼吧", "原神", "contains") === true,
+	);
+	check(
+		"`=` 前缀在两种全局设置下都是完全匹配（单个词优先）",
+		keywordMatchesForum("zerosievert吧", "=V", "contains") === false,
+	);
+
+	const rules = parseRules(["🅥V | | =V,asoul", "🅥V2 | | V"].join("\n"));
+	const hitNames = (forums, mode) =>
+		matchComposition({ uid: "1", userId: 0, forums, posts: [] }, rules, {
+			mode,
+		})
+			.map((hit) => hit.rule.name)
+			.join(",");
+	check(
+		"同一个吧名：精确那条不命中、包含那条命中（两条规则的区别一眼可见）",
+		hitNames(["zerosievert吧"], "contains") === "🅥V2",
+		hitNames(["zerosievert吧"], "contains"),
+	);
+	check(
+		"吧名就是 V 时两条都命中，且证据里的关键词是去掉 `=` 的形式",
+		(function () {
+			const hits = matchComposition(
+				{ uid: "1", userId: 0, forums: ["V吧"], posts: [] },
+				rules,
+				{ mode: "contains" },
+			);
+			const exactHit = hits.find((hit) => hit.rule.name === "🅥V");
+			return (
+				hits.length === 2 &&
+				exactHit?.evidences[0].keyword === "V" &&
+				!/=/.test(exactHit?.evidences[0].keyword ?? "=")
+			);
+		})(),
+	);
+	check(
+		"排除词也认 `=`：=V 只否决吧名整个是 V 的，不会误伤 zerosievert",
+		(function () {
+			const target = { uid: "1", userId: 0, posts: [] };
+			// 关键词 =V + 排除词 =V：自己把自己否决 → 不命中
+			const selfKilled = matchComposition(
+				{ ...target, forums: ["V吧"] },
+				parseRules("🅥V | | =V | =V | "),
+				{ mode: "contains" },
+			);
+			// 关键词 =V + 排除词 =V，但吧是 zerosievert：本来就不该命中
+			// 关键词 V + 排除词 =V，吧是 zerosievert：包含匹配命中，且没被误排除
+			const notExcluded = matchComposition(
+				{ ...target, forums: ["zerosievert吧"] },
+				parseRules("🅥V | | V | =V | "),
+				{ mode: "contains" },
+			);
+			return selfKilled.length === 0 && notExcluded.length === 1;
+		})(),
+	);
+
+	check(
+		"关键词的显示形式去掉前缀：=V → V",
+		keywordText("=V") === "V" &&
+			keywordText("asoul") === "asoul" &&
+			isExactKeyword("=V") === true &&
+			isExactKeyword("V") === false,
+	);
+
+	// 解析器要主动提醒这种「短词 + 包含匹配」的写法
+	const issues = parseRulesDetailed("🅥V | | V").issues;
+	check(
+		"解析器会提醒「很短的关键词 + 包含匹配」容易误伤，并告诉你写成 =V",
+		issues.some(
+			(issue) => issue.message.includes("很短") && issue.message.includes("=V"),
+		),
+		JSON.stringify(issues.map((issue) => issue.message)),
+	);
+	check(
+		"已经写成 =V 就不再提醒（精确匹配本来是安全的）",
+		parseRulesDetailed("🅥V | | =V").issues.length === 0,
+		JSON.stringify(parseRulesDetailed("🅥V | | =V").issues),
+	);
+	check(
+		"中长关键词、中文关键词不触发这条提醒（不制造噪音）",
+		isRiskyShortKeyword("fgo") === false &&
+			isRiskyShortKeyword("原神") === false &&
+			isRiskyShortKeyword("V") === true &&
+			isRiskyShortKeyword("=V") === false &&
+			isRiskyShortKeyword("v") === true,
+	);
+
+	// 内置示例里那条 V 规则已经写成 =V（用户点了「填入示例」不该再踩这个坑）
+	const { EXAMPLE_RULES } = await import(pathToFileURL(outFile).href);
+	check(
+		"内置示例里的 V 规则用的是完全匹配（=V）",
+		EXAMPLE_RULES.includes("asoul,=V|||asoul,=V"),
+		EXAMPLE_RULES.split("\n").find((line) => line.startsWith("V||")) ?? "(没找到)",
+	);
+	check(
+		"内置示例本身不会再触发「短词」提醒",
+		parseRulesDetailed(EXAMPLE_RULES).issues.every(
+			(issue) => !issue.message.includes("很短"),
+		),
+		JSON.stringify(
+			parseRulesDetailed(EXAMPLE_RULES).issues.map((issue) => issue.message),
+		),
+	);
+}
+
 console.log(failures === 0 ? "\n关键词逻辑全部通过。" : `\n${failures} 项失败。`);
 process.exit(failures === 0 ? 0 : 1);

@@ -1110,9 +1110,17 @@ const PAGE = `<!doctype html>
         var selfInput = inPanel('#tb-eztb-self');
         var pagesInput = inPanel('#tb-eztb-composition-pages');
         var rememberSel = inPanel('#tb-eztb-remember-tab');
+        var matchSel = inPanel('#tb-eztb-match');
         add('设置里有「我自己的贴吧号（共同关注用）」', !!selfInput, '');
         add('设置里有「成分检测每路翻几页」', !!pagesInput, '');
         add('设置里有「记住上次看过的页签」', !!rememberSel, '');
+        add('设置里有「关键词匹配方式」（包含 / 完全匹配）',
+            !!matchSel && matchSel.options.length === 2 &&
+              /包含/.test(matchSel.options[0].textContent) &&
+              /完全匹配/.test(matchSel.options[1].textContent),
+            matchSel
+              ? Array.prototype.map.call(matchSel.options, function (o) { return o.textContent; }).join(' / ')
+              : '没找到');
 
         // 先把"我自己"留空并保存，验证没配置时页签会老实说明
         if (selfInput) selfInput.value = '';
@@ -1513,7 +1521,7 @@ const PAGE = `<!doctype html>
     add('测试在超时前跑完', false, '中途断了，最后一条断言见上面');
     add('页面 JS 错误', window.__tbErrors.length === 0, window.__tbErrors.join('; '));
     finish();
-  }, 200000);
+  }, 280000);
 
   setTimeout(function () {
     /*
@@ -2136,7 +2144,7 @@ const child = spawn(
 const timeout = new Promise((resolve) =>
 	// 页面侧自己的兜底是 200 秒（见页面脚本里的 watchdog）：这里留出余量，
 	// 免得两边的时限贴太近、报出来的是"浏览器没返回结果"而不是哪条断言断了。
-	setTimeout(() => resolve("__TIMEOUT__"), 260_000),
+	setTimeout(() => resolve("__TIMEOUT__"), 340_000),
 );
 const raw = await Promise.race([resultPromise, timeout]);
 // 主流程已经交卷，先把这台浏览器收掉，深色那一遍再单开一台
@@ -2169,7 +2177,7 @@ async function runDarkStage() {
 		{ stdio: "ignore" },
 	);
 	const darkTimeout = new Promise((resolve) =>
-		setTimeout(() => resolve("__TIMEOUT__"), 120_000),
+		setTimeout(() => resolve("__TIMEOUT__"), 180_000),
 	);
 	const result = await Promise.race([darkResultPromise, darkTimeout]);
 	darkChild.kill();

@@ -3,7 +3,7 @@
 // @name:zh-CN          贴吧 eztb 工具箱
 // @author              Dan12elion
 // @namespace           https://github.com/Dan12elion/tieba_extensions
-// @version             1.10.0
+// @version             1.11.0
 // @description         在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @description:zh-CN   在贴吧页面上给每个用户名加一个「查询」按钮，点开查看该用户的资料 / 关注的人 / 关注的吧 / 粉丝 / 发帖（只读）；还可以配置关键词规则（关注的吧与发帖内容），让命中的用户在用户名旁被标注出来。数据由脚本内置的 SDK 直连贴吧接口获取，不经过任何第三方服务；使用前需要自己粘贴 BDUSS。
 // @match               *://tieba.baidu.com/*
@@ -400,6 +400,7 @@
     compositionAuto: true,
     compositionMaxPerPage: 20,
     compositionPages: 1,
+    compositionKeywordMatch: "contains",
     compositionCacheDays: 3,
     signInLevelThreshold: 6,
     defaultTab: DEFAULT_PANEL_TAB,
@@ -447,6 +448,7 @@
         1,
         10
       ),
+      compositionKeywordMatch: raw.compositionKeywordMatch === "exact" ? "exact" : "contains",
       compositionCacheDays: clampNumber(
         raw.compositionCacheDays,
         DEFAULT_SETTINGS.compositionCacheDays,
@@ -627,7 +629,59 @@
 
   // src/core/composition.ts
   var LIST_SEPARATOR = /[,，;；]+/;
-  var RULE_FORMAT_HINT = "每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释。";
+  var KEYWORD_MATCH_MODES = [
+    { id: "contains", label: "包含匹配（默认）" },
+    { id: "exact", label: "完全匹配" }
+  ];
+  var EXACT_PREFIX = "=";
+  function isExactKeyword(token) {
+    return String(token ?? "").startsWith(EXACT_PREFIX);
+  }
+  function keywordText(token) {
+    return isExactKeyword(token) ? String(token).slice(EXACT_PREFIX.length).trim() : String(token ?? "");
+  }
+  function isRiskyShortKeyword(token) {
+    const text = keywordText(token);
+    if (isExactKeyword(token)) return false;
+    return /^[A-Za-z0-9_]+$/.test(text) && text.length <= 2;
+  }
+  var WORD_CHAR = /[A-Za-z0-9_]/;
+  function containsAsWord(text, keyword) {
+    if (!keyword) return false;
+    const haystack = text.toLowerCase();
+    const needle = keyword.toLowerCase();
+    if (/^[^A-Za-z0-9_]+$/.test(needle)) return haystack.includes(needle);
+    let index = haystack.indexOf(needle);
+    while (index >= 0) {
+      const before2 = index > 0 ? haystack[index - 1] : "";
+      const after3 = haystack[index + needle.length] ?? "";
+      const leftOk = !before2 || !WORD_CHAR.test(before2);
+      const rightOk = !after3 || !WORD_CHAR.test(after3);
+      if (leftOk && rightOk) return true;
+      index = haystack.indexOf(needle, index + 1);
+    }
+    return false;
+  }
+  function normalizeForumName(value) {
+    return String(value ?? "").trim().replace(/吧$/, "").toLowerCase();
+  }
+  function keywordMatchesText(text, token, mode) {
+    const keyword = keywordText(token);
+    if (!keyword) return false;
+    if (isExactKeyword(token) || mode === "exact") {
+      return containsAsWord(text, keyword);
+    }
+    return String(text ?? "").toLowerCase().includes(keyword.toLowerCase());
+  }
+  function keywordMatchesForum(forumName, token, mode) {
+    const keyword = keywordText(token);
+    if (!keyword) return false;
+    if (isExactKeyword(token) || mode === "exact") {
+      return normalizeForumName(forumName) === normalizeForumName(keyword);
+    }
+    return String(forumName ?? "").toLowerCase().includes(keyword.toLowerCase());
+  }
+  var RULE_FORMAT_HINT = "每行一条：名称 | 发帖关键词 | 关注的吧关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在吧关键词(可省)；关键词用逗号分隔，`#` 开头是注释；单个词前面加 `=` 表示这个词要完全匹配（例如 `=V` 只命中吧名就是 V 的，不会命中 zerosievert）。";
   var EXAMPLE_RULES = [
     "# 名称 | 发帖关键词 | 关注的关键词 | 排除关键词(可省) | 直接命中名单(可省) | 发帖所在关键词(可省)",
     "米||米哈游, 米游社, mihoyo, 反米哈游, 米哈游笑话,源初之结, 源初之结内鬼,Varsapura, varsapura内鬼,flyme2themoon,星布谷地, 星布谷地内鬼,崩坏因缘精灵, 崩坏因缘精灵内鬼, 崩坏因缘精灵爆料|||米哈游, 米游社, mihoyo, 反米哈游, 米哈游笑话,源初之结, 源初之结内鬼,Varsapura, varsapura内鬼,flyme2themoon,星布谷地, 星布谷地内鬼,崩坏因缘精灵, 崩坏因缘精灵内鬼, 崩坏因缘精灵爆料",
@@ -657,7 +711,7 @@
     "百合||偶像大师,学园偶像大师,偶像大师闪耀色彩,东方,东方幻想魔录,隔壁东方,东方口袋战争,反百破,百合,新百合,魔法少女的魔女裁判,光之美少女,萌战|||偶像大师,学园偶像大师,偶像大师闪耀色彩,东方,东方幻想魔录,隔壁东方,东方口袋战争,反百破,百合,新百合,魔法少女的魔女裁判,光之美少女,萌战",
     "边狱||边狱公司|||边狱公司",
     "圆规||原神内鬼,原神内鬼避风港|||原神内鬼,原神内鬼避风港",
-    "V||asoul,V|||asoul,V",
+    "V||asoul,=V|||asoul,=V",
     "bang||bangdream,bangdream国服,邦多利声优,笔记紫,梦想紫,avemujica|||bangdream,bangdream国服,邦多利声优,笔记紫,梦想紫,avemujica",
     "⭕️||反激女|||反激女",
     "同||燕淋十六声,淋神,王者淋耀,欧美后花园,lol淋价,淋日方舟,淋,极地大乱斗,新极地大乱斗|||燕淋十六声,淋神,王者淋耀,欧美后花园,lol淋价,淋日方舟,淋,极地大乱斗,新极地大乱斗",
@@ -730,6 +784,22 @@
           });
         }
       }
+      for (const [field, values3] of [
+        ["发帖关键词", rule.postKeywords],
+        ["关注的吧关键词", rule.forumKeywords],
+        ["排除关键词", rule.excludes],
+        ["发帖所在吧关键词", rule.postForumKeywords]
+      ]) {
+        const risky = values3.find((value) => isRiskyShortKeyword(value));
+        if (risky) {
+          issues2.push({
+            line: lineNumber,
+            text: brief,
+            level: "warn",
+            message: `${field}里的「${keywordText(risky)}」很短，用包含匹配会命中无关内容（实测：关键词 V 命中了「zerosievert吧」）。要精确匹配就写成 =${keywordText(risky)}。`
+          });
+        }
+      }
       const overlap = rule.postKeywords.filter(
         (keyword) => rule.excludes.some((item) => item.toLowerCase() === keyword.toLowerCase())
       );
@@ -794,17 +864,22 @@
       replyTo: post.replyTo
     };
   }
-  function contains(text, keyword) {
-    return text.toLowerCase().includes(keyword.toLowerCase());
-  }
-  function firstKeyword(text, keywords) {
+  function firstKeywordText(text, keywords, mode) {
     for (const keyword of keywords) {
-      if (contains(text, keyword)) return keyword;
+      if (keywordMatchesText(text, keyword, mode)) return keywordText(keyword);
     }
     return "";
   }
-  function isExcluded(text, excludes) {
-    return excludes.some((word) => contains(text, word));
+  function firstKeywordForum(forumName, keywords, mode) {
+    for (const keyword of keywords) {
+      if (keywordMatchesForum(forumName, keyword, mode)) {
+        return keywordText(keyword);
+      }
+    }
+    return "";
+  }
+  function isExcluded(text, excludes, mode) {
+    return excludes.some((word) => keywordMatchesText(text, word, mode));
   }
   function excerptAround(text, keyword, width = 40) {
     const source = String(text ?? "").replace(/\s+/g, " ").trim();
@@ -841,7 +916,8 @@
       return a.index - b.index;
     }).map((item) => item.hit);
   }
-  function matchComposition(input, rules) {
+  function matchComposition(input, rules, options = {}) {
+    const mode = options.mode ?? "contains";
     const hits = [];
     const ids3 = [input.uid, input.userId ? String(input.userId) : ""].map((value) => String(value ?? "").trim()).filter(Boolean);
     for (const rule of rules) {
@@ -857,8 +933,8 @@
         });
       }
       for (const forum of input.forums) {
-        if (isExcluded(forum, rule.excludes)) continue;
-        const keyword = firstKeyword(forum, rule.forumKeywords);
+        if (isExcluded(forum, rule.excludes, mode)) continue;
+        const keyword = firstKeywordForum(forum, rule.forumKeywords, mode);
         if (!keyword) continue;
         evidences.push({
           source: "forum",
@@ -872,8 +948,8 @@
       let postForumEvidence = null;
       for (const post of input.posts) {
         const name = String(post.forumName ?? "").trim();
-        if (!name || isExcluded(name, rule.excludes)) continue;
-        const keyword = firstKeyword(name, rule.postForumKeywords);
+        if (!name || isExcluded(name, rule.excludes, mode)) continue;
+        const keyword = firstKeywordForum(name, rule.postForumKeywords, mode);
         if (!keyword) continue;
         const evidence = {
           source: "postForum",
@@ -891,8 +967,8 @@
       let postEvidence = null;
       for (const post of input.posts) {
         const text = [post.title, post.preview].filter(Boolean).join(" ");
-        if (!text || isExcluded(text, rule.excludes)) continue;
-        const keyword = firstKeyword(text, rule.postKeywords);
+        if (!text || isExcluded(text, rule.excludes, mode)) continue;
+        const keyword = firstKeywordText(text, rule.postKeywords, mode);
         if (!keyword) continue;
         const evidence = {
           source: "post",
@@ -2151,7 +2227,7 @@
   var flatMap2 = /* @__PURE__ */ dual(2, (self, f) => isNone2(self) ? none2() : f(self.value));
   var containsWith = (isEquivalent) => dual(2, (self, a) => isNone2(self) ? false : isEquivalent(self.value, a));
   var _equivalence = /* @__PURE__ */ equivalence();
-  var contains2 = /* @__PURE__ */ containsWith(_equivalence);
+  var contains = /* @__PURE__ */ containsWith(_equivalence);
   var mergeWith = (f) => (o1, o2) => {
     if (isNone2(o1)) {
       return o2;
@@ -7252,7 +7328,7 @@ ${this.stack.split("\n").slice(1).join("\n")}` : this.toString();
           break;
         }
         case "Unnested": {
-          const containsName = pipe(head(output), contains2(patch10.name));
+          const containsName = pipe(head(output), contains(patch10.name));
           if (containsName) {
             output = tailNonEmpty(output);
             input = input.tail;
@@ -30108,7 +30184,9 @@ ${endStackCall}`;
     }
     const hits = matchComposition(
       { uid: target.uid, userId: target.id, forums, posts },
-      rules
+      rules,
+      // 匹配方式来自设置：不带 `=` 前缀的关键词按它走（单个词写成 `=xxx` 一定精确）
+      { mode: getSettings().compositionKeywordMatch }
     );
     stat.verdict = compositionVerdict({
       hits: hits.length,
@@ -30923,6 +31001,19 @@ ${endStackCall}`;
     );
     parts2.push(`</div>`);
     parts2.push(`<div class="tb-eztb-field">`);
+    parts2.push(`<label for="tb-eztb-match">关键词匹配方式</label>`);
+    parts2.push(`<select id="tb-eztb-match" class="tb-eztb-input">`);
+    for (const option3 of KEYWORD_MATCH_MODES) {
+      parts2.push(
+        `<option value="${option3.id}"${current.compositionKeywordMatch === option3.id ? " selected" : ""}>${option3.label}</option>`
+      );
+    }
+    parts2.push(`</select>`);
+    parts2.push(
+      `<div class="tb-eztb-hint"><b>包含匹配</b>：关键词出现在吧名 / 文本的任意位置就算命中。<b>完全匹配</b>：吧名要整个相等（<code>V</code> 命中「V吧」、不命中「zerosievert吧」），英文 / 数字词要独立成词（<code>V</code> 不命中 <code>zerosievert</code>）；纯中文关键词没有词边界，两种方式等价。<br>只想让个别短词精确时，别动这个开关，直接在规则里写 <code>=V</code>（单个词前面加 <code>=</code> 就一定是完全匹配）。</div>`
+    );
+    parts2.push(`</div>`);
+    parts2.push(`<div class="tb-eztb-field">`);
     parts2.push(`<label for="tb-eztb-rules">成分关键词规则</label>`);
     parts2.push(
       `<textarea id="tb-eztb-rules" class="tb-eztb-textarea tb-eztb-textarea-tall" spellcheck="false" placeholder="${escapeHtml(RULE_FORMAT_HINT)}">${escapeHtml(current.compositionRules)}</textarea>`
@@ -31021,6 +31112,7 @@ ${endStackCall}`;
         compositionAuto: value("tb-eztb-composition-auto") !== "0",
         compositionMaxPerPage: Number(value("tb-eztb-maxcheck")),
         compositionPages: Number(value("tb-eztb-composition-pages")),
+        compositionKeywordMatch: value("tb-eztb-match") === "exact" ? "exact" : "contains",
         compositionCacheDays: Number(value("tb-eztb-cachedays")),
         signInLevelThreshold: Number(value("tb-eztb-signin-level")),
         defaultTab: normalizePanelTabId(value("tb-eztb-default-tab")),
@@ -31064,6 +31156,7 @@ ${endStackCall}`;
       set6("tb-eztb-composition-auto", settings.compositionAuto ? "1" : "0");
       set6("tb-eztb-maxcheck", String(settings.compositionMaxPerPage));
       set6("tb-eztb-composition-pages", String(settings.compositionPages));
+      set6("tb-eztb-match", settings.compositionKeywordMatch);
       set6("tb-eztb-cachedays", String(settings.compositionCacheDays));
       set6("tb-eztb-signin-level", String(settings.signInLevelThreshold));
       set6("tb-eztb-default-tab", settings.defaultTab);
@@ -31196,7 +31289,7 @@ ${endStackCall}`;
   }
 
   // src/core/version.ts
-  var SCRIPT_VERSION = "1.10.0" ? "1.10.0" : "dev";
+  var SCRIPT_VERSION = "1.11.0" ? "1.11.0" : "dev";
 
   // src/page/adapters.ts
   function parseDataField(el) {
