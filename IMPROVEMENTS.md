@@ -26,6 +26,7 @@
 | ✅ | §5 共同关注 / 交集（第 7 个页签，需在设置里填自己的贴吧号） |
 | ✅ | §5 规则生态（`docs/rules.md` + 行号级解析报错：只有名称、同名、空格、自我否决、超 6 段） |
 | ✅ | §5 issue 模板（`.github/ISSUE_TEMPLATE/bug_report.yml` 要求附诊断报告） |
+| ✅ | §2.3 多渠道安装并列（GitHub + Gitee 两条 raw 链接，并写明"从哪装就从哪更新"、镜像可能滞后） |
 
 ### 仍然没做
 
@@ -187,10 +188,12 @@ star 数为 2026-09-28 实测（GitHub API 限流后改用仓库页面）。
 - **加一个 `scripts/version.mjs`**，保证 `package.json`、产物 `@version`、git tag 三者一致。
   踩坑 #31 / 版本号规则（"只要 `dist/` 变了就必提 `@version`"）说明这里容易漏。
 - **更新通道要说清楚**。元数据里**故意不写** `@updateURL` / `@downloadURL`（为了满足 Greasy Fork），
-  但 README 目前主推的是 **raw.githubusercontent 安装**。这两件事凑在一起，用户是否自动收到更新
+  但 README 目前主推的是 **raw 安装**。这两件事凑在一起，用户是否自动收到更新
   取决于油猴对"安装 URL"的推断，**不可靠且没写进文档**。
-  建议明确二选一：以 Greasy Fork 为主渠道（它自带更新机制）、raw 链接作为备用并在 README 里写明
-  「从这里装的不会自动更新，升级请覆盖安装」。参考 [Tieba-Remix 的 README](https://github.com/0xb1aded/Tieba-Remix) 把多渠道差异并列写出来。
+  → **部分已做（2026-10-01）**：README 现在把 **GitHub（主）/ Gitee（国内镜像）** 两条 raw 链接并列，
+  并写明"从哪个链接装的，更新就从哪里来"、镜像可能滞后；HANDOFF §9.4 记了"每次发版要确认镜像同步"
+  与比对办法（sha256）。仍然没做的：以 Greasy Fork 为主渠道（等上传）、以及 `@updateURL` 之外的
+  更可靠更新机制（比如让用户装 GF 那份，由 GF 负责更新）。
 
 ### 2.4 @description 与按钮文案不一致（P1，一行改动）
 

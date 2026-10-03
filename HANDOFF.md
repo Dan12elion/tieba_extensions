@@ -1,8 +1,9 @@
 # eztb-userscript 项目交接文档
 
 > 新对话继续这个项目时，读完这份就能恢复全部上下文。
-> 最后更新 2026-09-30 · 当前版本 **1.8.4**
+> 最后更新 2026-10-01 · 当前版本 **1.10.0**
 > 仓库（公开）：<https://github.com/Dan12elion/tieba_extensions>
+> 国内镜像（只读同步）：<https://gitee.com/d143/tieba_extensions>
 > 用户装的那条对应 `dist/tieba-eztb-toolbox.user.js`
 
 ---
@@ -745,6 +746,13 @@ F1 缩短后（隐藏关注贴吧的用户）就不再有这条说明。现在�
   产物 NOTICE 里按 ISC 模板补了许可文本；再稳妥一点就向上游要一份正式 LICENSE。
 - `dist/tieba-eztb-toolbox.user.js` **提交进仓库**：改完代码要 `node build.mjs` 重建并一起提交，
   否则 README 里的 raw 安装链接给别人的是旧产物。
+- **两个安装渠道必须都指向同一份产物**：GitHub（主）与 Gitee 镜像
+  （<https://gitee.com/d143/tieba_extensions>，raw 形式
+  `https://gitee.com/d143/tieba_extensions/raw/main/dist/tieba-eztb-toolbox.user.js`）。
+  脚本**故意不写** `@updateURL`（Greasy Fork 的规则要求），所以油猴是按"安装时用的地址"轮询更新的——
+  镜像一旦滞后，从 Gitee 装的人就会晚收到更新。
+  2026-10-01 实测两边逐字节相同（sha256 `C31C36FA…`），**每次发版后要顺手确认镜像同步了**
+  （比对方式：`Invoke-WebRequest <gitee raw> -OutFile tmp` 后与本地 `dist/` 比 sha256）。
 - 快照（`../test0/*.mhtml`）与 CSS 缓存不进仓库：含真实用户帖子内容，体积也大。
 
 ---

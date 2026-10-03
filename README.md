@@ -4,19 +4,28 @@
 **资料 / 成分 / 关注的人 / 关注的吧 / 粉丝 / 发帖**。
 数据由脚本内置的 tieba.js SDK 直连 `tiebac.baidu.com`，**不经过 eztb.org 或任何其他第三方服务**；
 全部只读，不碰 `tbs`、不执行任何写操作。
-仓库：<https://github.com/Dan12elion/tieba_extensions>
+仓库：<https://github.com/Dan12elion/tieba_extensions>（国内镜像：<https://gitee.com/d143/tieba_extensions>）
 维护者文档（架构、实测数据、踩过的坑、发布流程）见 [HANDOFF.md](HANDOFF.md)。
 
 ## 安装
 
 1. 在 Edge / Chrome 里装 Tampermonkey。
-2. 装脚本：打开仓库里的 [`dist/tieba-eztb-toolbox.user.js`](dist/tieba-eztb-toolbox.user.js)
-   点下载按钮，再在 Tampermonkey 面板里「添加新脚本」→ 用下载到的内容替换模板 → 保存；
-   也可以直接打开 raw 链接（油猴会识别 `.user.js` 并弹安装框）：
-   <https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-eztb-toolbox.user.js>
+2. 装脚本，**二选一**（都是同一个文件，油猴会识别 `.user.js` 并弹安装框）：
+
+   | 渠道 | 链接 | 说明 |
+   | --- | --- | --- |
+   | GitHub（主仓库） | <https://raw.githubusercontent.com/Dan12elion/tieba_extensions/main/dist/tieba-eztb-toolbox.user.js> | 更新最及时 |
+   | Gitee（国内镜像） | <https://gitee.com/d143/tieba_extensions/raw/main/dist/tieba-eztb-toolbox.user.js> | 打不开 GitHub 时用这个；镜像同步可能滞后一点 |
+
+   也可以打开仓库里的 [`dist/tieba-eztb-toolbox.user.js`](dist/tieba-eztb-toolbox.user.js) 点下载按钮，
+   再在 Tampermonkey 面板里「添加新脚本」→ 用下载到的内容替换模板 → 保存。
 3. 首次使用点脚本菜单「eztb：设置 BDUSS / 运行参数」，按提示粘贴 BDUSS。
 
 只需下载上面这一个文件；仓库其余内容是构建脚本、测试与文档，日常使用用不到。
+
+> **从哪个链接装的，更新就从哪里来**：脚本**故意不写** `@updateURL`（Greasy Fork 的规则要求），
+> 所以油猴是拿"你当初安装时用的那个地址"去轮询新版本的。装在 Gitee 那份上时，
+> 如果镜像还没同步到最新版，就会晚一点收到更新；想第一时间拿到更新，用 GitHub 那条链接。
 
 > **已经装了旧脚本 `tieba-eztb-follow.user.js` 的话先卸载它**——它的按钮已失效，还会与本脚本抢页面标记。
 >
